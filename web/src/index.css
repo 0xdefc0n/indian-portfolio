@@ -1,0 +1,177 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+    --color-gain: var(--gain);
+    --color-loss: var(--loss);
+    --color-surface: var(--surface);
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+    /* ink & paper: cool paper, indigo ink */
+    --background: #F5F6FA;
+    --foreground: #1B1F3B;
+    --surface: #FFFFFF;
+    --card: #FFFFFF;
+    --card-foreground: #1B1F3B;
+    --popover: #FFFFFF;
+    --popover-foreground: #1B1F3B;
+    --primary: #3D4DB7;
+    --primary-foreground: #FFFFFF;
+    --secondary: #ECEEF5;
+    --secondary-foreground: #1B1F3B;
+    --muted: #ECEEF5;
+    --muted-foreground: #5F6482;
+    --accent: #E7E9F5;
+    --accent-foreground: #1B1F3B;
+    --destructive: #B4415A;
+    --border: #E2E5EF;
+    --input: #D7DBE8;
+    --ring: #3D4DB7;
+    --gain: #0E7C66;
+    --loss: #B4415A;
+    --chart-1: #3D4DB7;
+    --chart-2: #1F9E89;
+    --chart-3: #C2477A;
+    --chart-4: #D4A72C;
+    --chart-5: #9B5DB5;
+    --cat-large: #3D4DB7;
+    --cat-largemid: #6E79D6;
+    --cat-mid: #1F9E89;
+    --cat-small: #C2477A;
+    --cat-flexi: #9B5DB5;
+    --cat-sector: #B5654A;
+    --cat-elss: #3E86C9;
+    --cat-hybrid: #7A86A3;
+    --cat-debt: #93A9BB;
+    --cat-gold: #D4A72C;
+    --cat-intl: #2A9BB0;
+    --cat-stocks: #4B5167;
+    --cat-other: #A3A7BA;
+    --radius: 0.75rem;
+    --sidebar: #FFFFFF;
+    --sidebar-foreground: #1B1F3B;
+    --sidebar-primary: #3D4DB7;
+    --sidebar-primary-foreground: #FFFFFF;
+    --sidebar-accent: #ECEEF5;
+    --sidebar-accent-foreground: #1B1F3B;
+    --sidebar-border: #E2E5EF;
+    --sidebar-ring: #3D4DB7;
+}
+
+.dark {
+    /* indigo night, not near-black */
+    --background: #0F1226;
+    --foreground: #E6E8F5;
+    --surface: #161A34;
+    --card: #161A34;
+    --card-foreground: #E6E8F5;
+    --popover: #1A1F3D;
+    --popover-foreground: #E6E8F5;
+    --primary: #8E9BFF;
+    --primary-foreground: #0F1226;
+    --secondary: #1E2343;
+    --secondary-foreground: #E6E8F5;
+    --muted: #1E2343;
+    --muted-foreground: #9AA0C3;
+    --accent: #232949;
+    --accent-foreground: #E6E8F5;
+    --destructive: #F07A95;
+    --border: #252A4A;
+    --input: #2E3458;
+    --ring: #8E9BFF;
+    --gain: #3CC7A5;
+    --loss: #F07A95;
+    --chart-1: #8E9BFF;
+    --chart-2: #3CC7A5;
+    --chart-3: #E7739E;
+    --chart-4: #E6C15A;
+    --chart-5: #BE8AD6;
+    --cat-large: #7F8CF0;
+    --cat-largemid: #A6AEF5;
+    --cat-mid: #3CC7A5;
+    --cat-small: #E7739E;
+    --cat-flexi: #BE8AD6;
+    --cat-sector: #E39A7E;
+    --cat-elss: #6AAEE8;
+    --cat-hybrid: #8F9AB8;
+    --cat-debt: #A9BCCB;
+    --cat-gold: #E6C15A;
+    --cat-intl: #4CC0D4;
+    --cat-stocks: #C3C7DA;
+    --cat-other: #6C7194;
+    --sidebar: #161A34;
+    --sidebar-foreground: #E6E8F5;
+    --sidebar-primary: #8E9BFF;
+    --sidebar-primary-foreground: #0F1226;
+    --sidebar-accent: #1E2343;
+    --sidebar-accent-foreground: #E6E8F5;
+    --sidebar-border: #252A4A;
+    --sidebar-ring: #8E9BFF;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+    }
+  html {
+    @apply font-sans;
+    font-feature-settings: "tnum" 1;
+    -webkit-font-smoothing: antialiased;
+    }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+}

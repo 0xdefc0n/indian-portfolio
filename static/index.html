@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fetch CDSL Statement</title>
+<style>
+  :root { color-scheme: light dark; --accent: #2563eb; --muted: #6b7280; --err: #dc2626; --ok: #16a34a; }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.5 system-ui, -apple-system, sans-serif; margin: 0; min-height: 100vh; padding: 32px 0;
+         display: flex; flex-direction: column; align-items: center; justify-content: center;
+         background: Canvas; color: CanvasText; }
+  a { color: var(--accent); }
+  .card { width: min(420px, 92vw); padding: 28px; border: 1px solid #8884; border-radius: 12px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
+  label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 4px; }
+  input { width: 100%; padding: 10px 12px; font: inherit; border: 1px solid #8886; border-radius: 8px;
+          background: transparent; color: inherit; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button { width: 100%; margin-top: 20px; padding: 11px; font: inherit; font-weight: 600; color: #fff;
+           background: var(--accent); border: 0; border-radius: 8px; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: progress; }
+  .link { background: none; color: var(--accent); margin-top: 10px; padding: 4px; font-weight: 500; }
+  .msg { margin-top: 16px; font-size: 14px; min-height: 1.5em; white-space: pre-line; overflow-wrap: anywhere; }
+  .msg.err { color: var(--err); } .msg.ok { color: var(--ok); }
+  .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 99px;
+           background: #f59e0b33; color: #b45309; margin-bottom: 10px; }
+  .hidden { display: none; }
+  ul { padding-left: 18px; margin: 6px 0 0; } code { font-size: 13px; }
+</style>
+</head>
+<body>
+<main class="card">
+  <span id="sandbox" class="badge hidden">Sandbox mode: mock data</span>
+  <h1>Fetch CDSL statement</h1>
+  <p class="sub">The OTP is sent by CDSL to the mobile registered on the demat account.</p>
+
+  <form id="step1">
+    <label for="pan">PAN</label>
+    <input id="pan" required maxlength="10" placeholder="ABCDE1234F" autocomplete="off"
+           pattern="[A-Za-z]{5}[0-9]{4}[A-Za-z]" style="text-transform:uppercase">
+    <label for="bo">CDSL BO ID (16 digits)</label>
+    <input id="bo" required inputmode="numeric" maxlength="16" pattern="[0-9]{16}" placeholder="1208160000000000">
+    <label for="dob">Date of birth</label>
+    <input id="dob" type="date" required>
+    <button id="b1">Send OTP</button>
+  </form>
+
+  <form id="step2" class="hidden">
+    <label for="otp">OTP</label>
+    <input id="otp" required inputmode="numeric" maxlength="8" pattern="[0-9]{4,8}" autocomplete="one-time-code">
+    <button id="b2">Verify &amp; download</button>
+    <button type="button" class="link" id="restart">Start over</button>
+  </form>
+
+  <div id="msg" class="msg" role="status"></div>
+</main>
+
+<main class="card" style="margin-top:20px">
+  <h1>Or upload a statement</h1>
+  <p class="sub">Free: download your eCAS yourself from
+    <a href="https://www.cdslindia.com/CAS/LoginCAS.aspx" target="_blank" rel="noopener">CDSL</a>
+    (PAN + BO ID + DOB + OTP), then upload the PDF here.</p>
+  <form id="up">
+    <label for="upan">PAN</label>
+    <input id="upan" required maxlength="10" placeholder="ABCDE1234F" autocomplete="off"
+           pattern="[A-Za-z]{5}[0-9]{4}[A-Za-z]" style="text-transform:uppercase">
+    <label for="umonth">Statement month</label>
+    <input id="umonth" type="month" required>
+    <label for="ufile">PDF</label>
+    <input id="ufile" type="file" accept="application/pdf" required>
+    <button id="bu">Upload</button>
+  </form>
+  <div id="umsg" class="msg" role="status"></div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let sessionId = null;
+
+function show(text, kind = "") { const m = $("msg"); m.className = "msg " + kind; m.innerHTML = text; }
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+async function post(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    let d = data.detail;
+    if (Array.isArray(d)) d = d.map((e) => e.msg.replace(/^Value error, /, "")).join("; ");
+    else if (d && typeof d === "object") {
+      const reasons = (d.failed || []).map((f) => `\n• ${f.file}: ${f.error}`).join("");
+      d = d.msg + reasons;
+    }
+    throw new Error(d || `Request failed (${r.status})`);
+  }
+  return data;
+}
+
+fetch("/api/config").then((r) => r.json()).then((c) => { if (c.sandbox) $("sandbox").classList.remove("hidden"); });
+
+$("step1").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("b1").disabled = true;
+  show("Contacting CDSL… this takes about 20 seconds.");
+  try {
+    const res = await post("/api/cdsl/request-otp", { pan: $("pan").value, bo_id: $("bo").value, dob: $("dob").value });
+    sessionId = res.session_id;
+    $("step1").classList.add("hidden"); $("step2").classList.remove("hidden"); $("otp").focus();
+    show(esc(res.msg || "OTP sent."), "ok");
+  } catch (err) { show(esc(err.message), "err"); }
+  finally { $("b1").disabled = false; }
+});
+
+$("step2").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("b2").disabled = true;
+  show("Verifying and downloading…");
+  try {
+    const res = await post("/api/cdsl/verify", { session_id: sessionId, otp: $("otp").value });
+    let html = "Saved:<ul>" + res.saved.map((p) => `<li><code>${esc(p)}</code></li>`).join("") + "</ul>";
+    if (res.failed.length) html += "<br>Failed:<ul>" + res.failed.map((f) => `<li>${esc(f.file)}: ${esc(f.error)}</li>`).join("") + "</ul>";
+    show(html, "ok");
+  } catch (err) { show(esc(err.message), "err"); }
+  finally { $("b2").disabled = false; }
+});
+
+$("umonth").value = new Date(new Date().setDate(0)).toISOString().slice(0, 7); // last month
+$("up").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const m = $("umsg"), fd = new FormData();
+  fd.append("pan", $("upan").value); fd.append("month", $("umonth").value); fd.append("file", $("ufile").files[0]);
+  $("bu").disabled = true; m.className = "msg"; m.textContent = "Uploading…";
+  try {
+    const r = await fetch("/api/upload", { method: "POST", body: fd });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : `Upload failed (${r.status})`);
+    m.className = "msg ok"; m.innerHTML = "Saved: <code>" + esc(data.saved[0]) + "</code>";
+  } catch (err) { m.className = "msg err"; m.textContent = err.message; }
+  finally { $("bu").disabled = false; }
+});
+
+$("restart").addEventListener("click", () => {
+  sessionId = null; $("otp").value = "";
+  $("step2").classList.add("hidden"); $("step1").classList.remove("hidden"); show("");
+});
+</script>
+</body>
+</html>
