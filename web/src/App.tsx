@@ -214,7 +214,7 @@ export default function App() {
           <div className="flex min-w-0 items-center gap-6">
             <button className="flex shrink-0 items-center gap-2.5" onClick={() => setTab("overview")}>
               <span className="grid size-[30px] place-items-center rounded-[9px] bg-foreground text-sm font-bold text-background">₹</span>
-              <span className="hidden font-semibold tracking-tight sm:inline">Family portfolio</span>
+              <span className="hidden font-semibold tracking-tight sm:inline">PocketFolio</span>
             </button>
             {ready && (
               <div className="hidden md:block">

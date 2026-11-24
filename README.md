@@ -1,4 +1,4 @@
-# Family portfolio
+# PocketFolio
 
 Track mutual fund holdings across family members' demat accounts in one dashboard.
 Add each member's CDSL statement (upload, or fetch with an OTP via CASParser) and/or their CAMS / KFintech
