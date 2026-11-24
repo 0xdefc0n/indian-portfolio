@@ -1,11 +1,9 @@
-import { ChevronDownIcon, FileTextIcon, InfoIcon } from "lucide-react"
+import { FileTextIcon, InfoIcon } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 
-import { ActivityList } from "@/components/activity-list"
 import { AddStatementDialog } from "@/components/add-statement-dialog"
 import { AllocationStrip, type Slice } from "@/components/allocation-strip"
 import { HoldingsTable } from "@/components/holdings-table"
-import { TopHoldings, UpcomingSips } from "@/components/previews"
 import { SipTable, sipSummary } from "@/components/sip-table"
 import { BottomNav, type TabId, TabNav, useTab } from "@/components/tab-nav"
 import { TransactionsView } from "@/components/transactions-view"
@@ -17,19 +15,25 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ValueChart } from "@/components/value-chart"
 import { FundDialog } from "@/components/fund-dialog"
 import { StockExposure } from "@/components/stock-exposure"
+import {
+  ActivityGrid, AllocationDonut, Cell, CellHead, FundsTile, HeroFigures, HoldingBars, LargestTile, PartialNotice, ReturnBoxes, type Returns,
+  SipTile, SipTimeline,
+} from "@/components/overview"
+import { Segmented } from "@/components/ui/segmented"
 import { OpenFundContext } from "@/lib/fund-context"
 import { api, type Holding, type Member, type Portfolio } from "@/lib/api"
-import { day, inr, month, monthly, pct, signed } from "@/lib/format"
+import { day, inr, monthly } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import { upcomingSips } from "@/lib/sips"
 import { holdingFlows, xirr } from "@/lib/xirr"
 
 const EVERYONE = "all"
 
 function Panel({ title, aside, children, className }: { title: string; aside?: React.ReactNode; children: React.ReactNode; className?: string }) {
   return (
-    <section className={cn("flex min-w-0 flex-col rounded-2xl bg-surface p-4 ring-1 ring-border sm:p-6", className)}>
+    <section className={cn("flex min-w-0 flex-col rounded-[22px] bg-surface p-5 ring-1 ring-border sm:p-6", className)}>
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-base font-semibold">{title}</h2>
+        <h2 className="text-[15px] font-semibold tracking-tight">{title}</h2>
         {aside && <div className="text-sm text-muted-foreground">{aside}</div>}
       </div>
       <div className="min-h-0 flex-1">{children}</div>
@@ -45,28 +49,6 @@ function PageTitle({ title, detail }: { title: string; detail?: string }) {
     </div>
   )
 }
-
-function Fact({ label, value, detail, help }: { label: string; value: React.ReactNode; detail?: React.ReactNode; help?: string }) {
-  return (
-    <div className="py-4 first:pt-0 last:pb-0">
-      <dt className="flex items-center gap-1.5 text-sm text-muted-foreground">
-        {label}
-        {help && (
-          <Tooltip>
-            <TooltipTrigger aria-label={`About ${label}`} className="-m-2 p-2">
-              <InfoIcon className="size-3.5" />
-            </TooltipTrigger>
-            <TooltipContent className="max-w-64">{help}</TooltipContent>
-          </Tooltip>
-        )}
-      </dt>
-      <dd className="mt-1 text-xl font-semibold tracking-tight">{value}</dd>
-      {detail && <dd className="mt-0.5 truncate text-sm text-muted-foreground">{detail}</dd>}
-    </div>
-  )
-}
-
-type Returns = { invested: number; current: number; gain: number; xirr: number | null; funds: number; complete: boolean }
 
 function Stat({ label, children, help }: { label: string; children: React.ReactNode; help?: string }) {
   return (
@@ -97,116 +79,12 @@ function RequestLink({ onAdded, label }: { onAdded: () => void; label: string })
   )
 }
 
-function ReturnStats({ returns, showValue }: { returns: Returns; showValue?: boolean }) {
-  const tone = returns.gain >= 0 ? "text-gain" : "text-loss"
-  return (
-    <dl className={cn("grid grid-cols-2 gap-x-8 gap-y-4", showValue ? "sm:grid-cols-4" : "sm:grid-cols-3")}>
-      {showValue && <Stat label="Value of these funds">{inr(returns.current)}</Stat>}
-      <Stat label="Invested">{inr(returns.invested)}</Stat>
-      <Stat label="Total returns">
-        <span className={tone}>
-          {signed(returns.gain, inr)}{" "}
-          <span className="text-sm font-medium">({signed((returns.gain / returns.invested) * 100, (n) => pct(n, 2))})</span>
-        </span>
-      </Stat>
-      <Stat
-        label="XIRR"
-        help="Annualised return that accounts for when each rupee went in, the same measure Groww and Kuvera show. Includes stamp duty, redemptions and dividends."
-      >
-        {returns.xirr == null ? "—" : <span className={tone}>{signed(returns.xirr * 100, (n) => pct(n, 2))}</span>}
-      </Stat>
-    </dl>
-  )
-}
+const flowsLabel = (members: Member[]) =>
+  members.every((m) => m.history_source === "transactions") ? "From your transactions" : "Portfolio value"
 
-/** Invested / returns / XIRR in the header only when every fund has full purchase history. */
-function ReturnsRow({ returns, onAdded }: { returns: Returns | null; onAdded: () => void }) {
-  if (returns?.complete) {
-    return (
-      <div className="mt-6 max-w-2xl border-t pt-5">
-        <ReturnStats returns={returns} />
-      </div>
-    )
-  }
-  return (
-    <p className="mt-5 max-w-2xl text-sm text-muted-foreground">
-      Invested amount, returns and XIRR show here once every fund has its full purchase history
-      {returns ? " (partial figures are under Partial data below)" : ""}.{" "}
-      <RequestLink onAdded={onAdded} label="Request a full statement" />
-    </p>
-  )
-}
-
-/** Collapsed section for figures that only cover some funds, so they're never mistaken for the whole portfolio. */
-function PartialData({ returns, included, missing, total, onAdded }: {
-  returns: Returns
-  included: string[]
-  missing: string[]
-  total: number
-  onAdded: () => void
-}) {
-  return (
-    <details className="group rounded-2xl bg-surface ring-1 ring-border">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-4 p-5 sm:px-6 [&::-webkit-details-marker]:hidden">
-        <div>
-          <h2 className="text-base font-semibold">Partial data</h2>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            Invested amount, returns and XIRR for {returns.funds} of {returns.funds + missing.length} funds, not the whole portfolio
-          </p>
-        </div>
-        <ChevronDownIcon className="size-5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
-      </summary>
-      <div className="border-t px-5 pt-5 pb-6 sm:px-6">
-        <ReturnStats returns={returns} showValue />
-        <p className="mt-4 text-sm text-muted-foreground">
-          These funds are {inr(returns.current)} of {inr(total)}. The rest were bought before the CAMS / KFintech statement
-          starts, so what was paid for them isn't known.{" "}
-          <RequestLink onAdded={onAdded} label="Request a statement from the first investment" />
-        </p>
-        <div className="mt-5 grid gap-6 text-sm sm:grid-cols-2">
-          <div>
-            <h3 className="font-medium">Included</h3>
-            <ul className="mt-2 space-y-1 text-muted-foreground">
-              {included.map((n, i) => <li key={`${n}-${i}`}>{n}</li>)}
-            </ul>
-          </div>
-          <div>
-            <h3 className="font-medium">Missing purchase history</h3>
-            <ul className="mt-2 space-y-1 text-muted-foreground">
-              {missing.map((n, i) => <li key={`${n}-${i}`}>{n}</li>)}
-            </ul>
-          </div>
-        </div>
-      </div>
-    </details>
-  )
-}
-
-function MemberSwitch({ members, value, onChange, family }: { members: Member[]; value: string; onChange: (v: string) => void; family: number }) {
-  const options = [{ id: EVERYONE, name: "Everyone", total: family }, ...members]
-  return (
-    <div role="radiogroup" aria-label="Show portfolio for" className="flex flex-wrap gap-2">
-      {options.map((m) => {
-        const on = value === m.id
-        return (
-          <button
-            key={m.id}
-            role="radio"
-            aria-checked={on}
-            onClick={() => onChange(m.id)}
-            className={cn(
-              "rounded-xl px-3.5 py-2 text-left text-sm ring-1 transition-colors",
-              "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-              on ? "bg-foreground text-background ring-foreground" : "bg-surface ring-border hover:bg-muted",
-            )}
-          >
-            <span className="font-medium">{m.id === EVERYONE ? m.name : m.name.split(" ")[0]}</span>
-            <span className={cn("ml-2", on ? "text-background/70" : "text-muted-foreground")}>{inr(m.total)}</span>
-          </button>
-        )
-      })}
-    </div>
-  )
+function MemberSwitch({ members, value, onChange }: { members: Member[]; value: string; onChange: (v: string) => void }) {
+  const options = [{ id: EVERYONE, label: "Everyone" }, ...members.map((m) => ({ id: m.id, label: m.name.split(" ")[0] }))]
+  return <Segmented kind="radio" label="Show portfolio for" size="sm" value={value} onChange={onChange} options={options} />
 }
 
 function EmptyState({ onAdded }: { onAdded: () => void }) {
@@ -228,13 +106,12 @@ function EmptyState({ onAdded }: { onAdded: () => void }) {
 
 function LoadingState() {
   return (
-    <div className="space-y-6">
-      <Skeleton className="h-16 w-72" />
-      <Skeleton className="h-11 w-full rounded-xl" />
-      <div className="grid gap-6 lg:grid-cols-3">
-        <Skeleton className="h-72 lg:col-span-2" />
-        <Skeleton className="h-72" />
-      </div>
+    <div className="grid gap-4 lg:grid-cols-12">
+      <Skeleton className="h-[540px] rounded-[22px] lg:col-span-8" />
+      <Skeleton className="h-[540px] rounded-[22px] lg:col-span-4" />
+      <Skeleton className="h-44 rounded-[22px] lg:col-span-4" />
+      <Skeleton className="h-44 rounded-[22px] lg:col-span-4" />
+      <Skeleton className="h-44 rounded-[22px] lg:col-span-4" />
     </div>
   )
 }
@@ -316,11 +193,12 @@ export default function App() {
   }, [data, who, category])
 
   const memberMap = useMemo(() => new Map(data?.members.map((m) => [m.id, m])), [data])
-  const family = data?.members.reduce((s, m) => s + m.total, 0) ?? 0
+  const switchMember = (v: string) => { setWho(v); setCategory(null) }
   const multi = (data?.members.length ?? 0) > 1
   const showMember = multi && who === EVERYONE
   const ready = view && data && data.members.length > 0
   const activeSips = view?.sips.filter((x) => x.status === "active") ?? []
+  const upcoming = upcomingSips(view?.sips ?? [])
 
   const viewAll = (to: TabId, label: string) => (
     <button className="-my-2 py-2 text-primary underline-offset-4 hover:underline" onClick={() => setTab(to)}>
@@ -331,12 +209,12 @@ export default function App() {
   return (
     <OpenFundContext.Provider value={setFund}>
     <div className="min-h-svh">
-      <header className="sticky top-0 z-20 border-b bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-6 px-5 sm:px-8">
+      <header className="sticky top-0 z-20 bg-background/80 backdrop-blur-xl">
+        <div className="mx-auto flex h-[68px] max-w-[1240px] items-center justify-between gap-5 px-4 sm:px-7">
           <div className="flex min-w-0 items-center gap-6">
-            <button className="flex shrink-0 items-center gap-2.5 py-3.5" onClick={() => setTab("overview")}>
-              <span className="grid size-8 place-items-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground">₹</span>
-              <span className="hidden font-semibold sm:inline">Family portfolio</span>
+            <button className="flex shrink-0 items-center gap-2.5" onClick={() => setTab("overview")}>
+              <span className="grid size-[30px] place-items-center rounded-[9px] bg-foreground text-sm font-bold text-background">₹</span>
+              <span className="hidden font-semibold tracking-tight sm:inline">Family portfolio</span>
             </button>
             {ready && (
               <div className="hidden md:block">
@@ -351,7 +229,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-5 pb-28 sm:px-8 md:pb-20">
+      <main className="mx-auto max-w-[1240px] px-4 pb-28 sm:px-7 md:pb-20">
         {error && (
           <p className="mt-10 rounded-xl bg-surface p-4 text-sm text-loss ring-1 ring-border" role="alert">
             Couldn't load the portfolio: {error}. Check that the server is running, then reload.
@@ -361,96 +239,99 @@ export default function App() {
         {data && data.members.length === 0 && <EmptyState onAdded={load} />}
 
         {ready && (
-          <div className="space-y-8 pt-6 sm:pt-8">
-            {multi && (
-              <MemberSwitch members={data.members} value={who} onChange={(v) => { setWho(v); setCategory(null) }} family={family} />
-            )}
+          <div className="space-y-8 pt-3 sm:pt-4">
+            {multi && tab !== "overview" && <MemberSwitch members={data.members} value={who} onChange={switchMember} />}
 
             {tab === "overview" && (
-              <>
-                <section>
-                  <p className="text-sm text-muted-foreground">
-                    {who === EVERYONE ? (multi ? `${data.members.length} members` : "Total value") : view.members[0]?.name}
-                    {view.asOf && <> on {day(view.asOf)}</>}
-                  </p>
-                  <div className="mt-2 flex flex-wrap items-end gap-x-5 gap-y-2">
-                    <h1 className="text-5xl font-semibold tracking-[-0.03em] sm:text-6xl">{inr(view.total)}</h1>
-                    {view.change != null && view.prev && (
-                      <p className={cn("pb-1.5 text-base font-medium sm:pb-2.5", view.change >= 0 ? "text-gain" : "text-loss")}>
-                        {signed(view.change, inr)}{" "}
-                        <span className="font-normal">
-                          ({signed((view.change / view.prev.value) * 100, (n) => pct(n, 2))}) since {month(view.prev.month)}
-                        </span>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-6 lg:grid-cols-12">
+                <Cell className="dot-texture flex flex-col sm:p-7 md:col-span-6 lg:col-span-8" lift={false} label="Portfolio value">
+                  <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                    {multi ? <MemberSwitch members={data.members} value={who} onChange={switchMember} /> : <span />}
+                    <span className="eyebrow">
+                      {who === EVERYONE ? (multi ? `${data.members.length} members` : "") : view.members[0]?.name.split(" ")[0]}
+                      {view.asOf && <>{who === EVERYONE && !multi ? "" : " · "}{day(view.asOf)}</>}
+                    </span>
+                  </div>
+                  <HeroFigures total={view.total} change={view.change} prev={view.prev} />
+                  <div className="mt-6">
+                    {view.returns?.complete ? (
+                      <ReturnBoxes returns={view.returns} />
+                    ) : (
+                      <p className="max-w-xl text-sm text-muted-foreground">
+                        Invested amount, returns and XIRR show here once every fund has its full purchase history
+                        {view.returns ? " (partial figures are under Partial data below)" : ""}.{" "}
+                        <RequestLink onAdded={load} label="Request a full statement" />
                       </p>
                     )}
                   </div>
-                  <ReturnsRow returns={view.returns} onAdded={load} />
-                </section>
+                  <div className="mt-6 flex flex-1 flex-col">
+                    <ValueChart
+                      data={view.history}
+                      scrub
+                      label={
+                        <span className="eyebrow">
+                          {view.historyPartial ? "Demat holdings only" : flowsLabel(view.members)}
+                          <span className="hidden sm:inline"> · drag to explore</span>
+                        </span>
+                      }
+                    />
+                  </div>
+                </Cell>
 
-                <section aria-label="Allocation">
-                  <AllocationStrip
+                <Cell className="md:col-span-6 lg:col-span-4" delay={80} label="Allocation">
+                  <CellHead title="Allocation" aside={<span className="eyebrow">{view.slices.length} categories</span>} />
+                  <AllocationDonut
                     slices={view.slices}
-                    active={hovered}
-                    onHover={setHovered}
-                    selected={null}
+                    total={view.total}
+                    funds={view.allHoldings.length}
                     onSelect={(c) => { setCategory(c); setHovered(null); setTab("holdings") }}
                   />
-                </section>
+                </Cell>
 
-                <div className="grid gap-6 lg:grid-cols-3">
-                  <Panel title="Portfolio value" className="lg:col-span-2" aside={view.historyPartial ? "Demat holdings only" : view.members.every((m) => m.history_source === "transactions") ? "From your transactions" : undefined}>
-                    <ValueChart data={view.history} />
-                  </Panel>
-                  <Panel title="At a glance">
-                    <dl className="divide-y">
-                      <Fact
-                        label="Monthly SIPs"
-                        value={activeSips.length ? inr(activeSips.reduce((s, x) => s + monthly(x.amount, x.frequency), 0)) : "—"}
-                        detail={activeSips.length ? `${activeSips.length} active` : view.sipsMissing.length ? "needs a CAMS / KFintech statement" : "none active"}
-                      />
-                      <Fact
-                        label="Largest holding"
-                        value={view.allHoldings[0] ? pct((view.allHoldings[0].value / view.total) * 100) : "—"}
-                        detail={view.allHoldings[0]?.name}
-                      />
-                      <Fact
-                        label="Funds held"
-                        value={String(view.allHoldings.length)}
-                        detail={`across ${new Set(view.allHoldings.map((h) => h.amc || h.name)).size} fund houses`}
-                      />
-                    </dl>
-                  </Panel>
-                </div>
+                <Cell className="min-h-[172px] md:col-span-2 lg:col-span-4" delay={140}>
+                  <SipTile sips={activeSips} missing={view.sipsMissing.length > 0} />
+                </Cell>
+                <Cell className="min-h-[172px] md:col-span-2 lg:col-span-4" delay={190}>
+                  <LargestTile holding={view.allHoldings[0]} total={view.total} />
+                </Cell>
+                <Cell className="min-h-[172px] md:col-span-2 lg:col-span-4" delay={240}>
+                  <FundsTile holdings={view.allHoldings} />
+                </Cell>
 
                 {view.returns && !view.returns.complete && (
-                  <PartialData
+                  <PartialNotice
                     returns={view.returns}
                     included={view.allHoldings.filter((h) => h.invested != null && h.cashflows?.length).map((h) => h.name)}
                     missing={view.allHoldings.filter((h) => !(h.invested != null && h.cashflows?.length)).map((h) => h.name)}
                     total={view.total}
-                    onAdded={load}
+                    request={(label) => <RequestLink onAdded={load} label={label} />}
                   />
                 )}
 
-                <div className="grid gap-6 lg:grid-cols-2">
-                  <Panel title="Top holdings" aside={viewAll("holdings", `View all ${view.allHoldings.length}`)}>
-                    <TopHoldings holdings={view.allHoldings} total={view.total} members={memberMap} showMember={showMember} />
-                  </Panel>
-                  <Panel title="Upcoming SIPs" aside={activeSips.length ? viewAll("sips", "View all SIPs") : undefined}>
-                    <UpcomingSips sips={view.sips} members={memberMap} showMember={showMember} />
-                  </Panel>
-                </div>
+                <Cell className="md:col-span-6 lg:col-span-7" delay={340} label="Top holdings">
+                  <CellHead title="Top holdings" aside={viewAll("holdings", `View all ${view.allHoldings.length}`)} />
+                  <HoldingBars holdings={view.allHoldings} total={view.total} members={memberMap} showMember={showMember} />
+                </Cell>
+                <Cell className="md:col-span-6 lg:col-span-5" delay={390} label="Upcoming SIPs">
+                  <CellHead
+                    title="Upcoming SIPs"
+                    aside={upcoming.list.length ? <span className="eyebrow">Next {upcoming.days} day{upcoming.days === 1 ? "" : "s"}</span> : undefined}
+                  />
+                  <SipTimeline upcoming={upcoming} members={memberMap} showMember={showMember} />
+                  {activeSips.length > 0 && <div className="mt-2 text-[13px]">{viewAll("sips", "View all SIPs")}</div>}
+                </Cell>
 
-                <Panel title="Latest transactions" aside={view.activity.length ? viewAll("transactions", "View all") : undefined}>
-                  <ActivityList items={view.activity.slice(0, 5)} members={memberMap} showMember={showMember} />
-                </Panel>
-              </>
+                <Cell className="md:col-span-6 lg:col-span-12" delay={440} lift={false} label="Latest transactions">
+                  <CellHead title="Latest transactions" aside={view.activity.length ? viewAll("transactions", "View all") : undefined} />
+                  <ActivityGrid items={view.activity.slice(0, 6)} members={memberMap} showMember={showMember} />
+                </Cell>
+              </div>
             )}
 
             {tab === "holdings" && (
               <>
                 <PageTitle title="Holdings" detail={`${view.allHoldings.length} funds worth ${inr(view.total)}`} />
-                <AllocationStrip slices={view.slices} active={hovered} onHover={setHovered} selected={category} onSelect={setCategory} />
+                <AllocationStrip slices={view.slices} active={hovered} onHover={setHovered} selected={category} onSelect={setCategory} holdings={view.allHoldings} />
                 <Panel
                   title={category ?? "All funds"}
                   aside={category ? <button className="-my-2 py-2 text-primary hover:underline" onClick={() => setCategory(null)}>Show all funds</button> : undefined}

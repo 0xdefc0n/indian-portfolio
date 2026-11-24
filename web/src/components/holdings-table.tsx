@@ -102,7 +102,7 @@ export function FundButton({ children, className }: { children: React.ReactNode;
     <button
       type="button"
       className={cn(
-        "rounded-sm text-left font-medium leading-snug underline-offset-4 hover:underline",
+        "-my-1.5 rounded-sm py-1.5 text-left font-medium leading-snug underline-offset-4 hover:underline",
         "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
         className,
       )}

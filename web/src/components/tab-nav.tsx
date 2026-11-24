@@ -1,6 +1,7 @@
 import { ArrowLeftRightIcon, LayoutGridIcon, LightbulbIcon, PieChartIcon, RepeatIcon } from "lucide-react"
 import { useEffect, useState } from "react"
 
+import { Segmented } from "@/components/ui/segmented"
 import { cn } from "@/lib/utils"
 
 export const TABS = [
@@ -38,32 +39,21 @@ export function useTab(): [TabId, (t: TabId) => void] {
 
 export function TabNav({ tab, onChange, counts }: { tab: TabId; onChange: (t: TabId) => void; counts: Partial<Record<TabId, number>> }) {
   return (
-    <nav aria-label="Sections" className="-mb-px flex gap-1 overflow-x-auto [scrollbar-width:none]">
-      {TABS.map((t) => {
-        const on = t.id === tab
-        return (
-          <button
-            key={t.id}
-            onClick={() => onChange(t.id)}
-            aria-current={on ? "page" : undefined}
-            className={cn(
-              "relative shrink-0 px-2.5 py-3 text-sm font-medium transition-colors sm:px-3",
-              "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
-              on ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
+    <Segmented
+      kind="nav"
+      label="Sections"
+      value={tab}
+      onChange={onChange}
+      options={TABS.map((t) => ({
+        id: t.id,
+        label: (
+          <>
             {t.label}
-            {counts[t.id] != null && <span className="ml-1.5 hidden text-xs text-muted-foreground sm:inline">{counts[t.id]}</span>}
-            <span
-              className={cn(
-                "absolute inset-x-2.5 bottom-0 h-0.5 sm:inset-x-3 rounded-full bg-primary transition-opacity",
-                on ? "opacity-100" : "opacity-0",
-              )}
-            />
-          </button>
-        )
-      })}
-    </nav>
+            {counts[t.id] != null && <span className="ml-1.5 hidden font-mono text-[11px] text-muted-foreground lg:inline">{counts[t.id]}</span>}
+          </>
+        ),
+      }))}
+    />
   )
 }
 

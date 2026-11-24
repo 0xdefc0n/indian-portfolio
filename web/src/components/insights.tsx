@@ -103,7 +103,36 @@ export function FundPerformance({ holdings, members, showMember }: { holdings: H
     return <p className="text-sm text-muted-foreground">Needs a CAMS / KFintech statement that starts from the first investment.</p>
   }
   return (
-    <Table>
+    <>
+    {/* phones: one card per fund, figures under the name */}
+    <ul className="divide-y sm:hidden">
+      {rows.map(({ h, x, gain }) => (
+        <li key={`${h.member_id}-${h.isin}`}>
+          <button type="button" onClick={() => openFund(h)} className="w-full py-3 text-left">
+            <div className="text-sm leading-snug font-medium">{h.name}</div>
+            <div className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+              {h.tax?.since && <span>Since {day(h.tax.since)}</span>}
+              {showMember && <span>{members.get(h.member_id)?.name.split(" ")[0]}</span>}
+            </div>
+            <dl className="mt-2 grid grid-cols-3 gap-2 text-sm">
+              <div><dt className="eyebrow">Invested</dt><dd className="mt-0.5 tabular-nums">{inr(h.invested)}</dd></div>
+              <div>
+                <dt className="eyebrow">Gain</dt>
+                <dd className={cn("mt-0.5 tabular-nums", gain >= 0 ? "text-gain" : "text-loss")}>
+                  {signed(gain, inr)}
+                  <span className="block text-xs text-muted-foreground">{signed((gain / (h.invested || 1)) * 100, (n) => pct(n))}</span>
+                </dd>
+              </div>
+              <div className="text-right">
+                <dt className="eyebrow">XIRR</dt>
+                <dd className={cn("mt-0.5 font-medium tabular-nums", (x ?? 0) >= 0 ? "text-gain" : "text-loss")}>{x == null ? "—" : signed(x * 100, (n) => pct(n))}</dd>
+              </div>
+            </dl>
+          </button>
+        </li>
+      ))}
+    </ul>
+    <Table className="hidden sm:table">
       <TableHeader>
         <TableRow className="hover:bg-transparent">
           <TableHead className="w-full pl-0">Fund</TableHead>
@@ -134,6 +163,7 @@ export function FundPerformance({ holdings, members, showMember }: { holdings: H
         ))}
       </TableBody>
     </Table>
+    </>
   )
 }
 
@@ -389,9 +419,37 @@ export function FundReturns({ holdings, benchmark }: { holdings: Holding[]; benc
       {v == null ? "—" : signed(v * 100, (n) => pct(n))}
     </span>
   )
+  const periods = (r: Returns, ref: Returns | undefined, compare: boolean) => (
+    <dl className="mt-2 grid grid-cols-3 gap-2 text-sm">
+      {PERIODS.map((p) => (
+        <div key={p} className={p === "5y" ? "text-right" : undefined}>
+          <dt className="eyebrow">{p.toUpperCase()}</dt>
+          <dd className="mt-0.5 tabular-nums">{cell(r[p], ref?.[p], compare)}</dd>
+        </div>
+      ))}
+    </dl>
+  )
   return (
     <div>
-      <Table>
+      {/* phones: one card per fund, 1Y / 3Y / 5Y under the name */}
+      <ul className="divide-y sm:hidden">
+        {benchmark && (
+          <li className="-mx-3 rounded-xl bg-muted/50 px-3 py-3">
+            <div className="text-sm font-medium">{benchmark.name}</div>
+            {periods(benchmark.returns, undefined, false)}
+          </li>
+        )}
+        {funds.map((h) => (
+          <li key={h.isin}>
+            <button type="button" onClick={() => openFund(h)} className="w-full py-3 text-left">
+              <div className="text-sm leading-snug">{h.name}</div>
+              <div className="mt-0.5 text-xs text-muted-foreground">{h.sebi_category?.replace(/\s+Fund$/i, "") ?? h.category}</div>
+              {periods(h.returns, benchmark?.returns, h.asset_class === "Equity")}
+            </button>
+          </li>
+        ))}
+      </ul>
+      <Table className="hidden sm:table">
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead className="w-full pl-0">Fund</TableHead>

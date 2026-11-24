@@ -65,6 +65,8 @@ def nav_2018(isin: str) -> float | None:
 
 GOLD_RE = re.compile(r"GOLD|SILVER", re.I)
 INTL_RE = re.compile(r"\bUS\b|NASDAQ|S&P|INTERNATIONAL|GLOBAL|OVERSEAS|WORLD|EMERGING|CHINA|JAPAN|HANG SENG|FANG", re.I)
+# Funds that mix asset classes; matters for FoFs, whose SEBI label ("Other Scheme - FoF Domestic") doesn't say what they hold.
+HYBRID_NAME_RE = re.compile(r"MULTI[- ]?ASSET|ASSET ALLOCATION|HYBRID|BALANCED|ARBITRAGE|EQUITY SAVINGS", re.I)
 DEBT_NAME_RE = re.compile(r"GILT|G-SEC|GSEC|SDL|BOND|DEBT|PSU|LIQUID|OVERNIGHT|MONEY MARKET|CORPORATE|T-BILL|CRISIL IBX|TARGET MATURITY", re.I)
 
 
@@ -81,7 +83,7 @@ def asset_class(name: str, sebi: str | None, kind: str | None) -> str:
         return "Equity"
     if s.startswith("debt"):
         return "Debt"
-    if s.startswith("hybrid") or s.startswith("solution"):
+    if s.startswith("hybrid") or s.startswith("solution") or HYBRID_NAME_RE.search(name):
         return "Hybrid"
     if DEBT_NAME_RE.search(name):
         return "Debt"
