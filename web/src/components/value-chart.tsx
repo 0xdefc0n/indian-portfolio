@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
 
 import { type ChartConfig, ChartContainer, ChartTooltip } from "@/components/ui/chart"
 import { inr, inrShort, month, pct, signed } from "@/lib/format"
+import { setScrub } from "@/lib/scrub"
 import { cn } from "@/lib/utils"
 
 const config = { value: { label: "Value", color: "var(--primary)" } } satisfies ChartConfig
@@ -28,7 +29,11 @@ function rangesFor(span: number) {
   return out
 }
 
-export function ValueChart({ data: points }: { data: Point[] }) {
+/**
+ * scrub: the pointer drives the hero figures (via lib/scrub) instead of a floating tooltip.
+ * label: shown at the left of the range picker.
+ */
+export function ValueChart({ data: points, scrub = false, label }: { data: Point[]; scrub?: boolean; label?: React.ReactNode }) {
   // One slot per calendar month; months no statement covers stay empty and show as a break.
   const all = useMemo<Slot[]>(() => {
     if (!points.length) return []
@@ -41,6 +46,8 @@ export function ValueChart({ data: points }: { data: Point[] }) {
   const [range, setRange] = useState("1y")
   const chosen = ranges.find((r) => r.id === range) ?? ranges[0]
   const data = chosen?.months ? all.slice(-chosen.months) : all
+
+  useEffect(() => () => setScrub(null), [])
 
   const known = data.filter((d): d is Point => d.value != null)
   if (known.length < 2) {
@@ -56,37 +63,52 @@ export function ValueChart({ data: points }: { data: Point[] }) {
   const pad = (max - min) * 0.15 || max * 0.05
   const change = last.value - first.value
 
+  function pick(i: unknown) {
+    const p = i == null ? null : data[Number(i)]
+    setScrub(p && p.value != null ? { month: p.month, value: p.value, base: first } : null)
+  }
+
   return (
     <div className="flex h-full flex-col">
-      {ranges.length > 0 && (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <div role="radiogroup" aria-label="Chart range" className="flex gap-1 rounded-full bg-muted p-0.5">
-            {ranges.map((r) => (
-              <button
-                key={r.id}
-                role="radio"
-                aria-checked={chosen?.id === r.id}
-                onClick={() => setRange(r.id)}
-                className={cn(
-                  "rounded-full px-3 py-1 text-xs font-medium transition-colors",
-                  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-                  chosen?.id === r.id ? "bg-surface text-foreground shadow-sm ring-1 ring-border" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
-          <span className="text-sm">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        {label ?? <span />}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <span className="text-[13px]">
             <span className={change >= 0 ? "text-gain" : "text-loss"}>
               {signed(change, inr)} ({signed((change / first.value) * 100, (n) => pct(n, 1))})
             </span>
             <span className="ml-1 text-muted-foreground">since {month(first.month, true)}</span>
           </span>
+          {ranges.length > 0 && (
+            <div role="radiogroup" aria-label="Chart range" className="flex gap-0.5">
+              {ranges.map((r) => (
+                <button
+                  key={r.id}
+                  role="radio"
+                  aria-checked={chosen?.id === r.id}
+                  onClick={() => setRange(r.id)}
+                  className={cn(
+                    "min-h-9 min-w-10 rounded-lg px-2.5 font-mono text-xs transition-colors sm:min-h-7 sm:min-w-0",
+                    "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+                    chosen?.id === r.id ? "bg-surface-2 text-foreground ring-1 ring-border" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      )}
-      <ChartContainer config={config} className="aspect-auto min-h-[240px] w-full flex-1">
-        <AreaChart data={data} margin={{ left: 4, right: 8, top: 8, bottom: 0 }}>
+      </div>
+      <ChartContainer config={config} className={cn("aspect-auto min-h-[240px] w-full flex-1", scrub && "draw-in cursor-crosshair touch-none")}>
+        <AreaChart
+          data={data}
+          margin={{ left: 4, right: 8, top: 8, bottom: 0 }}
+          onMouseMove={scrub ? (st) => pick(st.activeTooltipIndex) : undefined}
+          onTouchMove={scrub ? (st) => pick(st.activeTooltipIndex) : undefined}
+          onMouseLeave={scrub ? () => setScrub(null) : undefined}
+          onTouchEnd={scrub ? () => setScrub(null) : undefined}
+        >
           <defs>
             <linearGradient id="valueFill" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="var(--color-value)" stopOpacity={0.28} />
@@ -114,9 +136,9 @@ export function ValueChart({ data: points }: { data: Point[] }) {
             tickCount={4}
           />
           <ChartTooltip
-            cursor={{ stroke: "var(--border)", strokeWidth: 1 }}
+            cursor={{ stroke: scrub ? "var(--color-value)" : "var(--border)", strokeWidth: 1, strokeOpacity: scrub ? 0.5 : 1 }}
             content={({ active, payload }) => {
-              if (!active || !payload?.length) return null
+              if (scrub || !active || !payload?.length) return null
               const p = payload[0].payload as Slot
               const i = data.findIndex((d) => d.month === p.month)
               const prev = i > 0 ? data[i - 1].value : null
@@ -146,8 +168,10 @@ export function ValueChart({ data: points }: { data: Point[] }) {
             strokeWidth={2}
             fill="url(#valueFill)"
             connectNulls={false}
-            activeDot={{ r: 4, strokeWidth: 2, stroke: "var(--background)" }}
-            isAnimationActive={false}
+            activeDot={{ r: scrub ? 6 : 4, strokeWidth: scrub ? 4 : 2, stroke: "var(--surface)" }}
+            isAnimationActive={scrub}
+            animationDuration={700}
+            animationEasing="ease-out"
           />
         </AreaChart>
       </ChartContainer>

@@ -19,7 +19,7 @@ CATEGORY_RULES: list[tuple[str, str]] = [
     (r"\bELSS\b|TAX SAVER", "ELSS"),
     (r"GOLD|SILVER", "Gold & silver"),
     (r"LIQUID|OVERNIGHT|MONEY MARKET|GILT|BOND|DEBT|CORPORATE|BANKING & PSU|DURATION|CREDIT RISK", "Debt"),
-    (r"HYBRID|BALANCED|ARBITRAGE|ASSET ALLOCATION|EQUITY SAVINGS", "Hybrid"),
+    (r"HYBRID|BALANCED|ARBITRAGE|ASSET ALLOCATION|MULTI[- ]?ASSET|EQUITY SAVINGS", "Hybrid"),
     (r"SMALL ?CAP", "Small cap"),
     (r"MID ?CAP", "Mid cap"),
     (r"LARGE ?& ?MID|LARGE AND MID", "Large & mid cap"),

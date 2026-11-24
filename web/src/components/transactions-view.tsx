@@ -60,12 +60,11 @@ export function TransactionsView({ items, members, showMember }: { items: Activi
           const sold = rows.filter((r) => r.units < 0 && r.amount).reduce((s, r) => s + Math.abs(r.amount ?? 0), 0)
           return (
             <section key={key}>
-              <div className="flex items-baseline justify-between gap-4 border-b pb-2">
-                <h3 className="font-semibold">{monthLabel(key)}</h3>
-                <p className="text-sm text-muted-foreground">
-                  {bought > 0 && <>Invested {inr(bought)}</>}
-                  {bought > 0 && sold > 0 && <span className="mx-2" />}
-                  {sold > 0 && <>Withdrawn {inr(sold)}</>}
+              <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b pb-2">
+                <h3 className="font-semibold whitespace-nowrap">{monthLabel(key)}</h3>
+                <p className="flex flex-wrap gap-x-4 text-sm text-muted-foreground">
+                  {bought > 0 && <span className="whitespace-nowrap">Invested {inr(bought)}</span>}
+                  {sold > 0 && <span className="whitespace-nowrap">Withdrawn {inr(sold)}</span>}
                 </p>
               </div>
               <ActivityList items={rows} members={members} showMember={showMember} />
