@@ -12,9 +12,9 @@ Code session each. If the two disagree, this file wins for order and scope, and 
 
 Claude updates this table at the end of every milestone.
 
-| # | Milestone | Plan phase | Status | Date | Branch / PR | Notes |
+| # | Milestone | Plan phase | Status | Date | Commit | Notes |
 |---|---|---|---|---|---|---|
-| M0 | Repo setup | 0 | done | 2026-11-25 | `m00-repo-setup` (local, not pushed) | Branched from `origin/main` (already has bento, PR #1) and cherry-picked the local rename `dd308df`. Local `main` is untouched and still lacks bento. Web build + lint pass; old app starts. CI YAML parses; not yet run on GitHub |
+| M0 | Repo setup | 0 | done | 2026-11-25 | `1059779` | Branched from `origin/main` (already has bento, PR #1) and cherry-picked the local rename `dd308df`. Local `main` is untouched and still lacks bento. Web build + lint pass; old app starts. CI YAML parses; not yet run on GitHub |
 | M1 | Python engine extracted and containerised | 0 | todo | | | |
 | M2 | Worker scaffold and engine pool (local) | 0 | todo | | | |
 | M3 | Spike: pdf.js pre-check inside a Worker | 0 | todo | | | |
@@ -47,9 +47,9 @@ Status values: `todo` · `in progress` · `blocked (needs owner: …)` · `done`
 3. **Check "Needs from owner".** If anything is missing, stop before writing code. Set the row to
    `blocked (needs owner: …)` and tell the owner exactly what's needed and how to provide it. **Secrets go in a
    git-ignored file (`worker/.dev.vars`, `.env`), never in chat.** Claude reads them from there and never prints them.
-4. **Branch:** `m<NN>-<slug>` (for example `m07-upload-direct`). Base it on `main` if the previous milestone is already
-   merged into `main`. Otherwise base it on the **previous milestone's branch** (stacked), so all new work stays off
-   `main` until the owner merges it.
+4. **Branch:** all milestones are built on the single branch **`multi-user`**, one or more commits per milestone, with
+   the commit subject starting `M<N>:`. The owner opens a PR to `main` after a set of milestones. Never commit
+   milestone work to `main` directly.
 5. **Build only what the milestone lists.** Anything useful but out of scope goes in the row's Notes, or in a "Later"
    bullet under the milestone, not in code.
 6. **⚠️ VERIFY items in scope:** check each against current docs or by running it. Then edit the plan: replace
@@ -58,9 +58,9 @@ Status values: `todo` · `in progress` · `blocked (needs owner: …)` · `done`
    the final report. **Never paste statement data, PANs, names, amounts or passwords** (plan §0.1). Real-PDF checks
    print counts and ok/fail only.
 8. **Finish:**
-   - commit on the milestone branch;
+   - commit on `multi-user`;
    - update the Status row (status, date, branch, short notes);
-   - ask the owner whether to push and open a PR, or merge to `main`. Don't push or merge without that.
+   - don't push or open a PR unless the owner asks. They open PRs after a set of milestones.
 9. **Stop.** Report what was built, the test results, what was verified, and what the owner must do before the next
    milestone. **Don't start the next milestone in the same session.** The owner should start a fresh session
    (`/clear`) for each milestone.
