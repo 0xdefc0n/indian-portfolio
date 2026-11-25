@@ -185,18 +185,22 @@ a merge.
 **Needs from owner:**
 - Google OAuth Web client IDs and secrets for localhost:8787 and staging (consent screen in Testing mode, with your
   test emails added).
-- `RESEND_API_KEY`, and the domain added in Resend (Claude adds the DNS records with the token).
+- `pocketfolio.in` onboarded in Cloudflare Email Sending (✅ owner, 2026-11-25). No API key is needed, because the
+  Worker uses the `send_email` binding. If a deploy with the binding is refused, the Cloudflare token also needs
+  Email Sending: Edit.
 - Two email addresses you can read.
 
 **Build:**
 - Better Auth on D1 `DB`: Google, magic link + email OTP in one email, cookie cache, `householdId` /
   `consentVersion` session fields, narrowed rate-limit rules, migrations `app/0001_auth.sql`.
 - Household + empty snapshot row created on signup. DEK generated and wrapped (`crypto.ts` key parts only).
-- `EmailSender` + Resend batch sending through `pf-email`. A staging-only email sink for automated tests.
+- `EmailSender` + Cloudflare Email Service (`send_email` binding `EMAIL`), sending through `pf-email`, one call per
+  message with per-message retry (plan §7.3). A staging-only email sink for automated tests.
 - Turnstile check on the email form. Session middleware, `/api/me`, `/api/config`, sign-out, the global 401 handler.
 - Frontend: `/login` (Google primary, email link/code, PocketFolio wordmark), the avatar menu, a tiny router.
 - ⚠️ VERIFY: Better Auth option names (cookieCache, additionalFields, rateLimit customRules), the combined link + code
-  email, and Resend batch + rate limits.
+  email, the `send_email` binding config (sender restriction, local dev with `remote`), the Email Service error codes,
+  and Email Routing (`support@`) coexisting with Email Sending on the zone.
 
 **Done when:**
 - Sign-in with Google and with a magic link works on staging, and the 6-digit code works.
@@ -350,7 +354,7 @@ data and nothing else.
 **Read:** plan §7.2, §17 Phase 6 launch checklist, §19.
 **Needs from owner** (the most owner work of any milestone):
 - Google consent screen brand verification and "In production", plus a production client ID.
-- Resend on Pro.
+- Cloudflare Email Service daily-quota increase approved (Limit Increase Request form).
 - Legal review done.
 - Production approval in the GitHub environment.
 
@@ -380,5 +384,5 @@ data and nothing else.
 - **What can move:** M9 can start any time after M7, M13 any time after M5, and M15 any time after M10. Keep the table
   order unless the owner asks otherwise.
 - **Owner inputs, by first milestone that needs them:** M0 branch OK · M4 Cloudflare Paid + token + domain · M5 Google
-  clients + Resend + test emails · M10 R2 read-only token · M11 BharatStock OK · M14 legal details · M16 load-test OK ·
-  M17 Google production, Resend Pro, legal review, go-live approval.
+  clients + Email Sending domain (✅) + test emails · M10 R2 read-only token · M11 BharatStock OK · M14 legal details · M16 load-test OK ·
+  M17 Google production, email quota increase, legal review, go-live approval.
