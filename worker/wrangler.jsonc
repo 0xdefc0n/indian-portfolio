@@ -83,7 +83,9 @@
   "env": {
     // staging.pocketfolio.in, deployed by CI on every merge to main (.github/workflows/ci.yml).
     "staging": {
-      "workers_dev": false,
+      // workers.dev is on for staging only: CI's smoke test calls it, because the zone's bot protection answers 403
+      // to GitHub runners on staging.pocketfolio.in (M4).
+      "workers_dev": true,
       "preview_urls": false,
       "routes": [{ "pattern": "staging.pocketfolio.in", "custom_domain": true }],
       "d1_databases": [
