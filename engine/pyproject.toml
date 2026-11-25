@@ -1,0 +1,27 @@
+[project]
+name = "pocketfolio-engine"
+version = "0.1.0"
+description = "PocketFolio engine: CAS PDF parsing and portfolio builds (stateless HTTP service)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "casparser==1.4.1",
+    "casparser-isin>=2026.6.9",
+    "pdfplumber==0.11.11",
+    "fastapi==0.165.0",
+    "uvicorn==0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "httpx>=0.28",   # FastAPI TestClient; legacy parity test imports app/ which uses httpx
+    "pypdf>=5.0",    # builds small encrypted PDFs for tests
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"

@@ -15,7 +15,7 @@ Claude updates this table at the end of every milestone.
 | # | Milestone | Plan phase | Status | Date | Commit | Notes |
 |---|---|---|---|---|---|---|
 | M0 | Repo setup | 0 | done | 2026-11-25 | `1059779` | Branched from `origin/main` (already has bento, PR #1) and cherry-picked the local rename `dd308df`. Local `main` is untouched and still lacks bento. Web build + lint pass; old app starts. CI YAML parses; not yet run on GitHub |
-| M1 | Python engine extracted and containerised | 0 | todo | | | |
+| M1 | Python engine extracted and containerised | 0 | done | 2026-11-25 | (this commit) | 34 synthetic + 7 real-PDF tests pass, incl. parity with the old app on real statements (with and without NAVs). Container: read-only, non-root, /tmp empty, concurrent /parse → 503. `/parse` now takes a raw body (multipart would spool to disk). Large detailed CAMS statement still unmeasured |
 | M2 | Worker scaffold and engine pool (local) | 0 | todo | | | |
 | M3 | Spike: pdf.js pre-check inside a Worker | 0 | todo | | | |
 | M4 | Cloudflare staging and CI | 0–1 | todo | | | |

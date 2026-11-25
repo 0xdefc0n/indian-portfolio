@@ -143,7 +143,8 @@ Native CPython on the owner's laptop (Apple Silicon). Only timings, sizes and ok
 | Statement JSON | 0.2–97 KB each. **142 KB → 11 KB gzipped (12×)** |
 | Snapshot JSON | **170 KB → 28 KB gzipped (6×)** |
 | KFintech CAS parse (3 statements: 2, 4 and 10 pages; 109–178 KB) | **0.13 / 0.31 / 0.46 s CPU**, peak RSS **86–104 MB**, JSON 5–76 KB (≤ 5 KB gzipped) |
-| A large multi-year *detailed* CAMS statement | ⚠️ Not measured yet (none available). Measure in Phase 0. Assume ~0.05 s CPU per page until then |
+| A large multi-year *detailed* CAMS statement | ⚠️ Not measured yet (none available). Assume ~0.05 s CPU per page until then. The KFintech statements above are detailed: up to 314 transactions in 10 pages |
+| **M1, engine `/parse` in the container** (2026-11-25; linux/amd64 emulated on an Apple Silicon Mac, so CPU is ~1.7–2.1× native) | KFintech 388 / 681 / 1,032 ms, CDSL 1,797 ms; peak RSS **105–166 MB** for the whole process. Image 386 MB. Read-only root filesystem, `/tmp` empty after every parse. Native, the same code takes 228 / 316 / 456 / 849 ms and 80–147 MB. ⚠️ Re-measure on Cloudflare in M4 |
 
 **Worker pre-check (pdf.js 6.5 in Node, the same engine a Worker would run; §10.1 A):** open the PDF with the candidate
 passwords, read the text of pages 1–2, detect the statement type, and look for the member's PAN.
@@ -1427,15 +1428,18 @@ the PocketFolio icon, `Panel` surface and ring, `lucide-react` icons, and the pr
 ## 14. Engine (Python container)
 
 - **Dockerfile:**
-  - Base `python:3.12-slim`, `linux/amd64`. Install with `uv pip install`.
+  - Base `python:3.12-slim`, `linux/amd64`. Install with `uv sync --frozen` from `engine/uv.lock` in a build stage.
   - Run as a non-root user, read-only root filesystem, `tmpfs` only for `/tmp`.
   - `uvicorn engine.server:app --host 0.0.0.0 --port 8080 --workers 1 --limit-max-requests 200`. The process exits
     after 200 requests and is restarted by a tiny supervisor loop in the entrypoint, which caps memory growth from
-    pdfminer's caches. ⚠️ VERIFY that `--limit-max-requests` restarts cleanly in a single-worker setup; otherwise run under
-    `gunicorn -k uvicorn.workers.UvicornWorker --max-requests 200 --max-requests-jitter 20`.
+    pdfminer's caches. ✅ Verified in M1: uvicorn exits with code 0 at the limit, and `engine/entrypoint.sh` restarts it
+    (and stops cleanly on SIGTERM). A request that arrives during the ~1 s restart fails to connect; the caller retries.
   - Keep the image slim (no build tools in the final stage) for faster cold starts. `isin.db` (49 MB) is the largest file.
-- **Endpoints:** `/parse` (multipart: `file`, `candidates` JSON), `/build` (JSON), `/stocks/scrape`, and `/health`
-  (returns `{version}`, plus `isin_db` freshness).
+- **Endpoints:** `/parse`, `/build` (JSON), `/stocks/scrape` (M18), and `/health` (returns `{version, isin_db, busy}`).
+  See `engine/README.md` for the exact contract.
+  - **`/parse` takes the raw PDF as the request body**, with the password base64url-encoded in `X-Pdf-Password` and the
+    pre-checked type in `X-Statement-Kind`. ✅ Changed in M1: Starlette spools multipart uploads over 1 MB to a
+    temporary file on disk, which would break "PDFs never touch disk". A raw body is read into memory only.
 - **Internal auth.** It is reachable only through the Durable Object. It still requires the header
   `X-Engine-Key: <ENGINE_SHARED_SECRET>` (container env secret), compared in constant time.
 - **Logging.** Keep the current policy: error class names only. Turn off uvicorn access logs, because query strings and

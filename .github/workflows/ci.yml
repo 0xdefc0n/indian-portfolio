@@ -30,5 +30,27 @@ jobs:
       - run: npm run lint
       - run: npm run build
 
-  # Engine (pytest) and Worker (vitest, typecheck, lint) jobs are added in M1 and M2.
-  # Staging deploy on merge to main is added in M4.
+  engine:
+    name: Engine (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: engine/uv.lock
+      - run: uv sync --frozen
+      # private real-PDF tests skip themselves: CI never has statements
+      - run: uv run pytest -q -p no:warnings
+
+  engine-image:
+    name: Engine (docker build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t pocketfolio-engine:ci engine
+
+  # Worker (vitest, typecheck, lint) job is added in M2. Staging deploy on merge to main is added in M4.
