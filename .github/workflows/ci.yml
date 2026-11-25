@@ -110,11 +110,19 @@ jobs:
       # Builds the engine image with the runner's Docker and pushes it to the Cloudflare registry.
       - run: npx wrangler deploy --env staging
         working-directory: worker
+      # Calls the staging workers.dev URL: the zone's bot protection answers 403 to GitHub runners on the custom domain.
+      # The account's workers.dev subdomain is looked up at run time so it never sits in the repo, and it isn't echoed.
       # A cold container start can take a while after a new image rolls out: retry for up to ~5 min.
       - name: Smoke test /api/health
         run: |
+          sub=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" | jq -r '.result.subdomain')
+          echo "::add-mask::$sub"
+          url="https://pocketfolio-staging.$sub.workers.dev/api/health"
           for i in $(seq 1 30); do
-            body=$(curl -fsS --max-time 60 https://staging.pocketfolio.in/api/health) && echo "$body" | grep -q '"ok":true' && { echo "$body"; exit 0; }
+            code=$(curl -sS --max-time 60 -o body.json -w '%{http_code}' "$url" || echo 000)
+            if [ "$code" = 200 ] && grep -q '"ok":true' body.json; then cat body.json; echo; exit 0; fi
+            echo "try $i: HTTP $code"
             sleep 10
           done
           echo "staging /api/health did not come up"; exit 1

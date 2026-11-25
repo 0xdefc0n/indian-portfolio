@@ -1657,7 +1657,13 @@ until those features ship.
   (`apac`), R2 `pocketfolio-data-staging` (`apac`, lifecycle rule `tmp-expire-1d`: `tmp/` → delete after 1 day),
   queues `pf-{parse,rebuild,market,email}-staging` + `pf-dlq-staging`, Turnstile widget `pocketfolio-staging`
   (managed, domain `staging.pocketfolio.in`; its site key is the plain var `TURNSTILE_SITE_KEY`). Worker
-  `pocketfolio-staging` on the custom domain `staging.pocketfolio.in`, with `workers_dev` and preview URLs off.
+  `pocketfolio-staging` on the custom domain `staging.pocketfolio.in`, plus its workers.dev URL (preview URLs off).
+  - CI smoke test: from GitHub runners, `staging.pocketfolio.in` answers **403** at the edge, probably the zone's Bot
+    Fight Mode, which the Free zone plan can't skip with a WAF rule. The Worker itself never returns 403. Owner's
+    choice (2026-11-25): staging alone turns on `workers_dev`, and CI checks
+    `pocketfolio-staging.<subdomain>.workers.dev/api/health`, looking up the subdomain from the API at run time.
+    Production keeps `workers_dev` off. Re-check bot protection on `/api/*` before launch (M16/M17): a challenge
+    breaks the SPA's fetch calls for real users on shared mobile IPs.
   - ✅ wrangler 4.168 doesn't inherit bindings, vars, secrets or containers into an environment, so `env.staging` and
     `env.production` in `worker/wrangler.jsonc` repeat them all. The top level stays the local-dev config. Queue, D1,
     R2 and container-application names are account-wide, so staging uses a `-staging` suffix. Rate-limit namespace
