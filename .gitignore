@@ -4,3 +4,13 @@ __pycache__/
 data/
 web/node_modules/
 web/dist/
+
+# Multi-user build (docs/MILESTONES.md)
+engine/tests/private/
+engine/.venv/
+worker/node_modules/
+worker/.dev.vars
+worker/.wrangler/
+.wrangler/
+*.local.*
+.DS_Store
