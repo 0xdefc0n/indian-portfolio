@@ -1,0 +1,186 @@
+// PocketFolio Worker (plan §15.1). Keys checked against wrangler 4.168 config-schema.json in M2.
+// Top level = local dev (`wrangler dev`, vitest): resource IDs only name the on-disk state. `env.staging` and
+// `env.production` (below) repeat every binding, because wrangler does not inherit bindings, vars or containers into
+// environments. Staging resources were created in M4; production resources are created in M17.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "pocketfolio",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "../web/dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "limits": { "cpu_ms": 30000 },
+
+  "d1_databases": [
+    { "binding": "DB", "database_name": "pocketfolio-app", "database_id": "local-pocketfolio-app", "migrations_dir": "migrations/app" },
+    { "binding": "MARKET", "database_name": "pocketfolio-market", "database_id": "local-pocketfolio-market", "migrations_dir": "migrations/market" }
+  ],
+  // R2 lifecycle (set in M4 with `wrangler r2 bucket lifecycle add`): prefix "tmp/" → delete after 1 day.
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pocketfolio-data" }],
+
+  "queues": {
+    "producers": [
+      { "binding": "Q_PARSE", "queue": "pf-parse" },
+      { "binding": "Q_REBUILD", "queue": "pf-rebuild" },
+      { "binding": "Q_MARKET", "queue": "pf-market" }, // nav-backfill, stock-scrape, R2 series writes
+      { "binding": "Q_EMAIL", "queue": "pf-email" }
+    ],
+    // max_concurrency of pf-parse / pf-rebuild must equal ENGINE_FAST_MAX / ENGINE_BATCH_MAX (§14).
+    "consumers": [
+      { "queue": "pf-parse", "max_batch_size": 1, "max_concurrency": 60, "max_retries": 10, "dead_letter_queue": "pf-dlq" },
+      { "queue": "pf-rebuild", "max_batch_size": 1, "max_concurrency": 60, "max_retries": 5, "dead_letter_queue": "pf-dlq" },
+      { "queue": "pf-market", "max_batch_size": 10, "max_concurrency": 4, "max_retries": 5, "dead_letter_queue": "pf-dlq" },
+      { "queue": "pf-email", "max_batch_size": 100, "max_batch_timeout": 1, "max_concurrency": 2, "max_retries": 5, "dead_letter_queue": "pf-dlq" }
+    ]
+  },
+
+  // nav-ingest ×4 (23:00, 02:00, 07:00, 10:00 IST), snapshot-prebuild fallback + stocks (10th–20th), nav-repair (Sun),
+  // cleanup, tmp-sweep (hourly). "0 5 * * *" and "0 5 10-20 * *" both fire on the 10th–20th: dispatch on event.cron.
+  "triggers": {
+    "crons": ["30 17 * * *", "30 20 * * *", "30 1 * * *", "30 4 * * *", "0 5 * * *", "0 3 * * SUN", "0 5 10-20 * *", "0 21 * * *", "15 * * * *"]
+  },
+
+  "ratelimits": [
+    { "name": "RL_USER", "namespace_id": "1001", "simple": { "limit": 120, "period": 60 } },
+    { "name": "RL_IP", "namespace_id": "1002", "simple": { "limit": 300, "period": 60 } }
+  ],
+
+  // TURNSTILE_SITE_KEY here is Cloudflare's public always-pass test key (local dev only).
+  "vars": {
+    "APP_URL": "http://localhost:8787",
+    "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+    "ENGINE_FAST_MAX": "60",
+    "ENGINE_BATCH_MAX": "60",
+    "TMP_MAX_OBJECTS": "50000"
+  },
+  // Names only; values come from .dev.vars locally and `wrangler secret put` in the cloud (§15.2).
+  // Each milestone adds the secrets it starts using.
+  "secrets": { "required": ["ENGINE_SHARED_SECRET"] },
+
+  // Durable-Object-managed containers (§14). "durable_object" is the current policy ("default" is deprecated). With it,
+  // wrangler rejects "image", "instance_type" and "max_instances": images are named here and each Durable Object picks
+  // the image and instance size in ctx.container.start() (src/engine.ts). EnginePool's caps are the instance limit.
+  // Same image for both classes (D16): EngineFast starts standard-2, EngineBatch starts basic.
+  "containers": [
+    { "name": "pocketfolio-engine-fast", "class_name": "EngineFast", "scheduling_policy": "durable_object", "images": { "engine": { "dockerfile": "../engine/Dockerfile" } } },
+    { "name": "pocketfolio-engine-batch", "class_name": "EngineBatch", "scheduling_policy": "durable_object", "images": { "engine": { "dockerfile": "../engine/Dockerfile" } } }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "ENGINE_FAST", "class_name": "EngineFast" },
+      { "name": "ENGINE_BATCH", "class_name": "EngineBatch" },
+      { "name": "ENGINE_POOL", "class_name": "EnginePool" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["EngineFast", "EngineBatch", "EnginePool"] }],
+
+  "observability": { "enabled": true },
+
+  "env": {
+    // staging.pocketfolio.in, deployed by CI on every merge to main (.github/workflows/ci.yml).
+    "staging": {
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [{ "pattern": "staging.pocketfolio.in", "custom_domain": true }],
+      "d1_databases": [
+        { "binding": "DB", "database_name": "pocketfolio-app-staging", "database_id": "5d86469e-bce4-4219-91bd-48babb39a17a", "migrations_dir": "migrations/app" },
+        { "binding": "MARKET", "database_name": "pocketfolio-market-staging", "database_id": "5468bd02-7c1e-457c-ad4f-7f639a07b337", "migrations_dir": "migrations/market" }
+      ],
+      // Lifecycle rule "tmp-expire-1d": prefix tmp/ → delete after 1 day (created in M4).
+      "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pocketfolio-data-staging" }],
+      "queues": {
+        "producers": [
+          { "binding": "Q_PARSE", "queue": "pf-parse-staging" },
+          { "binding": "Q_REBUILD", "queue": "pf-rebuild-staging" },
+          { "binding": "Q_MARKET", "queue": "pf-market-staging" },
+          { "binding": "Q_EMAIL", "queue": "pf-email-staging" }
+        ],
+        "consumers": [
+          { "queue": "pf-parse-staging", "max_batch_size": 1, "max_concurrency": 60, "max_retries": 10, "dead_letter_queue": "pf-dlq-staging" },
+          { "queue": "pf-rebuild-staging", "max_batch_size": 1, "max_concurrency": 60, "max_retries": 5, "dead_letter_queue": "pf-dlq-staging" },
+          { "queue": "pf-market-staging", "max_batch_size": 10, "max_concurrency": 4, "max_retries": 5, "dead_letter_queue": "pf-dlq-staging" },
+          { "queue": "pf-email-staging", "max_batch_size": 100, "max_batch_timeout": 1, "max_concurrency": 2, "max_retries": 5, "dead_letter_queue": "pf-dlq-staging" }
+        ]
+      },
+      // Rate-limit namespaces are account-wide: staging gets its own IDs so it never shares counters with production.
+      "ratelimits": [
+        { "name": "RL_USER", "namespace_id": "2001", "simple": { "limit": 120, "period": 60 } },
+        { "name": "RL_IP", "namespace_id": "2002", "simple": { "limit": 300, "period": 60 } }
+      ],
+      "vars": {
+        "APP_URL": "https://staging.pocketfolio.in",
+        "TURNSTILE_SITE_KEY": "0x4AAAAAAGSvPiuJKmMZ4fVv",
+        "ENGINE_FAST_MAX": "60",
+        "ENGINE_BATCH_MAX": "60",
+        "TMP_MAX_OBJECTS": "50000"
+      },
+      "secrets": { "required": ["ENGINE_SHARED_SECRET"] },
+      "containers": [
+        { "name": "pocketfolio-engine-fast-staging", "class_name": "EngineFast", "scheduling_policy": "durable_object", "images": { "engine": { "dockerfile": "../engine/Dockerfile" } } },
+        { "name": "pocketfolio-engine-batch-staging", "class_name": "EngineBatch", "scheduling_policy": "durable_object", "images": { "engine": { "dockerfile": "../engine/Dockerfile" } } }
+      ],
+      "durable_objects": {
+        "bindings": [
+          { "name": "ENGINE_FAST", "class_name": "EngineFast" },
+          { "name": "ENGINE_BATCH", "class_name": "EngineBatch" },
+          { "name": "ENGINE_POOL", "class_name": "EnginePool" }
+        ]
+      }
+    },
+
+    // pocketfolio.in. Deployed only by the manual "Deploy production" workflow. The IDs, the Turnstile site key and
+    // the secrets are filled in by M17, which creates these resources; until then a production deploy fails on purpose.
+    "production": {
+      "name": "pocketfolio",
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [{ "pattern": "pocketfolio.in", "custom_domain": true }],
+      "d1_databases": [
+        { "binding": "DB", "database_name": "pocketfolio-app", "database_id": "created-in-M17", "migrations_dir": "migrations/app" },
+        { "binding": "MARKET", "database_name": "pocketfolio-market", "database_id": "created-in-M17", "migrations_dir": "migrations/market" }
+      ],
+      "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pocketfolio-data" }],
+      "queues": {
+        "producers": [
+          { "binding": "Q_PARSE", "queue": "pf-parse" },
+          { "binding": "Q_REBUILD", "queue": "pf-rebuild" },
+          { "binding": "Q_MARKET", "queue": "pf-market" },
+          { "binding": "Q_EMAIL", "queue": "pf-email" }
+        ],
+        "consumers": [
+          { "queue": "pf-parse", "max_batch_size": 1, "max_concurrency": 60, "max_retries": 10, "dead_letter_queue": "pf-dlq" },
+          { "queue": "pf-rebuild", "max_batch_size": 1, "max_concurrency": 60, "max_retries": 5, "dead_letter_queue": "pf-dlq" },
+          { "queue": "pf-market", "max_batch_size": 10, "max_concurrency": 4, "max_retries": 5, "dead_letter_queue": "pf-dlq" },
+          { "queue": "pf-email", "max_batch_size": 100, "max_batch_timeout": 1, "max_concurrency": 2, "max_retries": 5, "dead_letter_queue": "pf-dlq" }
+        ]
+      },
+      "ratelimits": [
+        { "name": "RL_USER", "namespace_id": "1001", "simple": { "limit": 120, "period": 60 } },
+        { "name": "RL_IP", "namespace_id": "1002", "simple": { "limit": 300, "period": 60 } }
+      ],
+      "vars": {
+        "APP_URL": "https://pocketfolio.in",
+        "TURNSTILE_SITE_KEY": "created-in-M17",
+        "ENGINE_FAST_MAX": "60",
+        "ENGINE_BATCH_MAX": "60",
+        "TMP_MAX_OBJECTS": "50000"
+      },
+      "secrets": { "required": ["ENGINE_SHARED_SECRET"] },
+      "containers": [
+        { "name": "pocketfolio-engine-fast", "class_name": "EngineFast", "scheduling_policy": "durable_object", "images": { "engine": { "dockerfile": "../engine/Dockerfile" } } },
+        { "name": "pocketfolio-engine-batch", "class_name": "EngineBatch", "scheduling_policy": "durable_object", "images": { "engine": { "dockerfile": "../engine/Dockerfile" } } }
+      ],
+      "durable_objects": {
+        "bindings": [
+          { "name": "ENGINE_FAST", "class_name": "EngineFast" },
+          { "name": "ENGINE_BATCH", "class_name": "EngineBatch" },
+          { "name": "ENGINE_POOL", "class_name": "EnginePool" }
+        ]
+      }
+    }
+  }
+}

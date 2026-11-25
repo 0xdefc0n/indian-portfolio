@@ -1,0 +1,8 @@
+// Dev-only config for scripts/measure-pdfcheck.ts (never deployed). Same flags as wrangler.jsonc.
+{
+  "name": "pocketfolio-measure-pdfcheck",
+  "main": "measure-worker.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "limits": { "cpu_ms": 30000 }
+}

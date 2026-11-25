@@ -56,7 +56,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-app = FastAPI(title="Demat Portfolio - CDSL fetch")
+app = FastAPI(title="PocketFolio")
 
 # session_id -> {"pan": str, "created": float}. Server-side so the client
 # can't choose the filename by sending a different PAN at verify time.
