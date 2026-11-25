@@ -481,7 +481,7 @@ CREATE TABLE pending_statement_password (        -- KFintech guided request (D9)
 CREATE TABLE quota (                             -- fair-use counters (§11)
   subject       TEXT NOT NULL,                   -- 'user:{id}' | 'household:{id}' | 'global'
   metric        TEXT NOT NULL,                   -- 'upload' | 'parse_fail' | 'device_link' ...
-  window        TEXT NOT NULL,                   -- '2026-11-24' or '2026-11'
+  window        TEXT NOT NULL,                   -- '2026-11-24' or '2026-11' (✅ M6: IST; also '2026-11-24T13' for hourly)
   count         INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (subject, metric, window)
 );
@@ -761,24 +761,35 @@ bucket or D1 export is useless on its own.
 - **KEK** (key-encryption key):
   - 32 random bytes held as a Worker secret, `DATA_KEK_V1`.
   - `kek_version` is stored per household. To rotate: add `DATA_KEK_V2`, re-wrap the DEKs, then remove V1.
+    ✅ M6: new DEKs are wrapped with the highest `DATA_KEK_V<n>` that is set, and `rewrapDeks()` moves households in
+    batches with a compare-and-set on `kek_version` (call it until it returns 0). Tested.
 - **DEK** (data key): 32 random bytes per household, generated at household creation and stored wrapped
   (`AES-GCM(KEK, DEK)`) in `household.dek_wrapped`.
 - **Blob format:** `0x01 | kek_version (1B) | flags (1B) | iv (12B) | AES-256-GCM ciphertext+tag`. `flags` bit 0 = the
   plaintext was gzip-compressed before encryption (D18). It's set for JSON blobs and clear for parked PDFs. The AAD is
   `"{household_id}:{blob_key}"`, so a blob can't be swapped into another household. Use `CompressionStream("gzip")`
   and `DecompressionStream` in the Worker. Never compress after encrypting.
+  ✅ M6 (`src/lib/crypto.ts`, `src/lib/blob.ts`): the AAD is the 3 header bytes followed by `"{household_id}:{key}"`,
+  so the flags and KEK byte can't be edited either. Encrypted columns use the same format, with a field name as the key
+  (`member/{id}/pan`, `member/{id}/name`). `kek_version` records the KEK at seal time; a re-wrap keeps the DEK, so
+  old blobs still open. D1 returns BLOB columns as number arrays; the readers accept them.
 - **Fields:** `pan_enc`, `display_name_enc`, `password_enc` (both tables) and all R2 user blobs, including parked PDFs
   in `tmp/`, use the household DEK.
   `pan_hmac = HMAC-SHA256(PAN_PEPPER, PAN)`, where `PAN_PEPPER` is a Worker secret.
 - **API:** WebCrypto only (`crypto.subtle`), in `worker/src/lib/crypto.ts`. Expose
   `seal(householdId, key, bytes)` and `open(householdId, key, bytes)`. Cache the unwrapped DEK per request only;
   never store it in KV.
+  ✅ M6: these are `Vault.seal(key, bytes, flags)` / `Vault.open(key, bytes)`, where a `Vault` holds one household's
+  non-extractable DEK for one request (`tenant(c).vault()`, at most one D1 read, or none when the key row comes in a
+  batch). `blob.ts` adds `sealJson`/`openJson` (gzip), `sealPdf`/`openPdf` (no gzip) and the R2 key builders.
 - **The engine never sees keys.** The Worker decrypts and sends plaintext over the internal DO→container channel, and
   the engine returns plaintext.
 - **Account deletion is crypto-shredding.** Delete `household.dek_wrapped` first, then the R2 prefixes
   `h/{household_id}/` **and `tmp/{household_id}/`**, then the rows. D1
   Time Travel (30 days) can still hold rows, but they're useless without the DEK. Say this in the privacy policy:
   "backups purged within 30 days".
+  ✅ M6: `shredHousehold()` in `src/lib/household.ts` (blanks `dek_wrapped`, deletes both prefixes, then the household
+  row, which cascades). M14 calls it from `DELETE /api/account` and also removes the user and session rows.
 
 ---
 
@@ -796,6 +807,10 @@ export async function assertMember(c, memberId: string) {
 - Every SQL statement on user tables includes `household_id = ?` bound from the session.
 - R2 keys are built only from server-side IDs.
 - The SPA never sends a household ID.
+- ✅ M6: `src/lib/tenant.ts` is a per-request `Tenant` (`tenant(c)`): `assertMember`, `assertStatement` (non-UUIDs are
+  404 without a query), `keys.*` for R2, and `vault()`. Errors are thrown as `ApiError` and returned as
+  `{ ok: false, code }` (the shape the Worker has used since M2, not `{ error: { code, message } }`; the SPA maps codes to
+  safe messages).
 
 ### 9.2 Endpoints
 
@@ -806,8 +821,8 @@ export async function assertMember(c, memberId: string) {
 | `GET /api/me` | ✅ | `{ user: {name, email, image}, household: {id, created_at}, consent_ok, limits, usage }` | |
 | `POST /api/consent` | ✅ | record acceptance of `notice_version` | Blocks every `/api/*` data route until accepted (403 `consent_required`) |
 | `GET /api/config` | – | `{ features: { cdsl_fetch: false, kfintech_auto: false, stocks: true }, kfintech_form_url, turnstile_site_key }` | replaces today's sandbox config |
-| `GET /api/members` | ✅ | list `{id, name, pan_masked, statements: [{id, kind, as_of, holdings_count}]}` | |
-| `PATCH /api/members/:id` | ✅ | rename (display override) | |
+| `GET /api/members` | ✅ | list `{id, name, pan_masked, statements: [{id, kind, as_of, holdings_count}]}` | ✅ M6: returns `{ members: [...] }`; `name` is null until a statement or a rename sets it. One D1 batch |
+| `PATCH /api/members/:id` | ✅ | rename (display override) | ✅ M6: `{ name }`, 1–60 characters; replaces the sealed `display_name_enc` (a later statement doesn't overwrite it, M7) |
 | `DELETE /api/members/:id` | ✅ | delete member + their statements + blobs; enqueue rebuild | confirm in UI |
 | `POST /api/statements` | ✅ | multipart `file`, `password?` **only**: no PAN, no member (D19). The member comes from the statement |  §10.1. `201 {statement}` (direct path) or `202 {job: {id, position, eta_s}}` (queued path) |
 | `GET /api/jobs` | ✅ | the household's open and recently finished parse jobs: `[{id, status, position, eta_s, error_code, statement_id}]` | drives the "Processing" list; no PDF data |
@@ -1248,6 +1263,11 @@ Edge cases:
 | Export | 3 per day | `quota` |
 
 Show the limits in Settings, using the existing UI style. Return 429 with a friendly `message` and a `retry_after`.
+
+✅ M6: `src/lib/quota.ts` `takeQuota(env, specs)` takes one unit from several counters all-or-nothing in one D1 batch.
+At the limit the UPSERT writes NULL into the NOT NULL `count`, which fails the statement and rolls the batch back, so
+there's no read-then-write race (tested: 30 parallel takes at a limit of 20 give exactly 20). Windows are IST hours,
+days and months; the refusal says which counter and the seconds until it resets.
 
 ---
 

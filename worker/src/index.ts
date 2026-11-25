@@ -3,8 +3,10 @@
 import { Hono } from 'hono'
 import { handleEmailBatch, type EmailJob } from './lib/email'
 import { withEngine } from './lib/engine-client'
+import { ApiError } from './lib/errors'
 import { requireSession } from './middleware/session'
 import { authRoutes } from './routes/auth'
+import { memberRoutes } from './routes/members'
 import type { AppBindings, AppEnv } from './types'
 
 export { EngineBatch, EngineFast } from './engine'
@@ -60,6 +62,8 @@ app.get('/me', signedIn, async (c) => {
   })
 })
 
+app.route('/', memberRoutes)
+
 // Until the first build (M10) a household's snapshot row has no blob, so the portfolio is empty. M10 replaces this.
 app.get('/portfolio', signedIn, (c) =>
   c.json({ members: [], holdings: [], activity: [], sips: [], benchmark: null, stocks: EMPTY_STOCKS, stale: false, building: false }),
@@ -73,6 +77,7 @@ app.notFound((c) => c.json({ ok: false, code: 'not_found' }, 404))
 
 // Privacy (§0.1): log the error class only, never messages that could carry request data.
 app.onError((err, c) => {
+  if (err instanceof ApiError) return c.json({ ok: false, code: err.code, ...err.extra }, err.status)
   console.error('api_error', err.name)
   if (err instanceof EngineUnavailable || err.name === 'EngineStartError') {
     return c.json({ ok: false, code: 'engine_unavailable' }, 502)

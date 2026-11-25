@@ -8,12 +8,18 @@ Design: plan §4, §5, §14 and §15 ([docs/MULTI_USER_LAUNCH_PLAN.md](../docs/M
 | Path | What |
 |---|---|
 | `wrangler.jsonc` | Every binding from plan §15.1. Resource IDs are local placeholders until M4. |
-| `src/index.ts` | Hono app at `/api` (`/health`, `/config`, `/me`, the empty `/portfolio` until M10), `scheduled()`, and `queue()` (pf-email today) |
+| `src/index.ts` | Hono app at `/api` (`/health`, `/config`, `/me`, `/members`, the empty `/portfolio` until M10), `scheduled()`, and `queue()` (pf-email today) |
 | `src/auth.ts` | Better Auth options, created per request (plan §7.1): Google, magic link + email code, cookie cache with `householdId` in the session, hashed tokens, D1 rate limits |
 | `src/routes/auth.ts` | `/api/auth/*` allow-list, `POST /api/login/email` (Turnstile, limits, one email with link + code), the staging-only email sink reader |
 | `src/middleware/session.ts` | `requireSession()`: sets `c.var.user` / `c.var.householdId`, 401 otherwise; 0 D1 queries with a warm cookie cache |
 | `src/lib/email.ts` | `EmailSender`, Cloudflare Email Service sender, the `pf-email` consumer (per-message ack/retry by error code), sign-in template, test sink |
-| `src/lib/crypto.ts`, `src/lib/household.ts` | Household DEK generation and KEK wrapping (M6 adds blob seal/open); household + empty snapshot created at signup |
+| `src/lib/crypto.ts` | KEK/DEK wrapping, KEK rotation (`rewrapDeks`), and `Vault`: one household's DEK per request, `seal`/`open` with the AAD bound to household + key |
+| `src/lib/blob.ts` | R2 key layout, compress-then-encrypt JSON (`sealJson`/`openJson`), parked PDFs (no gzip), household-checked R2 put/get/delete |
+| `src/lib/household.ts` | Household + empty snapshot created at signup; `shredHousehold()` crypto-shred (used by account deletion, M14) |
+| `src/lib/tenant.ts` | The tenant guard: `tenant(c)` with `assertMember` / `assertStatement` (404 for other households), `keys.*`, `vault()` |
+| `src/lib/members.ts`, `src/routes/members.ts` | `GET/PATCH/DELETE /api/members`: list (one D1 batch), rename (sealed name), delete (rows, then h/ and tmp/ blobs); `memberInsert` for M7 |
+| `src/lib/quota.ts` | Fair-use counters: all-or-nothing increment-with-limit in one batch, IST windows |
+| `src/lib/audit.ts`, `src/lib/errors.ts` | `audit_event` rows (no PII) joined to the caller's batch; `ApiError` → `{ ok: false, code }` |
 | `src/lib/rate-limit.ts`, `src/lib/turnstile.ts` | One-UPSERT fixed-window limits (HMACed keys); Turnstile siteverify |
 | `src/engine.ts` | `EngineFast` (standard-2) / `EngineBatch` (basic): each Durable Object owns one engine container through `ctx.container`, with a 60 s inactivity timeout, and adds `X-Engine-Key` |
 | `src/engine-pool.ts`, `src/pool-core.ts` | `EnginePool`: slot leases, fill-first routing (warm first), lease expiry, moving-average job time, queue tickets and ETA |

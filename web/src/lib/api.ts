@@ -154,6 +154,8 @@ const MESSAGES: Record<string, string> = {
   INVALID_OTP: "That code didn't work. Check it and try again.",
   OTP_EXPIRED: "That code has expired. Send a new one.",
   TOO_MANY_ATTEMPTS: "Too many tries with that code. Send a new one.",
+  invalid_name: "Enter a name of 1 to 60 characters.",
+  not_found: "That's no longer here. Reload to see the latest.",
 }
 
 async function readError(r: Response): Promise<string> {
@@ -206,6 +208,15 @@ export type Me = {
   consent_ok: boolean
 }
 
+/** GET /api/members (plan §9.2). Names are null until a statement or a rename gives one. */
+export type StatementKind = "CDSL" | "CAMS" | "KFINTECH"
+export type MemberSummary = {
+  id: string
+  name: string | null
+  pan_masked: string
+  statements: { id: string; kind: StatementKind; as_of: string; holdings_count: number }[]
+}
+
 export type AppConfig = {
   features: { cdsl_fetch: boolean; kfintech_auto: boolean; stocks: boolean }
   kfintech_form_url: string
@@ -223,6 +234,10 @@ export const auth = {
 
 export const api = {
   portfolio: () => call<Portfolio>("/api/portfolio"),
+  members: () => call<{ members: MemberSummary[] }>("/api/members").then((r) => r.members),
+  renameMember: (id: string, name: string) =>
+    call<{ member: { id: string; name: string } }>(`/api/members/${encodeURIComponent(id)}`, { ...json({ name }), method: "PATCH" }),
+  deleteMember: (id: string) => call<{ ok: true }>(`/api/members/${encodeURIComponent(id)}`, { method: "DELETE" }),
   me: () => call<Me>("/api/me"),
   config: () => call<AppConfig>("/api/config"),
   requestStatement: (body: { pan: string; email: string; from_date: string; to_date: string; password: string }) =>

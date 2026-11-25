@@ -1,7 +1,7 @@
 import { FileTextIcon, InfoIcon } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 
-import { AccountMenu } from "@/components/account-menu"
+import { AppHeader } from "@/components/app-header"
 import { AddStatementDialog } from "@/components/add-statement-dialog"
 import { AllocationStrip, type Slice } from "@/components/allocation-strip"
 import { HoldingsTable } from "@/components/holdings-table"
@@ -9,7 +9,7 @@ import { SipTable, sipSummary } from "@/components/sip-table"
 import { BottomNav, type TabId, TabNav, useTab } from "@/components/tab-nav"
 import { TransactionsView } from "@/components/transactions-view"
 import { AllocationBreakdown, BenchmarkComparison, FundPerformance, FundReturns, MoneyFlow, UpsAndDowns } from "@/components/insights"
-import { ThemeToggle } from "@/components/theme-toggle"
+import { PageTitle, Panel } from "@/components/panel"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -29,27 +29,6 @@ import { upcomingSips } from "@/lib/sips"
 import { holdingFlows, xirr } from "@/lib/xirr"
 
 const EVERYONE = "all"
-
-function Panel({ title, aside, children, className }: { title: string; aside?: React.ReactNode; children: React.ReactNode; className?: string }) {
-  return (
-    <section className={cn("flex min-w-0 flex-col rounded-[22px] bg-surface p-5 ring-1 ring-border sm:p-6", className)}>
-      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-[15px] font-semibold tracking-tight">{title}</h2>
-        {aside && <div className="text-sm text-muted-foreground">{aside}</div>}
-      </div>
-      <div className="min-h-0 flex-1">{children}</div>
-    </section>
-  )
-}
-
-function PageTitle({ title, detail }: { title: string; detail?: string }) {
-  return (
-    <div>
-      <h1 className="text-3xl font-semibold tracking-tight">{title}</h1>
-      {detail && <p className="mt-1 text-muted-foreground">{detail}</p>}
-    </div>
-  )
-}
 
 function Stat({ label, children, help }: { label: string; children: React.ReactNode; help?: string }) {
   return (
@@ -210,26 +189,12 @@ export default function App({ me }: { me: Me }) {
   return (
     <OpenFundContext.Provider value={setFund}>
     <div className="min-h-svh">
-      <header className="sticky top-0 z-20 bg-background/80 backdrop-blur-xl">
-        <div className="mx-auto flex h-[68px] max-w-[1240px] items-center justify-between gap-5 px-4 sm:px-7">
-          <div className="flex min-w-0 items-center gap-6">
-            <button className="flex shrink-0 items-center gap-2.5" onClick={() => setTab("overview")}>
-              <span className="grid size-[30px] place-items-center rounded-[9px] bg-foreground text-sm font-bold text-background">₹</span>
-              <span className="hidden font-semibold tracking-tight sm:inline">PocketFolio</span>
-            </button>
-            {ready && (
-              <div className="hidden md:block">
-                <TabNav tab={tab} onChange={setTab} counts={{ holdings: view.allHoldings.length, sips: activeSips.length || undefined }} />
-              </div>
-            )}
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <ThemeToggle />
-            {data && data.members.length > 0 && <AddStatementDialog onAdded={load} />}
-            <AccountMenu me={me} />
-          </div>
-        </div>
-      </header>
+      <AppHeader
+        me={me}
+        onHome={() => setTab("overview")}
+        nav={ready ? <TabNav tab={tab} onChange={setTab} counts={{ holdings: view.allHoldings.length, sips: activeSips.length || undefined }} /> : undefined}
+        actions={data && data.members.length > 0 ? <AddStatementDialog onAdded={load} /> : undefined}
+      />
 
       <main className="mx-auto max-w-[1240px] px-4 pb-28 sm:px-7 md:pb-20">
         {error && (
