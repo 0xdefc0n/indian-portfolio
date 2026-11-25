@@ -10,10 +10,11 @@
     "test": "vitest run",
     "typecheck": "wrangler types --check && tsc --noEmit",
     "types": "wrangler types",
-    "lint": "oxlint src test"
+    "lint": "oxlint src test scripts"
   },
   "dependencies": {
-    "hono": "^4.13.22"
+    "hono": "^4.13.22",
+    "pdfjs-dist": "6.5.438"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.9.2",

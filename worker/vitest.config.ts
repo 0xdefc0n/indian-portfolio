@@ -4,6 +4,10 @@ import { defineConfig } from 'vitest/config'
 // Tests run inside workerd with the bindings from wrangler.jsonc (plan §16).
 // Containers aren't started in tests: the engine container is exercised by `wrangler dev` (see README).
 export default defineConfig({
+  test: {
+    // Node-side: loads private statements (git-ignored) and the engine's view of them for pdfcheck.private.test.ts.
+    globalSetup: ['./test/global-setup.ts'],
+  },
   plugins: [
     cloudflareTest({
       wrangler: { configPath: './wrangler.jsonc' },

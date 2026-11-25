@@ -163,6 +163,31 @@ passwords, read the text of pages 1–2, detect the statement type, and look for
 - Every check that needs the user can therefore run in the Worker in **well under 1 s of CPU** (30 s allowed), before
   any PDF is stored.
 
+**M3, the real pre-check (`worker/src/lib/pdfcheck.ts`) inside workerd** (2026-11-25, `wrangler dev` 4.168 running the
+wrangler bundle on the owner's Apple Silicon laptop; `node worker/scripts/measure-pdfcheck.ts`). Candidates in the same
+order as the engine (file-name PAN, then the test password). Time is wall time inside the Worker, which equals CPU here
+(the check does no I/O, and local workerd's clock advances during CPU work). Memory: the isolate's V8 heap plus
+ArrayBuffers via the inspector, after the check and before GC, and the peak RSS of the workerd processes above idle.
+
+| PDF | Result | Time (median of 5; first) | Isolate heap + buffers | Peak RSS above idle |
+|---|---|---|---|---|
+| KFintech, 2 pages, 0.1 MB | ok, password 2nd candidate (1 wrong try), RTA, PAN found | 22 ms (38) | +3.5 MB | 22 MB |
+| KFintech, 4 pages, 0.1 MB | same | 32 ms (33) | +0.8 MB | 29 MB |
+| KFintech, 10 pages, 0.2 MB | same | 33 ms (32) | +0.0 MB | 30 MB |
+| CDSL, 11 pages, 0.3 MB | ok, 1st candidate (PAN), CDSL, PAN found | 37 ms (40) | +1.0 MB | 26 MB |
+| Synthetic, 300 pages, 12 MB, RC4-128 | ok, 2nd candidate | 24 ms | +23 MB | 68 MB |
+| Same file, 2 wrong passwords | `password_required` | 4 ms | +13 MB | 68 MB |
+
+- Loading pdf.js (first check in an isolate) takes **40–53 ms**. The V8 heap goes from 5.0 to 7.2 MB after GC.
+- The bundle with pdf.js is **3.4 MB, 685 KB gzipped** (`wrangler deploy --dry-run`). esbuild puts the dynamic
+  `import()` in the same file but runs pdf.js's module code only on first use.
+- Time doesn't grow with file size or page count: only pages 1–3 are read. Most of the 12 MB file's memory is the
+  bytes themselves, held twice: the request body, and the copy handed to pdf.js (which may detach its input).
+  The peak stays **well under the 128 MB isolate limit**, but the Worker should not hold more than one upload in memory.
+- Agreement: the pre-check and the Python engine agree on type, password index and PAN on **4 of 4** private PDFs
+  (`worker/test/pdfcheck.private.test.ts`, booleans only), and a wrong first candidate is skipped on each.
+- ⚠️ Re-measure CPU on Cloudflare in M4 (Workers logs report `cpuTime`; assume ~1.5× the laptop numbers until then).
+
 Planning numbers for the cloud: Cloudflare cores are assumed ~1.5× slower than the laptop. So a CDSL parse is about
 **1.2 vCPU-s**, a KFintech/CAMS parse about **0.2–0.7 vCPU-s** (measured, short statements), and a build about
 **0.5 vCPU-s**. Use **~0.8 vCPU-s** as the average parse. On a `basic` instance (1/4 vCPU) a CDSL parse takes ~5 s of
@@ -775,7 +800,8 @@ tab (owner decision, 2026-11-25).
    3. every unexpired pending KFintech password of the household (`pending_statement_password`).
 
    A wrong try costs ~10–30 ms in pdf.js, so 10+ candidates still fit well inside the budget.
-5. **Pre-check the PDF in the Worker** (`worker/src/lib/pdfcheck.ts`, pdf.js; measured 80–160 ms CPU, §3.3):
+5. **Pre-check the PDF in the Worker** (`worker/src/lib/pdfcheck.ts`, pdf.js; measured 22–37 ms in workerd plus
+   40–53 ms to load pdf.js once per isolate, §3.3):
    - **Password.** Open the PDF with each candidate in turn. pdf.js throws `PasswordException` for a wrong one. If none
      works, return 422 `password_required`. If a password was typed, the message is "That password didn't open this
      statement". If none was typed (for example the first statement of a new household), it's "This statement is
@@ -803,11 +829,15 @@ tab (owner decision, 2026-11-25).
    - **Page count.** Over 300 pages: 422 `too_large`.
    - pdf.js reads from an in-memory `Uint8Array` and never writes anything. Call `loadingTask.destroy()` afterwards.
    - Logs carry only the outcome code and CPU time. Never the text, the PAN or the password.
-   - ⚠️ VERIFY: that pdf.js runs inside workerd. The fake-worker mode imports `pdf.worker.mjs` into the same isolate.
-     Load it with a dynamic `import()` on the upload route only, so other routes don't pay its startup cost. Measure CPU
-     and memory for a 10 MB, 300-page PDF against the 128 MB isolate. Fallback 1: `unpdf` (a serverless build of
-     pdf.js). Fallback 2: a cheap `/precheck` endpoint on the engine with its own reserved `EngineFast` slot (open + 2
-     pages only, ~0.1 s), so a burst of full parses can't block pre-checks.
+   - ✅ (M3, 2026-11-25) **pdf.js 6.5 (`pdfjs-dist`, modern build) runs inside workerd** with `nodejs_compat`. No
+     fallback is needed: `unpdf` and an engine `/precheck` weren't tried. How it works:
+     - `loadPdfJs()` dynamically imports `pdfjs-dist` and `pdfjs-dist/build/pdf.worker.mjs` on first use. It sets
+       `globalThis.pdfjsWorker`, so pdf.js's fake worker runs in the same isolate without importing a URL.
+     - Options: `useWasm: false`, `useWorkerFetch: false`, `useSystemFonts: false`, `disableFontFace: true`. Text
+       extraction needs no canvas, fonts, wasm or fetches. pdf.js 6 no longer uses `eval`.
+     - Candidates go through `loadingTask.onPassword`, so a wrong try doesn't reload the document.
+     - CPU and memory for a 12 MB, 300-page encrypted PDF are in §3.3: 24 ms, peak RSS +68 MB, under 128 MB.
+     - Tested in `@cloudflare/vitest-plugin` (workerd) and in the wrangler bundle under `wrangler dev`.
    - The full parse reads the PAN again from the parsed data (step 6), as a final guard.
 
 **B. Ask for a slot.** `EnginePool.acquire({ class: "fast", wait: false })` returns a lease `{ name, lease_id }` or
@@ -1678,8 +1708,8 @@ a commit/PR.
   - **Measured and written into §3.3:** `/parse` CPU time and peak RSS for the largest private CDSL **and** a CAMS/KFintech
     statement, and `/build` for the largest household, on `standard-2` and `basic`. Confirm or change the instance
     types in §14.
-  - **pdf.js runs in workerd** (`wrangler dev`): the pre-check works on every private PDF, with its CPU time and memory
-    recorded in §3.3. If it doesn't run, apply the §10.1 A5 fallbacks.
+  - ✅ **pdf.js runs in workerd** (`wrangler dev`): the pre-check works on every private PDF, with its CPU time and memory
+    recorded in §3.3 (M3). No fallback needed.
 
 ### Phase 1: Auth
 - Better Auth with Google, magic link (Resend through the `pf-email` queue), Turnstile, session middleware with the
