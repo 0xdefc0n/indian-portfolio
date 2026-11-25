@@ -385,9 +385,12 @@ Cloudflare Email Service (`send_email` binding) for outbound email.
 There are **two D1 databases** (D17), bound as `DB` (`pocketfolio-app`) and `MARKET` (`pocketfolio-market`).
 Nothing joins across them. The upload handler writes to both: user rows to `DB`, public scheme IDs to `MARKET`.
 
-The Better Auth tables (`user`, `session`, `account`, `verification`, `deviceCode`) come from
-`npx @better-auth/cli generate` (⚠️ VERIFY: the current CLI name is `npx auth generate` per the docs). Commit the
-generated SQL as `migrations/app/0001_auth.sql`. App tables go in `migrations/app/0002_app.sql`:
+The Better Auth tables (`user`, `session`, `account`, `verification`; `deviceCode` arrives with M13) come from
+`npx auth generate` (✅ M5: the CLI package is now `auth`, 1.7.28; `@better-auth/cli` is stuck at 1.4. It runs on
+`worker/scripts/auth-schema.config.ts`, which diffs against an empty in-memory SQLite) and are committed as
+`migrations/app/0001_auth.sql`. **M5 also needed `household` and `snapshot` at signup**, so those two tables (plus a
+small `rate_limit` table, §7.1) are in `migrations/app/0002_household.sql`. The other app tables below go in
+`migrations/app/0003_app.sql` (M6):
 
 ```sql
 CREATE TABLE household (
@@ -576,12 +579,12 @@ export function createAuth(env: Env) {
         consentVersion: { type: "string", input: false },
       },
     },
-    // ⚠️ VERIFY: option names for cookieCache / additionalFields. Fill householdId / consentVersion in
-    // databaseHooks.session.create.before; after POST /api/consent, refresh the cookie cache.
+    // ✅ M5 (better-auth 1.7.28): cookieCache and session.additionalFields are the names. householdId is filled in
+    // databaseHooks.session.create.before; after POST /api/consent (M14), refresh the cookie cache.
     // Trade-off: a revoked session can keep working for up to maxAge (5 min) on routes that trust the cache. Sensitive
     // routes (export, delete account, device approve, revoke) call getSession with disableCookieCache so they always hit D1.
     rateLimit: {
-      enabled: true, storage: "database",                                 // ⚠️ VERIFY option name; in-memory is per-isolate on Workers
+      enabled: true, storage: "database",                                 // ✅ M5: built as customStorage instead (below)
       // Database rate limiting writes a D1 row per request. Apply it only to the endpoints that send email or create
       // codes, and skip session reads.
       customRules: {
@@ -604,9 +607,9 @@ export function createAuth(env: Env) {
         expiresIn: 600,
         sendVerificationOTP: async ({ email, otp, type }) => type === "sign-in" && sendLoginEmail(env, email, { otp }),
       }),
-      // sendLoginEmail: one email per sign-in request holding BOTH the link and the code. ⚠️ VERIFY how to get the
-      // link and the OTP into one send (e.g. the login form calls a small Worker route that triggers both plugin
-      // endpoints and merges them, or uses the OTP email only when the app runs standalone).
+      // sendLoginEmail: one email per sign-in request holding BOTH the link and the code. ✅ M5: the login form calls
+      // POST /api/login/email, which runs both plugin endpoints server-side and captures the token and the code, then
+      // queues ONE email. The plugins' own send endpoints are not routed (see "As built" below).
       deviceAuthorization({ verificationUri: "/link", expiresIn: "5m", interval: "3s" }), // §7.4; ⚠️ VERIFY option names
     ],
     databaseHooks: { user: { create: { after: async (u) => createHousehold(env, u.id) } } },
@@ -615,6 +618,24 @@ export function createAuth(env: Env) {
 // index.ts: app.on(["GET","POST"], "/api/auth/*", c => createAuth(c.env).handler(c.req.raw))
 ```
 
+- **As built in M5** (`worker/src/auth.ts`, `src/routes/auth.ts`):
+  - **Allow-list.** `/api/auth/*` routes only the endpoints the app uses (get-session, sign-out, social sign-in and
+    the Google callback, magic-link verify, email-OTP sign-in, list/revoke sessions). Everything else is a 404,
+    including `/sign-in/magic-link` and `/email-otp/send-verification-otp`. So the only way to get an email is
+    `POST /api/login/email`: Turnstile, then 5 emails per address per hour and 60 per IP per hour (generous, because
+    mobile carriers put many users behind one IP), then one queued email.
+  - **Rate limits** use `customStorage`: one atomic UPSERT on a small `rate_limit` table, with HMACed keys so no IP or
+    email is stored. Better Auth's own `"database"` storage costs 2–4 queries per request. `customRules` ends with
+    `"/**": false`, so only `/sign-in/email-otp`, `/magic-link/verify` and `/sign-in/social` are limited.
+  - **The emailed link opens the SPA** (`/login/verify#token=…`), which then calls `/api/auth/magic-link/verify`.
+    Link scanners that prefetch URLs can't use up the single-use token, and the fragment never reaches a log.
+  - Tokens and codes are stored hashed (`storeToken` / `storeOTP: "hashed"`), because D1 Time Travel keeps old rows.
+  - Google's OAuth tokens are never stored (an `account` hook nulls them); we only need the identity.
+  - `advanced.database.validateSchema: false`. Otherwise Better Auth introspects the schema once per instance, which
+    means one extra D1 query per request, since the instance is created per request.
+  - The household (with its wrapped DEK and an empty `snapshot` row) is created in `session.create.before`, which
+    covers signup by any method. It's an idempotent batch that also stamps `last_active_at`.
+  - Measured in a test: with a warm cookie cache, a signed-in request makes **0** D1 session queries.
 - **Compatibility:** set `nodejs_compat` in wrangler (it's the default from compatibility date 2026-08-04).
 - **Magic-link tokens** stay in D1, which is the default. Don't use KV as `secondaryStorage`: it is eventually
   consistent and has no atomic get-and-delete, and single-use tokens need both.
@@ -648,8 +669,9 @@ export function createAuth(env: Env) {
   `cf-bounce.pocketfolio.in`.
 - **Support mailbox:** `support@<APP_DOMAIN>` is received through Cloudflare Email Routing, which forwards it to the
   owner's inbox. Replies go out through Gmail "Send mail as" over Cloudflare's SMTP (`smtp.mx.cloudflare.net:465`,
-  user `api_token`, password a token with Email Sending: Edit). ⚠️ VERIFY in M5 that Email Routing (root MX) and Email
-  Sending (`cf-bounce` MX) coexist on the same zone.
+  user `api_token`, password a token with Email Sending: Edit). ✅ M5: Email Routing (root MX) and Email
+  Sending (`cf-bounce` MX) coexist on the same zone. The docs say so ("separate DNS records and separate settings
+  pages … Removing one does not affect the other"), and both record sets are live on `pocketfolio.in`.
 - **Emails at launch:**
   - the sign-in email (magic link plus a 6-digit code, §13A.5)
   - "New device signed in" (after a QR link)
@@ -661,8 +683,19 @@ export function createAuth(env: Env) {
   separately. On `E_RATE_LIMIT_EXCEEDED` it retries that message with `retry({ delaySeconds })`. On
   `E_DAILY_LIMIT_EXCEEDED` it retries later and raises an alert. Permanent errors (`E_RECIPIENT_SUPPRESSED`, invalid
   address) are acked, logged by code only, and never retried. Set `max_batch_timeout` to 1 s, so a login email still
-  arrives within seconds, and keep `max_concurrency` low (2), because no per-second limit is published. ⚠️ VERIFY in
-  M5: the binding's sender-restriction key, local dev behaviour (the docs show `"remote": true`), and the error codes.
+  arrives within seconds, and keep `max_concurrency` low (2), because no per-second limit is published. ✅ M5
+  (Email Service docs, 2026-11-25):
+  - **Sender restriction:** `allowed_sender_addresses`. Deploying with the binding needed no extra token permission.
+  - **Local dev:** `wrangler dev` only logs the message and saves it to a temp file. `"remote": true` sends for real.
+  - **Errors:** `send()` throws an `Error` with `.code`. A malformed argument throws a `TypeError` with no code.
+    Codes: `E_RATE_LIMIT_EXCEEDED` and `E_INTERNAL_SERVER_ERROR` / `E_EMAIL_SENDING_NOT_READY` are retried.
+    `E_DAILY_LIMIT_EXCEEDED` is retried and alerted. Config errors (`E_SENDER_*`, `E_RECIPIENT_PLAN_RESTRICTED`,
+    `E_ACCOUNT_SUSPENDED`) are dropped and alerted. Permanent errors (`E_VALIDATION_ERROR`, `E_RECIPIENT_SUPPRESSED`,
+    `E_RECIPIENT_NOT_ALLOWED`, `E_DELIVERY_FAILED`, size and header codes) are dropped.
+  - **Expiry:** a sign-in email older than its 10-minute expiry is dropped instead of sent late.
+  - **Test sink:** with the `EMAIL_SINK_KEY` secret (local and staging only; production's config doesn't list it),
+    `@sink.pocketfolio.test` addresses are written to R2 instead of sent, so `worker/scripts/auth-smoke.ts` can sign
+    in on staging end to end.
 - **Make Google the main sign-in button** (§13). It sends no email, so most signups never touch the email budget.
 - **Budget:** Workers Paid includes 3,000 emails a month, then $0.35 per 1,000. Hard bounces count; sends blocked by the
   suppression list don't. Sends to the account's *verified destination addresses* are free and don't count, which
@@ -1558,7 +1591,7 @@ integration accept. Switch only if a later wrangler requires `exports`.
     { "binding": "MARKET", "database_name": "pocketfolio-market", "database_id": "…", "migrations_dir": "migrations/market" }
   ],
   "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pocketfolio-data" }],
-  // Cloudflare Email Service (D5). ⚠️ VERIFY in M5: the sender-restriction key name.
+  // Cloudflare Email Service (D5). ✅ M5: allowed_sender_addresses.
   "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["login@pocketfolio.in"] }],
   // R2 lifecycle (set with `wrangler r2 bucket lifecycle add`): prefix "tmp/" → delete after 1 day.
   "queues": {
@@ -1746,7 +1779,7 @@ a commit/PR.
 ### Phase 0: Restructure and engine
 - Move `app/` to `/engine/engine/`, add the BytesIO fix, refactor `build_portfolio` to a pure function (§10.2), and
   add `server.py` with `/parse`, `/build` and `/health`, the one-job semaphore and process recycling (§14). Add the Dockerfile.
-- Scaffold `/worker` (Hono, wrangler config with both D1 databases and all four queues, migrations `app/0002_app.sql`)
+- Scaffold `/worker` (Hono, wrangler config with both D1 databases and all four queues, migrations folders)
   and serve `web/dist`.
 - `EngineFast`, `EngineBatch` and `EnginePool` with leases and fill-first routing (§14).
 - **Accept:**

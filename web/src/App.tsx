@@ -1,6 +1,7 @@
 import { FileTextIcon, InfoIcon } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 
+import { AccountMenu } from "@/components/account-menu"
 import { AddStatementDialog } from "@/components/add-statement-dialog"
 import { AllocationStrip, type Slice } from "@/components/allocation-strip"
 import { HoldingsTable } from "@/components/holdings-table"
@@ -21,7 +22,7 @@ import {
 } from "@/components/overview"
 import { Segmented } from "@/components/ui/segmented"
 import { OpenFundContext } from "@/lib/fund-context"
-import { api, type Holding, type Member, type Portfolio } from "@/lib/api"
+import { api, type Holding, type Me, type Member, type Portfolio, SignedOut } from "@/lib/api"
 import { day, inr, monthly } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { upcomingSips } from "@/lib/sips"
@@ -116,7 +117,7 @@ function LoadingState() {
   )
 }
 
-export default function App() {
+export default function App({ me }: { me: Me }) {
   const [data, setData] = useState<Portfolio | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [who, setWho] = useState(EVERYONE)
@@ -126,7 +127,7 @@ export default function App() {
   const [fund, setFund] = useState<Holding | null>(null)
 
   const load = useCallback(() => {
-    api.portfolio().then(setData, (e: Error) => setError(e.message))
+    api.portfolio().then(setData, (e: Error) => !(e instanceof SignedOut) && setError(e.message))
   }, [])
   useEffect(load, [load])
 
@@ -225,6 +226,7 @@ export default function App() {
           <div className="flex shrink-0 items-center gap-2">
             <ThemeToggle />
             {data && data.members.length > 0 && <AddStatementDialog onAdded={load} />}
+            <AccountMenu me={me} />
           </div>
         </div>
       </header>
@@ -232,7 +234,7 @@ export default function App() {
       <main className="mx-auto max-w-[1240px] px-4 pb-28 sm:px-7 md:pb-20">
         {error && (
           <p className="mt-10 rounded-xl bg-surface p-4 text-sm text-loss ring-1 ring-border" role="alert">
-            Couldn't load the portfolio: {error}. Check that the server is running, then reload.
+            Couldn't load the portfolio: {error}. Reload to try again.
           </p>
         )}
         {!data && !error && <div className="pt-8"><LoadingState /></div>}

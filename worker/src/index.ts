@@ -1,14 +1,18 @@
 // PocketFolio Worker (plan §4). Static assets (web/dist, SPA fallback) are served by the platform;
 // only /api/* reaches this code (assets.run_worker_first in wrangler.jsonc).
 import { Hono } from 'hono'
+import { handleEmailBatch, type EmailJob } from './lib/email'
 import { withEngine } from './lib/engine-client'
+import { requireSession } from './middleware/session'
+import { authRoutes } from './routes/auth'
+import type { AppBindings, AppEnv } from './types'
 
 export { EngineBatch, EngineFast } from './engine'
 export { EnginePool } from './engine-pool'
 
 type EngineHealth = { ok: boolean; version: string; isin_db: string | null; busy: boolean }
 
-const app = new Hono<{ Bindings: Env }>().basePath('/api')
+const app = new Hono<AppBindings>().basePath('/api')
 
 // Deep health: Worker → EnginePool → EngineFast-<n> (fill-first, so normally -0) → engine GET /health.
 app.get('/health', async (c) => {
@@ -26,6 +30,44 @@ app.get('/health', async (c) => {
     engine: { version: result.value.version, isin_db: result.value.isin_db, slot: result.slot },
   })
 })
+
+// ─── Public ──────────────────────────────────────────────────────────────────────────────────────────────────────
+app.route('/', authRoutes)
+
+const KFINTECH_FORM_URL = 'https://mfs.kfintech.com/investor/General/ConsolidatedAccountStatement'
+app.get('/config', (c) =>
+  c.json({
+    features: { cdsl_fetch: false, kfintech_auto: false, stocks: true }, // D8, D9: "Coming soon"
+    kfintech_form_url: KFINTECH_FORM_URL,
+    turnstile_site_key: c.env.TURNSTILE_SITE_KEY,
+  }),
+)
+
+// ─── Signed in ───────────────────────────────────────────────────────────────────────────────────────────────────
+// Every route below takes `signedIn` (per route, so unknown paths stay JSON 404s). Routes read c.var.user and
+// c.var.householdId and never take a household from the client (§9.1).
+const signedIn = requireSession()
+
+app.get('/me', signedIn, async (c) => {
+  const user = c.var.user
+  const household = await c.env.DB.prepare('SELECT id, created_at FROM household WHERE id = ?1')
+    .bind(c.var.householdId)
+    .first<{ id: string; created_at: number }>()
+  return c.json({
+    user: { name: user.name, email: user.email, image: user.image ?? null },
+    household,
+    consent_ok: true, // the consent screen and gating arrive in M14
+  })
+})
+
+// Until the first build (M10) a household's snapshot row has no blob, so the portfolio is empty. M10 replaces this.
+app.get('/portfolio', signedIn, (c) =>
+  c.json({ members: [], holdings: [], activity: [], sips: [], benchmark: null, stocks: EMPTY_STOCKS, stale: false, building: false }),
+)
+const EMPTY_STOCKS = {
+  enabled: false, funds: {}, stocks: {}, month: null, oldest_month: null, unmatched: [], no_stocks: [], look_through: {},
+  pending: 0, refreshing: false,
+}
 
 app.notFound((c) => c.json({ ok: false, code: 'not_found' }, 404))
 
@@ -50,10 +92,11 @@ export default {
     console.log('cron_unhandled', controller.cron)
   },
 
-  // Queue consumers arrive in M5 (email), M8 (parse), M9 (market), M10 (rebuild). Nothing produces messages yet;
-  // retrying keeps any stray message until its consumer exists (then the DLQ after max_retries).
-  async queue(batch) {
+  // Queue names carry an environment suffix (pf-email-staging). Consumers for parse (M8), market (M9) and rebuild
+  // (M10) arrive later; until then retrying keeps a stray message until its consumer exists (then the DLQ).
+  async queue(batch, env) {
+    if (batch.queue.startsWith('pf-email')) return handleEmailBatch(batch as MessageBatch<EmailJob>, env)
     console.log('queue_unhandled', batch.queue, batch.messages.length)
     batch.retryAll({ delaySeconds: 60 })
   },
-} satisfies ExportedHandler<Env>
+} satisfies ExportedHandler<AppEnv>

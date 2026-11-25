@@ -14,7 +14,8 @@ export function devVar(name: string): string | undefined {
   if (!existsSync(file)) return undefined
   for (const line of readFileSync(file, 'utf8').split('\n')) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/)
-    if (m?.[1] === name && m[2]) return m[2].replace(/^(['"])(.*)\1$/, '$2')
+    const value = m?.[2]?.replace(/\s+#.*$/, '') // values may carry an inline "# note"
+    if (m?.[1] === name && value) return value.replace(/^(['"])(.*)\1$/, '$2')
   }
   return undefined
 }

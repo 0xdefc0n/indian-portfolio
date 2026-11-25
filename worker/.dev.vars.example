@@ -9,9 +9,12 @@ STAGING_GOOGLE_CLIENT_ID=     # owner: staging OAuth client (pushed to staging w
 STAGING_GOOGLE_CLIENT_SECRET= # owner
 TEST_EMAIL_1=                # owner: inboxes you can read, for sign-in tests (M5)
 TEST_EMAIL_2=
-TURNSTILE_SECRET=            # created in M4
+TURNSTILE_SECRET=            # created in M4. Locally: 1x0000000000000000000000000000000AA (Cloudflare's always-pass test secret)
+EMAIL_SINK_KEY=              # local test email sink (M5): openssl rand -hex 32. Never set in production
+STAGING_EMAIL_SINK_KEY=      # the value pushed to staging as EMAIL_SINK_KEY; scripts/auth-smoke.ts uses it
 
-# Encryption (M4/M6). Back up DATA_KEK_V1 and PAN_PEPPER in a password manager: losing them makes all data unreadable.
+# Encryption (M4/M6). Back up the STAGING/PRODUCTION DATA_KEK_V1 and PAN_PEPPER in a password manager: losing them makes all
+# data unreadable. Locally use your own random values (openssl rand -hex 32); never the cloud ones.
 DATA_KEK_V1=
 PAN_PEPPER=
 

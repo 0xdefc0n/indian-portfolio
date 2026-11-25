@@ -55,11 +55,17 @@
     "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
     "ENGINE_FAST_MAX": "60",
     "ENGINE_BATCH_MAX": "60",
-    "TMP_MAX_OBJECTS": "50000"
+    "TMP_MAX_OBJECTS": "50000",
+    "EMAIL_FROM": "login@pocketfolio.in"
   },
   // Names only; values come from .dev.vars locally and `wrangler secret put` in the cloud (§15.2).
-  // Each milestone adds the secrets it starts using.
-  "secrets": { "required": ["ENGINE_SHARED_SECRET"] },
+  // Each milestone adds the secrets it starts using. EMAIL_SINK_KEY turns on the test email sink (src/lib/email.ts):
+  // local and staging only. Production must never have it, so env.production doesn't list it.
+  "secrets": { "required": ["ENGINE_SHARED_SECRET", "BETTER_AUTH_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "TURNSTILE_SECRET", "DATA_KEK_V1", "EMAIL_SINK_KEY"] },
+
+  // Cloudflare Email Service (D5, §7.3). Locally the binding only logs and saves the message to a temp file (it sends
+  // nothing); add "remote": true to send for real from wrangler dev.
+  "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["login@pocketfolio.in"] }],
 
   // Durable-Object-managed containers (§14). "durable_object" is the current policy ("default" is deprecated). With it,
   // wrangler rejects "image", "instance_type" and "max_instances": images are named here and each Durable Object picks
@@ -118,9 +124,11 @@
         "TURNSTILE_SITE_KEY": "0x4AAAAAAGSvPiuJKmMZ4fVv",
         "ENGINE_FAST_MAX": "60",
         "ENGINE_BATCH_MAX": "60",
-        "TMP_MAX_OBJECTS": "50000"
+        "TMP_MAX_OBJECTS": "50000",
+        "EMAIL_FROM": "login@pocketfolio.in"
       },
-      "secrets": { "required": ["ENGINE_SHARED_SECRET"] },
+      "secrets": { "required": ["ENGINE_SHARED_SECRET", "BETTER_AUTH_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "TURNSTILE_SECRET", "DATA_KEK_V1", "EMAIL_SINK_KEY"] },
+      "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["login@pocketfolio.in"] }],
       "containers": [
         { "name": "pocketfolio-engine-fast-staging", "class_name": "EngineFast", "scheduling_policy": "durable_object", "images": { "engine": { "dockerfile": "../engine/Dockerfile" } } },
         { "name": "pocketfolio-engine-batch-staging", "class_name": "EngineBatch", "scheduling_policy": "durable_object", "images": { "engine": { "dockerfile": "../engine/Dockerfile" } } }
@@ -169,9 +177,11 @@
         "TURNSTILE_SITE_KEY": "created-in-M17",
         "ENGINE_FAST_MAX": "60",
         "ENGINE_BATCH_MAX": "60",
-        "TMP_MAX_OBJECTS": "50000"
+        "TMP_MAX_OBJECTS": "50000",
+        "EMAIL_FROM": "login@pocketfolio.in"
       },
-      "secrets": { "required": ["ENGINE_SHARED_SECRET"] },
+      "secrets": { "required": ["ENGINE_SHARED_SECRET", "BETTER_AUTH_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "TURNSTILE_SECRET", "DATA_KEK_V1"] },
+      "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["login@pocketfolio.in"] }],
       "containers": [
         { "name": "pocketfolio-engine-fast", "class_name": "EngineFast", "scheduling_policy": "durable_object", "images": { "engine": { "dockerfile": "../engine/Dockerfile" } } },
         { "name": "pocketfolio-engine-batch", "class_name": "EngineBatch", "scheduling_policy": "durable_object", "images": { "engine": { "dockerfile": "../engine/Dockerfile" } } }
