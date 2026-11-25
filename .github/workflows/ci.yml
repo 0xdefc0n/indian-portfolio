@@ -53,4 +53,25 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker build -t pocketfolio-engine:ci engine
 
-  # Worker (vitest, typecheck, lint) job is added in M2. Staging deploy on merge to main is added in M4.
+  worker:
+    name: Worker (vitest + typecheck + lint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: worker/.nvmrc
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      # wrangler.jsonc serves ../web/dist; the tests only need the folder to exist.
+      - run: mkdir -p ../web/dist
+      # Vitest builds the engine image with Docker (preinstalled on ubuntu-latest) for the container test.
+      - run: npm test
+
+  # Staging deploy on merge to main is added in M4.

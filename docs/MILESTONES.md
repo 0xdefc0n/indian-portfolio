@@ -16,7 +16,7 @@ Claude updates this table at the end of every milestone.
 |---|---|---|---|---|---|---|
 | M0 | Repo setup | 0 | done | 2026-11-25 | `1059779` | Branched from `origin/main` (already has bento, PR #1) and cherry-picked the local rename `dd308df`. Local `main` is untouched and still lacks bento. Web build + lint pass; old app starts. CI YAML parses; not yet run on GitHub |
 | M1 | Python engine extracted and containerised | 0 | done | 2026-11-25 | `dde3c9d` | 34 synthetic + 7 real-PDF tests pass, incl. parity with the old app on real statements (with and without NAVs). Container: read-only, non-root, /tmp empty, concurrent /parse → 503. `/parse` now takes a raw body (multipart would spool to disk). Large detailed CAMS statement still unmeasured |
-| M2 | Worker scaffold and engine pool (local) | 0 | todo | | | |
+| M2 | Worker scaffold and engine pool (local) | 0 | done | 2026-11-25 | (see git log `M2:`) | 21 vitest pass, incl. a real container round trip. `wrangler dev`: `/api/health` → pool → `EngineFast-0` (cold ~1.8 s, warm ~20 ms), container stops after 60 s idle. Plan changes: raw `ctx.container` instead of `@cloudflare/containers`; `durable_object` policy rejects `image`/`instance_type` (now `images` + `start({instance})`); `@cloudflare/vitest-plugin` replaces vitest-pool-workers; Node ≥ 22.12. Later: `/api/health` is public and leases a parse slot, so cache or rate-limit it (M16); engine 1 s recycle gap, so retry on connect error (M7) |
 | M3 | Spike: pdf.js pre-check inside a Worker | 0 | todo | | | |
 | M4 | Cloudflare staging and CI | 0–1 | todo | | | |
 | M5 | Sign-in (Google, magic link, email code) | 1 | todo | | | |
@@ -67,7 +67,7 @@ Status values: `todo` · `in progress` · `blocked (needs owner: …)` · `done`
 
 **Standard commands** (they exist from the milestone that creates them):
 - Engine: `cd engine && uv run pytest -q`
-- Worker: `cd worker && npm test` (vitest with `@cloudflare/vitest-pool-workers`), `npm run typecheck`, `npm run lint`
+- Worker: `cd worker && npm test` (vitest with `@cloudflare/vitest-plugin`, the renamed `vitest-pool-workers`; needs Docker and Node ≥ 22.12), `npm run typecheck`, `npm run lint`
 - Web: `cd web && npm run build && npm run lint`
 - Local stack: `cd worker && npx wrangler dev`, with Docker running for the containers
 

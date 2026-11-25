@@ -336,7 +336,7 @@ AMC websites (disclosures), BharatStock (fallback), Resend (email), Google OAuth
   src/jobs/*.ts           parse, rebuild, market-data, stocks, email, cleanup
   migrations/app/0001_auth.sql …     → D1 pocketfolio-app
   migrations/market/0001_market.sql … → D1 pocketfolio-market
-  test/                   vitest + @cloudflare/vitest-pool-workers
+  test/                   vitest + @cloudflare/vitest-plugin (renamed from vitest-pool-workers)
 /engine                   NEW: Python container
   Dockerfile
   pyproject.toml          (from requirements.txt + openpyxl, python-calamine)
@@ -1495,7 +1495,11 @@ the PocketFolio icon, `Panel` surface and ring, `lucide-react` icons, and the pr
 
 ## 15. Config and deployment
 
-### 15.1 `worker/wrangler.jsonc` (sketch; ⚠️ VERIFY keys against the current wrangler docs)
+### 15.1 `worker/wrangler.jsonc` (sketch; ✅ keys checked in M2, the real file is `worker/wrangler.jsonc`)
+✅ Verified in M2 against the wrangler 4.168 config schema and `wrangler dev`: every key in this sketch exists, except
+the container fields noted below. Wrangler also has a newer `exports` map for Durable Objects (mutually exclusive with
+`migrations`). M2 keeps the classic `durable_objects` + `migrations` form, which wrangler 4.168 and the Vitest
+integration accept. Switch only if a later wrangler requires `exports`.
 ```jsonc
 {
   "name": "pocketfolio",
@@ -1534,12 +1538,15 @@ the PocketFolio icon, `Panel` surface and ring, `lucide-react` icons, and the pr
     { "name": "RL_IP",   "namespace_id": "1002", "simple": { "limit": 300, "period": 60 } }
   ],
   "vars": { "ENGINE_FAST_MAX": "60", "ENGINE_BATCH_MAX": "60", "TMP_MAX_OBJECTS": "50000" },
-  // Container classes use the durable_object scheduling policy (the "default" policy with max_instances is deprecated).
-  // ⚠️ VERIFY the exact keys for scheduling_policy and inactivity timeout against the current wrangler docs.
+  // ✅ M2: "durable_object" is the current policy. "default" is deprecated, and so is omitting the field. With
+  // durable_object, wrangler REJECTS "image", "instance_type" and "max_instances". Images are named under "images", and
+  // each Durable Object passes the image and instance size to ctx.container.start() (worker/src/engine.ts).
   "containers": [
-    { "class_name": "EngineFast",  "image": "../engine/Dockerfile", "instance_type": "standard-2", "scheduling_policy": "durable_object" },
-    { "class_name": "EngineBatch", "image": "../engine/Dockerfile", "instance_type": "basic",      "scheduling_policy": "durable_object" }
+    { "name": "pocketfolio-engine-fast",  "class_name": "EngineFast",  "scheduling_policy": "durable_object", "images": { "engine": { "dockerfile": "../engine/Dockerfile" } } },
+    { "name": "pocketfolio-engine-batch", "class_name": "EngineBatch", "scheduling_policy": "durable_object", "images": { "engine": { "dockerfile": "../engine/Dockerfile" } } }
   ],
+  // EngineFast starts with { instance: "standard-2" }, EngineBatch with { instance: "basic" }. EnginePool's caps are the
+  // only instance limit.
   "durable_objects": { "bindings": [
     { "name": "ENGINE_FAST",  "class_name": "EngineFast" },
     { "name": "ENGINE_BATCH", "class_name": "EngineBatch" },
@@ -1549,14 +1556,24 @@ the PocketFolio icon, `Panel` surface and ring, `lucide-react` icons, and the pr
   "observability": { "enabled": true }
 }
 ```
-- **Engine routing.** `EngineFast` and `EngineBatch` extend the `Container` class from `@cloudflare/containers`
-  (⚠️ VERIFY: whether the package is still the recommended helper; otherwise use `ctx.container` directly). Each calls
-  `setInactivityTimeout(60_000)`. The Worker never picks an instance itself: it asks `ENGINE_POOL` for a lease, then calls
+- **Engine routing.** `EngineFast` and `EngineBatch` are plain Durable Objects that drive `ctx.container` directly.
+  ✅ M2 fallback taken: the Durable Object Container API docs now treat the `@cloudflare/containers` `Container` class as
+  the legacy path, with a "migrate from the Container class" guide, and its timeout is a `sleepAfter` property, not
+  `setInactivityTimeout`. The raw API has everything we need: `start({ image: ctx.container.images.engine, instance,
+  env, enableInternet: false })`, `getTcpPort(8080).fetch()`, and `setInactivityTimeout(60_000)`. That timeout is per
+  instance, so it is applied after each start and again in the constructor if the container is already running.
+  ✅ Locally the container stopped ~60 s after the last request and restarted on the next one: a cold
+  `/api/health` takes ~1.8 s, a warm one ~20 ms. The engine secret goes in as a container env var at `start()`. The
+  Durable Object adds `X-Engine-Key` to every request, so routes never handle the secret. The Worker never picks an instance itself: it asks `ENGINE_POOL` for a lease, then calls
   `env.ENGINE_FAST.getByName(lease.name)`. No `getRandom`.
 - **Locality.** Pick the D1 (both databases) and R2 location hint `apac` at creation. Containers: with the
   `durable_object` policy, instances run near their Durable Object. Create the engine and pool objects from an APAC
   request, or with a location hint (⚠️ VERIFY: whether DO location hints or the DO data-location API apply to container
   placement; fallback: accept Cloudflare's placement and say so in §12's cross-border text).
+  M2 note for M4: the Containers platform docs now say "Durable Objects and their associated Container instances are
+  not guaranteed to run in the same location". `constraints.regions` is rejected under `durable_object`, since only
+  name, class_name, scheduling_policy, images, observability and ssh are allowed. Expect the fallback, and check real
+  placement on staging.
 - **D1 read replication:** enable on `pocketfolio-market` only (Settings → Enable read replication) and read through
   `MARKET.withSession(…)` (⚠️ VERIFY the session-constraint argument names). Leave it off on `pocketfolio-app`, so auth
   reads always see their own writes.
@@ -1584,7 +1601,13 @@ until those features ship.
 - **Environments:** `dev` (local), `staging` (its own D1, R2 and Google client) and `production`.
 - **Local dev:**
   - `wrangler dev` serves the Worker on :8787 and runs the container locally through Docker (supported by wrangler
-    for Containers; ⚠️ VERIFY).
+    for Containers). ✅ Verified in M2 with wrangler 4.168 and Docker Desktop. It needs wrangler ≥ 4.136 for the
+    `durable_object` policy, so the Worker uses Node ≥ 22.12 (`worker/.nvmrc`). `max_instances` doesn't apply locally,
+    and container code doesn't hot-reload (press `r` to rebuild). The local runtime doesn't set `--read-only` on the
+    container: the engine writes nothing either way (verified in M1).
+  - Tests: `@cloudflare/vitest-pool-workers` is deprecated and was renamed to **`@cloudflare/vitest-plugin`** (used from
+    M2, with vitest 5). It runs container-backed Durable Objects too. It builds the engine image with Docker, so
+    `npm test` includes one real `/api/health` round trip through the pool.
   - `npm run dev` runs the SPA through a Vite proxy to :8787.
   - D1 uses `--local`.
 - **GitHub Actions:**
