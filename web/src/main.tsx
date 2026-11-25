@@ -1,17 +1,52 @@
 import { ThemeProvider } from "next-themes"
-import { StrictMode } from "react"
+import { StrictMode, useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
+import { Route, Switch } from "wouter"
 
 import App from "./App.tsx"
 import { Toaster } from "@/components/ui/sonner"
+import { Skeleton } from "@/components/ui/skeleton"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { api, type Me, SignedOut } from "@/lib/api"
+import { LoginPage, VerifyLinkPage } from "@/pages/login"
 import "./index.css"
+
+/** Loads the session once (/api/me); a 401 sends the user to /login via the global handler in lib/api.ts. */
+function SignedIn() {
+  const [me, setMe] = useState<Me | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    api.me().then(setMe, (e: Error) => !(e instanceof SignedOut) && setError(e.message))
+  }, [])
+  if (error)
+    return (
+      <p className="mx-auto mt-24 max-w-md rounded-xl bg-surface p-4 text-sm text-loss ring-1 ring-border" role="alert">
+        Couldn't load your account: {error}. Reload to try again.
+      </p>
+    )
+  if (!me) return <Skeleton className="mx-auto mt-24 h-40 max-w-md rounded-[22px]" />
+  return <App me={me} />
+}
+
+function NotFound() {
+  return (
+    <div className="mx-auto mt-24 max-w-md text-center">
+      <h1 className="text-2xl font-semibold tracking-tight">Page not found</h1>
+      <a href="/" className="mt-4 inline-block py-2 text-primary underline-offset-4 hover:underline">Go to your portfolio</a>
+    </div>
+  )
+}
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
       <TooltipProvider delayDuration={150}>
-        <App />
+        <Switch>
+          <Route path="/login/verify" component={VerifyLinkPage} />
+          <Route path="/login" component={LoginPage} />
+          <Route path="/" component={SignedIn} />
+          <Route component={NotFound} />
+        </Switch>
         <Toaster position="bottom-right" />
       </TooltipProvider>
     </ThemeProvider>

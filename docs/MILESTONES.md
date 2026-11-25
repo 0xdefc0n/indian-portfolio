@@ -18,8 +18,8 @@ Claude updates this table at the end of every milestone.
 | M1 | Python engine extracted and containerised | 0 | done | 2026-11-25 | `dde3c9d` | 34 synthetic + 7 real-PDF tests pass, incl. parity with the old app on real statements (with and without NAVs). Container: read-only, non-root, /tmp empty, concurrent /parse → 503. `/parse` now takes a raw body (multipart would spool to disk). Large detailed CAMS statement still unmeasured |
 | M2 | Worker scaffold and engine pool (local) | 0 | done | 2026-11-25 | `8cb6044` | 21 vitest pass, incl. a real container round trip. `wrangler dev`: `/api/health` → pool → `EngineFast-0` (cold ~1.8 s, warm ~20 ms), container stops after 60 s idle. Plan changes: raw `ctx.container` instead of `@cloudflare/containers`; `durable_object` policy rejects `image`/`instance_type` (now `images` + `start({instance})`); `@cloudflare/vitest-plugin` replaces vitest-pool-workers; Node ≥ 22.12. Later: `/api/health` is public and leases a parse slot, so cache or rate-limit it (M16); engine 1 s recycle gap, so retry on connect error (M7) |
 | M3 | Spike: pdf.js pre-check inside a Worker | 0 | done | 2026-11-25 | `e7298d9` | pdf.js 6.5 runs in workerd as is (fake worker through `globalThis.pdfjsWorker`), so no fallback was needed. 15 synthetic + 8 private tests: 4/4 private PDFs agree with the engine on type, password index and PAN. Time in workerd 22–37 ms per check, plus 40–53 ms to load pdf.js once per isolate. A 12 MB / 300-page PDF takes 24 ms with peak RSS +68 MB. Bundle 3.4 MB (685 KB gzipped). Later: re-measure CPU and startup time on Cloudflare (M4); the check copies the bytes, so hold one upload per request and check the size before buffering (M7); `passwordIndex: null` means unencrypted (M7 maps it to `password_source`) |
-| M4 | Cloudflare staging and CI | 0–1 | blocked (needs owner: add the 2 GitHub Actions secrets, then OK to push `multi-user` and merge to `main` to prove the CI deploy) | 2026-11-25 | `c870438` + cron fix | Staging is live: `https://staging.pocketfolio.in/api/health` reaches `EngineFast-0` in Cloudflare (cold ~11 s, warm ~0.5 s, of which ~60 ms is the DO + container hop). Created: both staging D1s (`apac`), R2 bucket + `tmp/` 1-day rule, 4 queues + DLQ, Turnstile widget. 5 staging secrets uploaded with the first deploy (`--secrets-file`) and the local copy deleted. Owner backup of `DATA_KEK_V1` + `PAN_PEPPER` in git-ignored `worker/staging-keys.local.txt`. `wrangler.jsonc` has `env.staging` + `env.production`. CI has a staging deploy on push to `main` + a manual production workflow. Cron fix: Cloudflare rejects `0` for Sunday, so `0 3 * * SUN`. Container placement can't be read (`location: null`), so the §15.1 fallback was taken. Later: re-measure pdf.js CPU on Cloudflare once the pre-check is in the upload path (M7, read CPU from observability, because `Date.now()` doesn't advance during CPU work in Workers). |
-| M5 | Sign-in (Google, magic link, email code) | 1 | todo | | | |
+| M4 | Cloudflare staging and CI | 0–1 | done | 2026-11-25 | `c870438`…PR #3 | `https://staging.pocketfolio.in/api/health` reaches `EngineFast-0` in Cloudflare (cold ~11 s, warm ~0.5 s, of which ~60 ms is the DO + container hop). CI deploy proven on the merge of PR #3: both D1s migrated, deployed, smoke test ok. Created: both staging D1s (`apac`), R2 + `tmp/` 1-day rule, 4 queues + DLQ, Turnstile widget. 5 staging secrets uploaded with the first deploy. `DATA_KEK_V1` and `PAN_PEPPER` are backed up by the owner. `env.staging` + `env.production` in `wrangler.jsonc`, plus a manual production workflow. Fixes: Cloudflare rejects `0` for Sunday in crons (`SUN`). The custom domain answers 403 to GitHub runners (probably Bot Fight Mode), so the CI smoke test uses staging's workers.dev URL (owner's choice). Container placement can't be read, so the §15.1 fallback was taken. Later: re-check bot protection on `/api/*` before launch (M16/M17); re-measure pdf.js CPU on Cloudflare via observability (M7) |
+| M5 | Sign-in (Google, magic link, email code) | 1 | done | 2026-11-25 | `8f6a07f` | Owner confirmed on staging: Google sign-in, and the magic link + 6-digit code from a real inbox. Better Auth 1.7.28 on D1. 29 new tests (73 total) pass, incl. link single use + expiry, Google linking to an email user, session revoke, and **0 D1 session queries with a warm cookie cache**. On staging, `scripts/auth-smoke.ts` passes end to end through the real `pf-email-staging` queue and the test sink: code, magic link, same household, single use, sign-out. Google's auth URL accepts the staging client + redirect URI. Changes: household + snapshot moved into `0002_household.sql` (M6 now writes `0003_app.sql`); one email from `POST /api/login/email` (the plugins' send endpoints aren't routed); a one-UPSERT `customStorage` rate limiter; the link opens `/login/verify#token=…`; tokens and codes hashed; Google tokens not stored; `validateSchema: false` (else +1 D1 query per request); `EMAIL_SINK_KEY` required in local + staging only. `/api/portfolio` returns an empty portfolio until M10. Later: delete expired `rate_limit` rows in the cleanup cron (M14); Settings in the avatar menu (M6); privacy/terms links on /login, the session table's IP/UA in the privacy notice, and real `consent_ok` (M14); review the 60/h per-IP email limit and alert on `email_daily_limit` / `email_config_error` logs (M16); CSP for Turnstile (M16); web bundle 918 KB, so code-split (M15) |
 | M6 | Tenant data, encryption, members | 2 | todo | | | |
 | M7 | Upload, direct path | 2 | todo | | | |
 | M8 | Upload, queued path | 2 | todo | | | |
@@ -185,18 +185,22 @@ a merge.
 **Needs from owner:**
 - Google OAuth Web client IDs and secrets for localhost:8787 and staging (consent screen in Testing mode, with your
   test emails added).
-- `RESEND_API_KEY`, and the domain added in Resend (Claude adds the DNS records with the token).
+- `pocketfolio.in` onboarded in Cloudflare Email Sending (✅ owner, 2026-11-25). No API key is needed, because the
+  Worker uses the `send_email` binding. If a deploy with the binding is refused, the Cloudflare token also needs
+  Email Sending: Edit.
 - Two email addresses you can read.
 
 **Build:**
 - Better Auth on D1 `DB`: Google, magic link + email OTP in one email, cookie cache, `householdId` /
-  `consentVersion` session fields, narrowed rate-limit rules, migrations `app/0001_auth.sql`.
+  `consentVersion` session fields, narrowed rate-limit rules, migrations `app/0001_auth.sql` (+ `0002_household.sql`).
 - Household + empty snapshot row created on signup. DEK generated and wrapped (`crypto.ts` key parts only).
-- `EmailSender` + Resend batch sending through `pf-email`. A staging-only email sink for automated tests.
+- `EmailSender` + Cloudflare Email Service (`send_email` binding `EMAIL`), sending through `pf-email`, one call per
+  message with per-message retry (plan §7.3). A staging-only email sink for automated tests.
 - Turnstile check on the email form. Session middleware, `/api/me`, `/api/config`, sign-out, the global 401 handler.
 - Frontend: `/login` (Google primary, email link/code, PocketFolio wordmark), the avatar menu, a tiny router.
 - ⚠️ VERIFY: Better Auth option names (cookieCache, additionalFields, rateLimit customRules), the combined link + code
-  email, and Resend batch + rate limits.
+  email, the `send_email` binding config (sender restriction, local dev with `remote`), the Email Service error codes,
+  and Email Routing (`support@`) coexisting with Email Sending on the zone.
 
 **Done when:**
 - Sign-in with Google and with a magic link works on staging, and the 6-digit code works.
@@ -208,7 +212,7 @@ a merge.
 **Read:** plan §6, §8, §9.1, §9.2 (members rows), D18.
 **Needs from owner:** none.
 **Build:**
-- Migration `app/0002_app.sql`: household, member, statement, snapshot, parse_job, pending_statement_password, quota,
+- Migration `app/0003_app.sql` (household and snapshot already exist from M5's `0002_household.sql`): member, statement, parse_job, pending_statement_password, quota,
   audit_event, consent (gating comes in M14).
 - `crypto.ts` (seal/open, AAD, KEK versions) and `blob.ts` (gzip, then encrypt, with a flags byte).
 - `tenant.ts` guard. `/api/members` list, rename and delete (delete cascades blobs and enqueues a rebuild once that
@@ -350,7 +354,7 @@ data and nothing else.
 **Read:** plan §7.2, §17 Phase 6 launch checklist, §19.
 **Needs from owner** (the most owner work of any milestone):
 - Google consent screen brand verification and "In production", plus a production client ID.
-- Resend on Pro.
+- Cloudflare Email Service daily-quota increase approved (Limit Increase Request form).
 - Legal review done.
 - Production approval in the GitHub environment.
 
@@ -380,5 +384,5 @@ data and nothing else.
 - **What can move:** M9 can start any time after M7, M13 any time after M5, and M15 any time after M10. Keep the table
   order unless the owner asks otherwise.
 - **Owner inputs, by first milestone that needs them:** M0 branch OK · M4 Cloudflare Paid + token + domain · M5 Google
-  clients + Resend + test emails · M10 R2 read-only token · M11 BharatStock OK · M14 legal details · M16 load-test OK ·
-  M17 Google production, Resend Pro, legal review, go-live approval.
+  clients + Email Sending domain (✅) + test emails · M10 R2 read-only token · M11 BharatStock OK · M14 legal details · M16 load-test OK ·
+  M17 Google production, email quota increase, legal review, go-live approval.

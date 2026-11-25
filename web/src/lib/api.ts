@@ -146,19 +146,50 @@ export type StatementRequestResult =
   | { mode: "sent"; password: string; msg: string }
   | { mode: "manual"; password: string; form_url: string }
 
+/** Safe, user-facing copy for the Worker's error codes ({ ok: false, code }). */
+const MESSAGES: Record<string, string> = {
+  invalid_email: "Enter a valid email address.",
+  turnstile_failed: "We couldn't check that you're not a bot. Try again.",
+  rate_limited: "Too many sign-in emails. Wait a bit, then try again.",
+  INVALID_OTP: "That code didn't work. Check it and try again.",
+  OTP_EXPIRED: "That code has expired. Send a new one.",
+  TOO_MANY_ATTEMPTS: "Too many tries with that code. Send a new one.",
+}
+
 async function readError(r: Response): Promise<string> {
   const data = await r.json().catch(() => ({}))
+  if (typeof data.code === "string") return MESSAGES[data.code] ?? `Something went wrong (${data.code}).`
   let d = data.detail
   if (Array.isArray(d)) return d.map((e: { msg: string }) => e.msg.replace(/^Value error, /, "")).join("; ")
   if (d && typeof d === "object") {
     const reasons = (d.failed || []).map((f: { error: string }) => f.error)
     d = [d.msg, ...new Set(reasons)].join(" — ")
   }
-  return d || `Request failed (${r.status})`
+  if (r.status === 429) return MESSAGES.rate_limited
+  return d || data.message || `Request failed (${r.status})`
+}
+
+/** Only same-site paths: never send people to another origin after sign-in. */
+export function safeNext(next: string | null | undefined): string {
+  return next && next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/login") ? next : "/"
+}
+
+export function goToLogin() {
+  const here = window.location.pathname + window.location.search + window.location.hash
+  window.location.assign(`/login?next=${encodeURIComponent(safeNext(here))}`)
+}
+
+export class SignedOut extends Error {
+  name = "SignedOut"
 }
 
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init)
+  // Global 401 handler (plan §13 item 8): the session ended, so go to /login and come back here afterwards.
+  if (r.status === 401 && !url.startsWith("/api/auth/")) {
+    goToLogin()
+    throw new SignedOut("Signed out")
+  }
   if (!r.ok) throw new Error(await readError(r))
   return r.json()
 }
@@ -169,10 +200,31 @@ const json = (body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 })
 
+export type Me = {
+  user: { name: string; email: string; image: string | null }
+  household: { id: string; created_at: number }
+  consent_ok: boolean
+}
+
+export type AppConfig = {
+  features: { cdsl_fetch: boolean; kfintech_auto: boolean; stocks: boolean }
+  kfintech_form_url: string
+  turnstile_site_key: string
+}
+
+/** Sign-in calls (Better Auth under /api/auth, plus our one-email route, plan §7.1). */
+export const auth = {
+  emailLink: (email: string, turnstile_token: string) => call<{ ok: true }>("/api/login/email", json({ email, turnstile_token })),
+  verifyCode: (email: string, otp: string) => call<unknown>("/api/auth/sign-in/email-otp", json({ email, otp })),
+  google: (next: string) =>
+    call<{ url: string }>("/api/auth/sign-in/social", json({ provider: "google", callbackURL: next, errorCallbackURL: "/login?error=google" })),
+  signOut: () => call<unknown>("/api/auth/sign-out", json({})),
+}
+
 export const api = {
   portfolio: () => call<Portfolio>("/api/portfolio"),
-  config: () =>
-    call<{ sandbox: boolean; num_periods: number; kfintech_auto: boolean; kfintech_form_url: string }>("/api/config"),
+  me: () => call<Me>("/api/me"),
+  config: () => call<AppConfig>("/api/config"),
   requestStatement: (body: { pan: string; email: string; from_date: string; to_date: string; password: string }) =>
     call<StatementRequestResult>("/api/kfintech/request", json(body)),
   upload: (pan: string, password: string, file: File) => {

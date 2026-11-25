@@ -55,7 +55,7 @@ export function RequestStatementForm({ onUpload }: { onUpload: () => void }) {
   const [result, setResult] = useState<Sent | null>(null)
 
   useEffect(() => {
-    api.config().then((c) => setAuto(c.kfintech_auto), () => setAuto(false))
+    api.config().then((c) => setAuto(c.features.kfintech_auto), () => setAuto(false))
   }, [])
 
   async function submit(e: FormEvent<HTMLFormElement>) {

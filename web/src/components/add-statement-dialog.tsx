@@ -1,5 +1,5 @@
 import { FileUpIcon, Loader2Icon, PlusIcon } from "lucide-react"
-import { type FormEvent, useEffect, useState } from "react"
+import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -107,12 +107,6 @@ function OtpForm({ onDone }: { onDone: () => void }) {
   const [session, setSession] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [sandbox, setSandbox] = useState(false)
-
-  useEffect(() => {
-    api.config().then((c) => setSandbox(c.sandbox)).catch(() => {})
-  }, [])
-
   async function sendOtp(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const f = new FormData(e.currentTarget)
@@ -147,11 +141,6 @@ function OtpForm({ onDone }: { onDone: () => void }) {
 
   return (
     <div className="grid gap-4">
-      {sandbox && (
-        <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-          Using the CASParser sandbox key, which returns sample data only. Add a paid API key in <code>.env</code> to fetch real statements.
-        </p>
-      )}
       {!session ? (
         <form onSubmit={sendOtp} className="grid gap-4">
           <Field id="o-pan" name="pan" label="PAN" required maxLength={10} pattern={PAN_PATTERN} autoComplete="off"

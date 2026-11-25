@@ -45,7 +45,7 @@ be verified during implementation are marked ⚠️ VERIFY, with what to check a
 | D2 | Extra devices 🔒 | **WhatsApp-Web-style QR login.** The new device shows a QR code; a logged-in device scans and approves it. | Owner request. Built on Better Auth's Device Authorization plugin (RFC 8628), §7.4. |
 | D3 | Sign-in methods 🔒 | **Google + email magic link.** Phone OTP and Apple are later. | Owner request. |
 | D4 | Auth provider 🧪 | **Better Auth** (open source, runs inside our Worker, users stored in our D1). | No MAU fees at any scale. First-class D1 support since v1.5, an official Cloudflare guide, a real magic-link plugin, and a Device Authorization plugin for D2. Hosted options at 100k MAU cost ≈$275 (Firebase), ≈$1,025 (Clerk) or $3,500+ (Auth0) a month. WorkOS (free to 1M MAU) sends 6-digit codes, not magic links. Firebase's free plan sends only 5 email-link emails a day. |
-| D5 | Magic-link email 🧪 | **Resend** behind an `EmailSender` interface. Free: 100/day, 3,000/month. Pro: $20/month for 50k. **Move to Pro before public launch.** Sends go through an `email` queue that batches them (§7.3). Switch to **Cloudflare Email Service** once it is GA (still public beta, with unpublished daily quotas for new accounts). | Login emails can't depend on a beta product. The interface makes switching a one-file change. A signup burst would exhaust the free plan in minutes (§3.5). |
+| D5 | Magic-link email 🔒 | **Cloudflare Email Service** (Email Sending, beta) through the Worker's `send_email` binding, behind an `EmailSender` interface. Workers Paid includes 3,000 emails a month, then $0.35 per 1,000, to any recipient. Sends go through the `email` queue (§7.3). **Before public launch, request a higher daily quota.** Resend stays the fallback implementation if the beta or its quotas get in the way. | Owner decision (2026-11-25), replacing Resend. It is cheaper than Resend Pro ($20/month), adds no extra vendor or API key, and SPF/DKIM/DMARC are managed in the same Cloudflare zone. The risk is the beta: new accounts get an unpublished daily quota and no batch endpoint. Google is the primary sign-in and sends no email, and the interface makes switching back a one-file change. |
 | D6 | Keep PDFs? 🔒 (revised 2026-11-25) | **Delete after parsing.** Only the parsed data is kept, encrypted. A PDF is parsed straight away from memory when an engine slot is free (the normal case). During a burst it is stored **encrypted in R2 `tmp/`** and queued (§10.1), then deleted right after parsing. **Before storing, the Worker verifies the password, statement type and PAN** with pdf.js, so a queued job needs nothing more from the user (owner decision 2026-11-25: they may have closed the tab). It is never kept longer than 24 h. | Least risk under DPDP, while uploads survive bursts, a closed tab and engine crashes instead of timing out. If the parser improves, users re-upload. |
 | D7 | Pricing 🔒 | **Free with fair-use limits** (§11). No billing at launch. | |
 | D8 | CDSL OTP fetch (CASParser API) 🔒 | **"Coming soon".** UI shown disabled with a badge; backend route not deployed. | Owner: upload plus our own parser only, for now. |
@@ -235,8 +235,9 @@ that's **~21,000 vCPU-s** of engine work (20k × ~0.8 + 10k × ~0.5, §3.3).
    uploads fail**.
 2. **Memory.** FastAPI runs sync endpoints in a 40-thread pool. Several parses then share one core under the GIL while
    each holds its own ~90–150 MB (measured; more for long statements), which can run a 1 GiB `basic` instance out of memory.
-3. **Email.** Resend Free sends 100 a day, and the API is rate-limited per second (⚠️ VERIFY the current default, said to
-   be ~2/s). 10k magic links would take hours.
+3. **Email.** Cloudflare Email Service starts new accounts on a "conservative daily quota" (no number published,
+   raised on request), publishes no per-second limit, and has no batch endpoint, so it is one call per email.
+   10k magic links could exhaust the quota or hit `E_RATE_LIMIT_EXCEEDED`.
 4. **D1.** Each API call does a session read, a household read and a consent read before any work. 10k browsers polling
    `/api/portfolio/status` every 2 s add thousands of queries a second, against a DB that runs one query at a time.
    Expect "overloaded" errors.
@@ -258,7 +259,7 @@ household (§10.3).
 | **Total** | **≈ $0.65 (up to ~$2 with idle tails)** |
 
 **Conclusion:** a burst is cheap. The risk is throughput and correctness, not money. The fixes are D16, D17, §7.1
-(fewer D1 reads), §7.3 (email batching), §10.1 (two-path upload) and §10.2 (single-flight rebuilds). With them, the
+(fewer D1 reads), §7.3 (email queue + raised quota), §10.1 (two-path upload) and §10.2 (single-flight rebuilds). With them, the
 same burst drains in **~10 min**: 21k vCPU-s ÷ 600 s ≈ 35 vCPU, for example 30 `EngineFast` (`standard-2`)
 plus 20 `EngineBatch` (`basic`), at the same CPU cost. The starting caps of 60 + 60 leave headroom for longer statements. Pool caps are config values (§15.1), not code.
 
@@ -311,7 +312,8 @@ Rules that follow:
   nav, days       PDFs (≤24 h)
                 market/ NAV series, fund holdings
 Outbound (from the Worker or engine): api.mfapi.in (NAVs), amfiindia.com (NAV file),
-AMC websites (disclosures), BharatStock (fallback), Resend (email), Google OAuth.
+AMC websites (disclosures), BharatStock (fallback), Google OAuth.
+Cloudflare Email Service (`send_email` binding) for outbound email.
 ```
 
 **Request paths**
@@ -352,7 +354,7 @@ AMC websites (disclosures), BharatStock (fallback), Resend (email), Google OAuth
   src/routes/*.ts         households, members, statements, portfolio, settings, account
   src/lib/crypto.ts       envelope encryption
   src/lib/tenant.ts       requireHousehold(), assertMember()
-  src/lib/email.ts        EmailSender interface + Resend impl
+  src/lib/email.ts        EmailSender interface + Cloudflare Email Service impl (send_email binding)
   src/lib/quota.ts        fair-use counters
   src/lib/blob.ts         compress-then-encrypt helpers (seal/open with gzip, D18)
   src/lib/pdfcheck.ts     pdf.js pre-check: password, statement type, PAN, page count (§10.1 A5)
@@ -383,9 +385,12 @@ AMC websites (disclosures), BharatStock (fallback), Resend (email), Google OAuth
 There are **two D1 databases** (D17), bound as `DB` (`pocketfolio-app`) and `MARKET` (`pocketfolio-market`).
 Nothing joins across them. The upload handler writes to both: user rows to `DB`, public scheme IDs to `MARKET`.
 
-The Better Auth tables (`user`, `session`, `account`, `verification`, `deviceCode`) come from
-`npx @better-auth/cli generate` (⚠️ VERIFY: the current CLI name is `npx auth generate` per the docs). Commit the
-generated SQL as `migrations/app/0001_auth.sql`. App tables go in `migrations/app/0002_app.sql`:
+The Better Auth tables (`user`, `session`, `account`, `verification`; `deviceCode` arrives with M13) come from
+`npx auth generate` (✅ M5: the CLI package is now `auth`, 1.7.28; `@better-auth/cli` is stuck at 1.4. It runs on
+`worker/scripts/auth-schema.config.ts`, which diffs against an empty in-memory SQLite) and are committed as
+`migrations/app/0001_auth.sql`. **M5 also needed `household` and `snapshot` at signup**, so those two tables (plus a
+small `rate_limit` table, §7.1) are in `migrations/app/0002_household.sql`. The other app tables below go in
+`migrations/app/0003_app.sql` (M6):
 
 ```sql
 CREATE TABLE household (
@@ -574,12 +579,12 @@ export function createAuth(env: Env) {
         consentVersion: { type: "string", input: false },
       },
     },
-    // ⚠️ VERIFY: option names for cookieCache / additionalFields. Fill householdId / consentVersion in
-    // databaseHooks.session.create.before; after POST /api/consent, refresh the cookie cache.
+    // ✅ M5 (better-auth 1.7.28): cookieCache and session.additionalFields are the names. householdId is filled in
+    // databaseHooks.session.create.before; after POST /api/consent (M14), refresh the cookie cache.
     // Trade-off: a revoked session can keep working for up to maxAge (5 min) on routes that trust the cache. Sensitive
     // routes (export, delete account, device approve, revoke) call getSession with disableCookieCache so they always hit D1.
     rateLimit: {
-      enabled: true, storage: "database",                                 // ⚠️ VERIFY option name; in-memory is per-isolate on Workers
+      enabled: true, storage: "database",                                 // ✅ M5: built as customStorage instead (below)
       // Database rate limiting writes a D1 row per request. Apply it only to the endpoints that send email or create
       // codes, and skip session reads.
       customRules: {
@@ -602,9 +607,9 @@ export function createAuth(env: Env) {
         expiresIn: 600,
         sendVerificationOTP: async ({ email, otp, type }) => type === "sign-in" && sendLoginEmail(env, email, { otp }),
       }),
-      // sendLoginEmail: one email per sign-in request holding BOTH the link and the code. ⚠️ VERIFY how to get the
-      // link and the OTP into one send (e.g. the login form calls a small Worker route that triggers both plugin
-      // endpoints and merges them, or uses the OTP email only when the app runs standalone).
+      // sendLoginEmail: one email per sign-in request holding BOTH the link and the code. ✅ M5: the login form calls
+      // POST /api/login/email, which runs both plugin endpoints server-side and captures the token and the code, then
+      // queues ONE email. The plugins' own send endpoints are not routed (see "As built" below).
       deviceAuthorization({ verificationUri: "/link", expiresIn: "5m", interval: "3s" }), // §7.4; ⚠️ VERIFY option names
     ],
     databaseHooks: { user: { create: { after: async (u) => createHousehold(env, u.id) } } },
@@ -613,6 +618,24 @@ export function createAuth(env: Env) {
 // index.ts: app.on(["GET","POST"], "/api/auth/*", c => createAuth(c.env).handler(c.req.raw))
 ```
 
+- **As built in M5** (`worker/src/auth.ts`, `src/routes/auth.ts`):
+  - **Allow-list.** `/api/auth/*` routes only the endpoints the app uses (get-session, sign-out, social sign-in and
+    the Google callback, magic-link verify, email-OTP sign-in, list/revoke sessions). Everything else is a 404,
+    including `/sign-in/magic-link` and `/email-otp/send-verification-otp`. So the only way to get an email is
+    `POST /api/login/email`: Turnstile, then 5 emails per address per hour and 60 per IP per hour (generous, because
+    mobile carriers put many users behind one IP), then one queued email.
+  - **Rate limits** use `customStorage`: one atomic UPSERT on a small `rate_limit` table, with HMACed keys so no IP or
+    email is stored. Better Auth's own `"database"` storage costs 2–4 queries per request. `customRules` ends with
+    `"/**": false`, so only `/sign-in/email-otp`, `/magic-link/verify` and `/sign-in/social` are limited.
+  - **The emailed link opens the SPA** (`/login/verify#token=…`), which then calls `/api/auth/magic-link/verify`.
+    Link scanners that prefetch URLs can't use up the single-use token, and the fragment never reaches a log.
+  - Tokens and codes are stored hashed (`storeToken` / `storeOTP: "hashed"`), because D1 Time Travel keeps old rows.
+  - Google's OAuth tokens are never stored (an `account` hook nulls them); we only need the identity.
+  - `advanced.database.validateSchema: false`. Otherwise Better Auth introspects the schema once per instance, which
+    means one extra D1 query per request, since the instance is created per request.
+  - The household (with its wrapped DEK and an empty `snapshot` row) is created in `session.create.before`, which
+    covers signup by any method. It's an idempotent batch that also stamps `last_active_at`.
+  - Measured in a test: with a warm cookie cache, a signed-in request makes **0** D1 session queries.
 - **Compatibility:** set `nodejs_compat` in wrangler (it's the default from compatibility date 2026-08-04).
 - **Magic-link tokens** stay in D1, which is the default. Don't use KV as `secondaryStorage`: it is eventually
   consistent and has no atomic get-and-delete, and single-use tokens need both.
@@ -638,22 +661,47 @@ export function createAuth(env: Env) {
    - Add a second client ID for `http://localhost:8787` (dev).
 
 ### 7.3 Email
-- **Interface:** `EmailSender.send({ to, subject, html, text })`, implemented with `ResendSender` (HTTPS API, `RESEND_API_KEY`).
-- **Sender:** "PocketFolio" `login@<APP_DOMAIN>`, with SPF, DKIM and DMARC set in Cloudflare DNS.
+- **Interface:** `EmailSender.send({ to, subject, html, text })`, implemented with `CloudflareEmailSender` over the
+  `send_email` binding `EMAIL` (`env.EMAIL.send({ to, from, subject, html, text })` → `{ messageId }`). It needs no
+  secret. If the beta fails us, a `ResendSender` (HTTPS API, `RESEND_API_KEY`) can be added behind the same interface.
+- **Sender:** "PocketFolio" `login@<APP_DOMAIN>`. ✅ 2026-11-25: the owner onboarded `pocketfolio.in` itself (no
+  subdomain) in Email Sending. Cloudflare manages SPF, DKIM and DMARC, with its bounce records on
+  `cf-bounce.pocketfolio.in`.
+- **Support mailbox:** `support@<APP_DOMAIN>` is received through Cloudflare Email Routing, which forwards it to the
+  owner's inbox. Replies go out through Gmail "Send mail as" over Cloudflare's SMTP (`smtp.mx.cloudflare.net:465`,
+  user `api_token`, password a token with Email Sending: Edit). ✅ M5: Email Routing (root MX) and Email
+  Sending (`cf-bounce` MX) coexist on the same zone. The docs say so ("separate DNS records and separate settings
+  pages … Removing one does not affect the other"), and both record sets are live on `pocketfolio.in`.
 - **Emails at launch:**
   - the sign-in email (magic link plus a 6-digit code, §13A.5)
   - "New device signed in" (after a QR link)
   - "Your account was deleted"
   - the DPDP inactivity notice (§12)
 - **Keep emails plain.** The magic-link email contains no portfolio data: link, expiry, "didn't request this? ignore it".
-- **Sending through a queue.** `sendLoginEmail` puts a message on the `email` queue. The consumer sends the batch with
-  Resend's batch endpoint (up to 100 emails per API call), so a signup burst isn't limited by the per-second API cap
-  (§3.5). Set `max_batch_timeout` to 1 s, so a login email still arrives within seconds. ⚠️ VERIFY: Resend's current
-  per-second rate limit and that a batch call counts as one request. Fallback: send one by one with a consumer
-  `max_concurrency` that matches the limit, and ask Resend to raise it before launch.
+- **Sending through a queue.** `sendLoginEmail` puts a message on the `email` queue. Email Service has no batch
+  endpoint, so the consumer sends each message in the batch with its own `env.EMAIL.send()` call. It acks each one
+  separately. On `E_RATE_LIMIT_EXCEEDED` it retries that message with `retry({ delaySeconds })`. On
+  `E_DAILY_LIMIT_EXCEEDED` it retries later and raises an alert. Permanent errors (`E_RECIPIENT_SUPPRESSED`, invalid
+  address) are acked, logged by code only, and never retried. Set `max_batch_timeout` to 1 s, so a login email still
+  arrives within seconds, and keep `max_concurrency` low (2), because no per-second limit is published. ✅ M5
+  (Email Service docs, 2026-11-25):
+  - **Sender restriction:** `allowed_sender_addresses`. Deploying with the binding needed no extra token permission.
+  - **Local dev:** `wrangler dev` only logs the message and saves it to a temp file. `"remote": true` sends for real.
+  - **Errors:** `send()` throws an `Error` with `.code`. A malformed argument throws a `TypeError` with no code.
+    Codes: `E_RATE_LIMIT_EXCEEDED` and `E_INTERNAL_SERVER_ERROR` / `E_EMAIL_SENDING_NOT_READY` are retried.
+    `E_DAILY_LIMIT_EXCEEDED` is retried and alerted. Config errors (`E_SENDER_*`, `E_RECIPIENT_PLAN_RESTRICTED`,
+    `E_ACCOUNT_SUSPENDED`) are dropped and alerted. Permanent errors (`E_VALIDATION_ERROR`, `E_RECIPIENT_SUPPRESSED`,
+    `E_RECIPIENT_NOT_ALLOWED`, `E_DELIVERY_FAILED`, size and header codes) are dropped.
+  - **Expiry:** a sign-in email older than its 10-minute expiry is dropped instead of sent late.
+  - **Test sink:** with the `EMAIL_SINK_KEY` secret (local and staging only; production's config doesn't list it),
+    `@sink.pocketfolio.test` addresses are written to R2 instead of sent, so `worker/scripts/auth-smoke.ts` can sign
+    in on staging end to end.
 - **Make Google the main sign-in button** (§13). It sends no email, so most signups never touch the email budget.
-- **Budget:** Resend Free allows 100 emails a day and 3,000 a month. That's fine for dev and staging, but **production
-  launches on Pro** ($20/month, 50k). Alert at 80% of the daily or monthly quota (audit event plus a log line).
+- **Budget:** Workers Paid includes 3,000 emails a month, then $0.35 per 1,000. Hard bounces count; sends blocked by the
+  suppression list don't. Sends to the account's *verified destination addresses* are free and don't count, which
+  makes them useful for staging tests. The daily quota for a new account is unpublished: **file Cloudflare's Limit
+  Increase Request before public launch** (M17). Alert at 80% of the monthly allowance, and on any
+  `E_DAILY_LIMIT_EXCEEDED` (audit event plus a log line).
 
 ### 7.4 QR login for a new device (D2) — design
 
@@ -1543,6 +1591,8 @@ integration accept. Switch only if a later wrangler requires `exports`.
     { "binding": "MARKET", "database_name": "pocketfolio-market", "database_id": "…", "migrations_dir": "migrations/market" }
   ],
   "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pocketfolio-data" }],
+  // Cloudflare Email Service (D5). ✅ M5: allowed_sender_addresses.
+  "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["login@pocketfolio.in"] }],
   // R2 lifecycle (set with `wrangler r2 bucket lifecycle add`): prefix "tmp/" → delete after 1 day.
   "queues": {
     "producers": [
@@ -1618,7 +1668,6 @@ integration accept. Switch only if a later wrangler requires `exports`.
 |---|---|
 | `BETTER_AUTH_SECRET` | Better Auth signing secret |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google OAuth client (§7.2) |
-| `RESEND_API_KEY` | magic-link email (§7.3) |
 | `TURNSTILE_SECRET` | Turnstile check on the email form |
 | `DATA_KEK_V1` | key-encryption key (§8) |
 | `PAN_PEPPER` | HMAC key for PANs and file hashes (§8) |
@@ -1626,7 +1675,8 @@ integration accept. Switch only if a later wrangler requires `exports`.
 | `BHARATSTOCK_API_KEY` | stocks fallback (§10.3.1) |
 | `R2_MARKET_READONLY_ACCESS_KEY_ID`, `…_SECRET` | engine reads `market/*` (§10.2) |
 
-Plain vars: `APP_URL`, `BHARATSTOCK_DAILY_LIMIT=50`, `TURNSTILE_SITE_KEY`.
+Plain vars: `APP_URL`, `BHARATSTOCK_DAILY_LIMIT=50`, `TURNSTILE_SITE_KEY`. Email needs no secret: it uses the
+`send_email` binding (D5).
 
 **Remove from the cloud config:** `CASPARSER_API_KEY`, `RAPIDAPI_KEY` and `NUM_PERIODS`. They stay out of the cloud
 until those features ship.
@@ -1729,7 +1779,7 @@ a commit/PR.
 ### Phase 0: Restructure and engine
 - Move `app/` to `/engine/engine/`, add the BytesIO fix, refactor `build_portfolio` to a pure function (§10.2), and
   add `server.py` with `/parse`, `/build` and `/health`, the one-job semaphore and process recycling (§14). Add the Dockerfile.
-- Scaffold `/worker` (Hono, wrangler config with both D1 databases and all four queues, migrations `app/0002_app.sql`)
+- Scaffold `/worker` (Hono, wrangler config with both D1 databases and all four queues, migrations folders)
   and serve `web/dist`.
 - `EngineFast`, `EngineBatch` and `EnginePool` with leases and fill-first routing (§14).
 - **Accept:**
@@ -1744,7 +1794,7 @@ a commit/PR.
     recorded in §3.3 (M3). No fallback needed.
 
 ### Phase 1: Auth
-- Better Auth with Google, magic link (Resend through the `pf-email` queue), Turnstile, session middleware with the
+- Better Auth with Google, magic link (Cloudflare Email Service through the `pf-email` queue), Turnstile, session middleware with the
   cookie cache and `householdId` in the session, the narrowed rate-limit rules, `/api/me`, `/login` page (Google
   primary), avatar menu, sign out, 401 handling.
 - Household (and its empty `snapshot` row) created on first sign-in.
@@ -1807,7 +1857,8 @@ a commit/PR.
   load tests (§16)**, staging soak.
 - Launch checklist:
   - Google in production
-  - domain email authenticated (SPF/DKIM/DMARC), **Resend on Pro**, and the per-second limit confirmed or raised
+  - domain email authenticated (SPF/DKIM/DMARC), the **Email Service daily quota raised** (Limit Increase Request), and sending
+    limits confirmed under the burst load test
   - legal review, including the PDF-handling text (§12)
   - Cloudflare usage alerts (container GiB-hours, D1 rows read, R2 Class A)
   - error alerts on DLQ messages, engine 5xx, D1 "overloaded", and any `queued` parse job older than 1 h (means the queue is stuck)
@@ -1837,14 +1888,14 @@ get a nightly rebuild; parse ~1.5 vCPU-s on average; build ~0.5 vCPU-s.
 | `EngineFast` awake time (`standard-2`, $0.057/h) | ~$2 | ~$20–25 (slot 0 awake ~12 h a day, plus burst slots) |
 | `EngineBatch` awake time (`basic`, $0.010/h) | < $1 | ~$1–2 |
 | NAV store (market D1, ~100–150 MB/year) | included | included |
-| Resend | free (≤100/day) for dev; **Pro $20 at launch** | Pro $20 |
+| Cloudflare Email Service | included (3,000/month) | ~$1–3 (~5–10k emails, mostly magic links; Google sends none) |
 | Better Auth, Turnstile, mfapi, AMC sites | $0 | $0 |
 | BharatStock | free plan | free plan (the scraper takes most of the load) |
-| **Total** | **≈ $7–10 / month (+$20 once on Resend Pro)** | **≈ $50–55 / month** |
+| **Total** | **≈ $7–10 / month** | **≈ $32–38 / month** |
 
 - **What drives the bill:** awake memory of `EngineFast`, not the amount of parsing (§3.6). The biggest lever: if the
   Phase 0 measurements let `EngineFast` run on `basic` at an acceptable p95, the 10k-MAU container line drops from ~$25
-  to ~$5, for a total of ≈ $30–35.
+  to ~$5, for a total of ≈ $13–18.
 - **A 10,000-user burst costs ≈ $0.65–2 extra** (§3.5).
 - The container estimate is still the least certain. Measure it in the Phase 6 load test and the first month, with
   Cloudflare's usage dashboard.
@@ -1854,7 +1905,7 @@ get a nightly rebuild; parse ~1.5 vCPU-s on average; build ~0.5 vCPU-s.
 ## 19. Inputs needed from the owner (not decisions, just values)
 - App name is **PocketFolio** (decided). `<APP_DOMAIN>` = **`pocketfolio.in`** (2026-11-25, DNS on Cloudflare). Still needed: an IP India trademark check.
 - Legal entity name, grievance officer name and email (privacy page, DPDP).
-- Cloudflare account on Workers Paid (✅ 2026-11-25); Resend account (Pro before public launch); Google Cloud project owner account.
+- Cloudflare account on Workers Paid (✅ 2026-11-25); `pocketfolio.in` onboarded in Cloudflare Email Sending (✅ 2026-11-25; quota increase before launch); Google Cloud project owner account.
 - Sign-off on the revised D6 wording (PDFs held encrypted ≤ 24 h only when queued), for the privacy page and consent notice.
 - A large multi-year **detailed** CAMS statement (kept in the git-ignored `engine/tests/private/`), for the Phase 0
   measurements in §3.3. Short KFintech statements were measured on 2026-11-25.
