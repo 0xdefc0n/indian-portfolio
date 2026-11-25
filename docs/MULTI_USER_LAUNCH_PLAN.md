@@ -1649,6 +1649,21 @@ until those features ship.
 - **Domain.** Use a custom domain on Cloudflare. `<APP_DOMAIN>` is needed before Google and email setup.
   - **`<APP_DOMAIN>` = `pocketfolio.in`** (owner, 2026-11-25), with its DNS on Cloudflare. Staging is
     `staging.pocketfolio.in`; production is `pocketfolio.in`.
+- **Staging resources (created in M4, 2026-11-25).** D1 `pocketfolio-app-staging` and `pocketfolio-market-staging`
+  (`apac`), R2 `pocketfolio-data-staging` (`apac`, lifecycle rule `tmp-expire-1d`: `tmp/` → delete after 1 day),
+  queues `pf-{parse,rebuild,market,email}-staging` + `pf-dlq-staging`, Turnstile widget `pocketfolio-staging`
+  (managed, domain `staging.pocketfolio.in`; its site key is the plain var `TURNSTILE_SITE_KEY`). Worker
+  `pocketfolio-staging` on the custom domain `staging.pocketfolio.in`, with `workers_dev` and preview URLs off.
+  - ✅ wrangler 4.168 doesn't inherit bindings, vars, secrets or containers into an environment, so `env.staging` and
+    `env.production` in `worker/wrangler.jsonc` repeat them all. The top level stays the local-dev config. Queue, D1,
+    R2 and container-application names are account-wide, so staging uses a `-staging` suffix. Rate-limit namespace
+    IDs are account-wide too: staging uses `2001`/`2002` and production `1001`/`1002`.
+  - ✅ `wrangler deploy --secrets-file <json>` uploads secrets with the first version, so a new Worker never runs
+    without `ENGINE_SHARED_SECRET`. Secrets are additive across later deploys.
+  - ✅ `wrangler d1 migrations apply DB --remote --env staging` (binding name + env) works, and succeeds on an empty
+    migrations folder.
+  - ✅ Containers and `limits.cpu_ms` are both refused on the Free plan (`containers/me` → 401 "requires the Workers
+    Paid plan"; `cpu_ms` → code 100328). Even `wrangler deploy --dry-run` needs Docker, because it builds the image.
 
 ---
 
