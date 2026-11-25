@@ -6,6 +6,10 @@ BETTER_AUTH_SECRET=
 GOOGLE_CLIENT_ID=            # owner: Google Cloud OAuth Web client (one per environment)
 GOOGLE_CLIENT_SECRET=        # owner
 RESEND_API_KEY=              # owner: Resend, sending access
+STAGING_GOOGLE_CLIENT_ID=     # owner: staging OAuth client (pushed to staging with `wrangler secret put` in M5)
+STAGING_GOOGLE_CLIENT_SECRET= # owner
+TEST_EMAIL_1=                # owner: inboxes you can read, for sign-in tests (M5)
+TEST_EMAIL_2=
 TURNSTILE_SECRET=            # created in M4
 
 # Encryption (M4/M6). Back up DATA_KEK_V1 and PAN_PEPPER in a password manager: losing them makes all data unreadable.
