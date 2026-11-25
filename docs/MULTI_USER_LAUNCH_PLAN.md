@@ -1647,6 +1647,20 @@ until those features ship.
     `… pocketfolio-market --remote`, then `wrangler deploy`).
   - Production: manual approval.
 - **Domain.** Use a custom domain on Cloudflare. `<APP_DOMAIN>` is needed before Google and email setup.
+  - **`<APP_DOMAIN>` = `pocketfolio.in`** (owner, 2026-11-25). It was registered at GoDaddy and its DNS isn't on
+    Cloudflare yet.
+  - **Until it is, staging runs on the account's `workers.dev` URL** (`pocketfolio-staging.<account-subdomain>.workers.dev`).
+    The Turnstile widget's hostnames include that URL.
+  - **Once the zone is active on Cloudflare:**
+    - add the custom domain `staging.pocketfolio.in` (later `pocketfolio.in` for production);
+    - add those hostnames to Turnstile;
+    - narrow the API token's Zone Resources to that zone;
+    - turn the `workers.dev` URL off.
+  - To get the zone active: add `pocketfolio.in` to Cloudflare (Free plan is enough), then set the two Cloudflare
+    nameservers at GoDaddy. A new domain can change nameservers right away. Only moving the *registration* to another
+    registrar is locked for 60 days, and that isn't needed.
+  - Email (Resend, M5) needs DNS records on `pocketfolio.in`, so M5's email part waits for the zone. Google sign-in on
+    staging can use the `workers.dev` URL in the meantime.
 
 ---
 
@@ -1820,9 +1834,10 @@ get a nightly rebuild; parse ~1.5 vCPU-s on average; build ~0.5 vCPU-s.
 ---
 
 ## 19. Inputs needed from the owner (not decisions, just values)
-- App name is **PocketFolio** (decided). Still needed: `<APP_DOMAIN>` (for Google, email and cookies) and an IP India trademark check.
+- App name is **PocketFolio** (decided). `<APP_DOMAIN>` = **`pocketfolio.in`** (2026-11-25; DNS moving to Cloudflare,
+  see §15.3). Still needed: an IP India trademark check.
 - Legal entity name, grievance officer name and email (privacy page, DPDP).
-- Cloudflare account on Workers Paid; Resend account (Pro before public launch); Google Cloud project owner account.
+- Cloudflare account on Workers Paid (✅ 2026-11-25); Resend account (Pro before public launch); Google Cloud project owner account.
 - Sign-off on the revised D6 wording (PDFs held encrypted ≤ 24 h only when queued), for the privacy page and consent notice.
 - A large multi-year **detailed** CAMS statement (kept in the git-ignored `engine/tests/private/`), for the Phase 0
   measurements in §3.3. Short KFintech statements were measured on 2026-11-25.
