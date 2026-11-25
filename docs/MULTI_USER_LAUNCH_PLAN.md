@@ -1076,7 +1076,7 @@ CREATE TABLE nav_backfill (
 |---|---|---|
 | `nav-ingest` | `30 17 * * *` (23:00), `30 20 * * *` (02:00), `30 1 * * *` (07:00), `30 4 * * *` (10:00, late overseas FoFs) | 1. One fetch of `NAVAll.txt`. 2. Parse it (§10.4.4). 3. Upsert `scheme`, skipping unchanged rows (§10.4.2). 4. Insert `nav` rows `ON CONFLICT DO NOTHING`, 30 rows per statement (D1 allows ≤ 100 bound params), in `batch()` calls, split through the queue if a run gets near 1,000 queries. 5. Recompute `market_day` for the dates touched. 6. Write the R2 series for tracked schemes that changed. 7. Mark a date `final` when `tracked_updated / tracked_total ≥ 0.98`, or at the 10:00 IST run. Becoming final triggers `snapshot-prebuild` once for that date. Re-runs are no-ops. |
 | `nav-backfill` | Queue message when a new `tracked_scheme` appears | mfapi full history into `nav`. On failure, use the AMFI history report for that scheme's AMC in 90-day chunks back to the first transaction date found in statements (pass only the date, no user data). Set `nav_backfill.status`. |
-| `nav-repair` | `0 3 * * 0` (Sunday 08:30) | For the last 30 business days, find tracked schemes missing a NAV on a date where `market_day.schemes_updated` is high. Fetch the AMFI history report for those dates and insert. Log counts only. |
+| `nav-repair` | `0 3 * * SUN` (Sunday 08:30; Cloudflare rejects `0` for Sunday) | For the last 30 business days, find tracked schemes missing a NAV on a date where `market_day.schemes_updated` is high. Fetch the AMFI history report for those dates and insert. Log counts only. |
 
 Scheduled runs handle failures this way: retry with backoff, log `error_class`, and raise an alert when a run fetches
 nothing two times in a row.
@@ -1560,7 +1560,7 @@ integration accept. Switch only if a later wrangler requires `exports`.
   },
   // max_concurrency of pf-parse / pf-rebuild must equal the EngineFast / EngineBatch pool caps (§14).
   // Retries that only waited for a slot use msg.retry({ delaySeconds }) and don't count as attempts (tracked in parse_job.attempts).
-  "triggers": { "crons": ["30 17 * * *", "30 20 * * *", "30 1 * * *", "30 4 * * *", "0 5 * * *", "0 3 * * 0", "0 5 10-20 * *", "0 21 * * *", "15 * * * *"] },
+  "triggers": { "crons": ["30 17 * * *", "30 20 * * *", "30 1 * * *", "30 4 * * *", "0 5 * * *", "0 3 * * SUN", "0 5 10-20 * *", "0 21 * * *", "15 * * * *"] },
   // nav-ingest ×4 (23:00, 02:00, 07:00, 10:00 IST), snapshot-prebuild fallback, nav-repair (Sun), stocks, cleanup, tmp-sweep (hourly).
   // ⚠️ "0 5 * * *" serves both prebuild and stocks on the 10th–20th: dispatch on event.cron in scheduled().
   "ratelimits": [
@@ -1598,8 +1598,12 @@ integration accept. Switch only if a later wrangler requires `exports`.
   `env.ENGINE_FAST.getByName(lease.name)`. No `getRandom`.
 - **Locality.** Pick the D1 (both databases) and R2 location hint `apac` at creation. Containers: with the
   `durable_object` policy, instances run near their Durable Object. Create the engine and pool objects from an APAC
-  request, or with a location hint (⚠️ VERIFY: whether DO location hints or the DO data-location API apply to container
-  placement; fallback: accept Cloudflare's placement and say so in §12's cross-border text).
+  request, or with a location hint. Fallback taken in M4: accept Cloudflare's placement and say so in §12's
+  cross-border text. `wrangler containers instances` reports `location: null`, so staging can't show where an
+  instance runs, and `constraints.regions` is rejected under `durable_object` (below). Measured from India on
+  2026-11-25, the edge was `MRS`. A warm `/api/health` (Worker → pool → container) took ~0.50 s, against ~0.44 s
+  for a static asset or a Worker-only 404, so the DO + container hop adds ~60 ms. A cold start took ~11 s, the first
+  run after an image rollout.
   M2 note for M4: the Containers platform docs now say "Durable Objects and their associated Container instances are
   not guaranteed to run in the same location". `constraints.regions` is rejected under `durable_object`, since only
   name, class_name, scheduling_policy, images, observability and ssh are allowed. Expect the fallback, and check real
@@ -1662,6 +1666,11 @@ until those features ship.
     without `ENGINE_SHARED_SECRET`. Secrets are additive across later deploys.
   - ✅ `wrangler d1 migrations apply DB --remote --env staging` (binding name + env) works, and succeeds on an empty
     migrations folder.
+  - ✅ Cloudflare cron day-of-week is `1–7` or `SUN–SAT`. `0 3 * * 0` is rejected (code 10100), although local
+    wrangler accepts it, so nav-repair is `0 3 * * SUN`.
+  - ✅ First deploy (wrangler 4.168, from a laptop): image build + push + upload took ~2 min.
+    `https://staging.pocketfolio.in/api/health` → `{"ok":true,…,"slot":"EngineFast-0"}`, the SPA and its fallback
+    → 200, and `/api/nope` → JSON 404.
   - ✅ Containers and `limits.cpu_ms` are both refused on the Free plan (`containers/me` → 401 "requires the Workers
     Paid plan"; `cpu_ms` → code 100328). Even `wrangler deploy --dry-run` needs Docker, because it builds the image.
 
