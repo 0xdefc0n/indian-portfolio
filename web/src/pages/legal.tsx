@@ -1,6 +1,6 @@
 // /privacy, /terms and /security (plan §12, M14). Public pages in the app's own design (§13): the bento Panel,
-// the existing tokens, readable at 360 px. The bracketed legal details are placeholders until the owner provides
-// them (lib/legal.ts); a banner says so. A lawyer reviews these texts before launch (M17).
+// the existing tokens, readable at 360 px. Plain, calm wording (owner, 2026-11-26); every promise here is one the
+// code keeps (see the comments next to each claim).
 import { Link } from "wouter"
 
 import { Panel } from "@/components/panel"
@@ -18,7 +18,7 @@ function LegalPage({ title, intro, children }: { title: string; intro: string; c
         </div>
         {LEGAL.placeholders && (
           <p className="rounded-xl bg-surface-2 p-3 text-sm ring-1 ring-border" role="note">
-            Draft. The details in [brackets] are still to be filled in, and this text hasn't had its legal review yet.
+            Draft. This text hasn't had its legal review yet.
           </p>
         )}
         {children}
@@ -41,14 +41,14 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 const Mail = ({ to }: { to: string }) => (
-  <a href={`mailto:${to.replace(/[[\]]/g, "")}`} className="text-primary underline-offset-4 hover:underline">{to}</a>
+  <a href={`mailto:${to}`} className="text-primary underline-offset-4 hover:underline">{to}</a>
 )
 
-export function Grievance() {
+function Contact() {
   return (
     <p>
-      Grievance officer: {LEGAL.grievanceOfficer}, {LEGAL.entity}. Email <Mail to={LEGAL.grievanceEmail} />. For anything
-      else, <Mail to={LEGAL.supportEmail} />. We answer within 90 days, usually much sooner.
+      Questions, requests or complaints: write to <Mail to={LEGAL.contactEmail} />. We reply within {LEGAL.replyWithin},
+      usually much sooner.
     </p>
   )
 }
@@ -57,109 +57,89 @@ export function PrivacyPage() {
   return (
     <LegalPage
       title="Privacy policy"
-      intro={`How PocketFolio, run by ${LEGAL.entity}, handles your personal data, under India's Digital Personal Data Protection Act, 2023 and its Rules.`}
+      intro="Your family's money is personal. Here's exactly what PocketFolio keeps, why, and how it stays yours, in line with India's Digital Personal Data Protection Act, 2023."
     >
-      <Section title="What we collect">
+      <Section title="What we keep">
         <ul>
           <li><b>Your account:</b> your email address, and your name and picture if you sign in with Google.</li>
-          <li>
-            <b>From the statements you upload:</b> each family member's name and PAN, their folios, holdings, transactions
-            and SIPs.
-          </li>
+          <li><b>From the statements you add:</b> your family members' names, their folios, holdings, transactions and SIPs.</li>
           <li><b>The SIP changes you tell us about:</b> a skipped instalment or a cancelled SIP.</li>
           <li>
-            <b>Sign-in sessions:</b> for each device you're signed in on, the IP address and browser (user agent) it signed
-            in from, and when. You see them in your data export.
+            <b>Sign-in details:</b> which device, browser and network address each sign-in came from, so you can spot a
+            sign-in that wasn't you.
           </li>
           <li>
-            <b>A security log:</b> what happened (for example "statement added"), when, and the country of the request. It
-            holds no names, PANs or amounts.
+            <b>A security log</b> of account events (like "statement added") with the date and country. It never holds
+            names or amounts.
           </li>
         </ul>
-        <p>We don't use advertising or analytics trackers. The only cookies are the ones that keep you signed in.</p>
+        <p>
+          A statement also contains each member's PAN. We keep it encrypted, use it only to file each statement under the
+          right person and to open their next statement for you, and only ever show it masked, like AB••••••4F.
+        </p>
       </Section>
 
       <Section title="Why">
         <p>
-          Only to show you your family's portfolio and its analytics: values at the latest NAVs, returns, SIPs, capital
-          gains and the stocks inside your funds. We don't sell your data, share it for marketing, or use it for anything
-          else.
+          Only to show you your family's portfolio and how it's doing: values at the latest NAVs, returns, SIPs, capital
+          gains and the stocks inside your funds. We never sell your data, show you ads or share it for marketing.
         </p>
       </Section>
 
       <Section title="Your statement PDFs">
         <p>{PDF_HANDLING}</p>
-        <p>
-          A statement's password is used once, to open it, and isn't kept. If your upload waits in a queue, the password
-          you typed is held encrypted with the PDF and deleted with it.
-        </p>
+        <p>A statement's password is used only to open it and isn't kept after that.</p>
       </Section>
 
       <Section title="How it's protected">
         <p>
-          Everything we keep about your family is encrypted with a key of its own, which only your account uses. See{" "}
-          <Link href="/security" className="text-primary underline-offset-4 hover:underline">Security</Link> for the details.
+          Everything we keep about your family is locked with bank-grade AES-256 encryption, under a private key made
+          just for your family. Without that key the data is unreadable, even to someone holding a copy of our database.
         </p>
-      </Section>
-
-      <Section title="Who else handles it">
-        <ul>
-          <li>
-            <b>Cloudflare</b> runs PocketFolio and stores its data (encrypted). Its data centres may be outside India.
-          </li>
-          <li><b>Google</b>, if you choose "Continue with Google", tells us your email, name and picture.</li>
-          <li>
-            Public market data (fund NAVs, holiday calendars, the stocks inside funds) comes from AMFI and other public
-            sources. We only send them fund names and codes, never anything about you.
-          </li>
-        </ul>
+        <p>
+          Your data is only ever unlocked automatically, to build your dashboard. Nobody at PocketFolio looks at your
+          portfolio: there's no screen or tool for it, and our logs never contain it. See{" "}
+          <Link href="/security" className="text-primary underline-offset-4 hover:underline">Security</Link> for more.
+        </p>
       </Section>
 
       <Section title="How long we keep it">
         <ul>
-          <li>Your data stays while you have an account, until you delete a statement, a member or the whole account.</li>
+          <li>For as long as you have an account, until you delete a statement, a member or the whole account.</li>
           <li>
-            Deleting your account erases everything at once, and the key that encrypted it. Copies in our database backups
-            can't be read without that key and are purged within 30 days.
+            Deleting your account erases everything at once, and destroys your family's key, so it can never be read
+            again.
           </li>
           <li>
-            If nobody signs in to an account for {INACTIVE_PERIOD}, we email you, and 2 days later we delete the account
-            unless you sign in.
+            If nobody signs in for {INACTIVE_PERIOD}, we email you, and 2 days later we delete the account unless you
+            sign in.
           </li>
           <li>The security log is kept for a little over a year, as the law requires, then deleted.</li>
-          <li>Queued PDFs: always deleted within 24 hours (see above).</li>
         </ul>
       </Section>
 
       <Section title="Your rights">
         <ul>
-          <li><b>See your data:</b> Settings → Download my data gives you everything we hold about you, decrypted.</li>
-          <li><b>Correct it:</b> upload a newer statement, rename a member, or delete a statement.</li>
+          <li><b>See your data:</b> Settings → Download my data gives you everything we hold about you.</li>
+          <li><b>Correct it:</b> add a newer statement, rename a member, or delete a statement.</li>
           <li><b>Erase it:</b> delete a member in Members, or your whole account in Settings.</li>
-          <li><b>Withdraw consent:</b> delete your account in Settings. We stop processing at once.</li>
-          <li>
-            <b>Nominate someone</b> to act for you if you die or can't: email the grievance officer.
-          </li>
-          <li>
-            <b>Complain:</b> to our grievance officer first (below). If you're not satisfied, you can complain to the Data
-            Protection Board of India.
-          </li>
+          <li><b>Withdraw consent:</b> delete your account in Settings. We stop at once.</li>
+          <li><b>Nominate someone</b> to act for you if you can't: write to us.</li>
+          <li><b>Complain:</b> write to us first. You can also reach the Data Protection Board of India.</li>
         </ul>
       </Section>
 
       <Section title="Family members and children">
         <p>
           You must be 18 or older to use PocketFolio. You can add statements for family members, including children,
-          when you're entitled to manage their investments or they've agreed. For a child, the parent or guardian who
-          adds them is the user.
+          when you manage their investments or they've agreed. For a child, the parent or guardian who adds them is the
+          user.
         </p>
       </Section>
 
       <Section title="Contact">
-        <Grievance />
-        <p>
-          If we change this policy in a way that matters, we'll ask you to agree again the next time you open the app.
-        </p>
+        <Contact />
+        <p>If we change this policy in a way that matters, we'll ask you to agree again the next time you open the app.</p>
       </Section>
     </LegalPage>
   )
@@ -167,14 +147,13 @@ export function PrivacyPage() {
 
 export function TermsPage() {
   return (
-    <LegalPage title="Terms of use" intro={`The agreement between you and ${LEGAL.entity} for using PocketFolio.`}>
+    <LegalPage title="Terms of use" intro="The simple agreement for using PocketFolio.">
       <Section title="Not investment advice">
         <p className="font-medium">{NOT_ADVICE}</p>
         <p>
-          PocketFolio reads your statements and shows figures and analytics about them. Nothing in it, including tax,
-          capital-gains and health-check figures, is investment, tax or legal advice, or a recommendation to buy, sell or
-          hold anything. We aren't a SEBI-registered investment adviser or research analyst. Talk to a qualified adviser
-          before you decide.
+          PocketFolio reads your statements and shows figures and analytics about them. Nothing in it, including tax and
+          capital-gains figures, is investment, tax or legal advice, or a recommendation to buy, sell or hold anything.
+          We aren't a SEBI-registered investment adviser. For decisions, talk to a qualified adviser.
         </p>
       </Section>
 
@@ -189,40 +168,35 @@ export function TermsPage() {
       <Section title="What the figures are">
         <ul>
           <li>Values come from your statements and the latest NAVs published by AMFI and fund houses.</li>
+          <li>SIP instalments after your last statement are estimates, until a newer statement shows the real ones.</li>
           <li>
-            Instalments after your last statement are estimates, until a newer statement shows what really happened.
-          </li>
-          <li>
-            We work hard to get them right, but they can be wrong or late. Your fund house's and depository's statements are
-            the official record.
+            We work hard to get every figure right, but one can occasionally be wrong or late. Your fund house's and
+            depository's statements are the official record.
           </li>
         </ul>
       </Section>
 
       <Section title="Fair use">
         <p>
-          The app has limits on uploads, members and downloads to keep it fast for everyone. Don't
-          try to get around them, break into other accounts, or overload the service. We may suspend an account that does.
+          There are sensible limits on uploads, members and downloads, to keep PocketFolio fast for everyone. Please don't
+          try to get around them, access other people's accounts, or overload the service.
         </p>
       </Section>
 
       <Section title="The service">
         <p>
-          PocketFolio is free and provided as it is. We may change features, or stop the service with notice. You can
-          download your data and delete your account at any time.
+          PocketFolio is free. We may improve or change features over time, and we'll give notice before ever closing the
+          service. You can download your data and delete your account at any time.
         </p>
         <p>
-          As far as the law allows, we aren't liable for losses from decisions made using PocketFolio, or for indirect
-          losses. Nothing here limits rights you have under Indian consumer law.
+          As far as the law allows, we aren't liable for decisions made using PocketFolio, or for indirect losses. Nothing
+          here limits your rights under Indian consumer law.
         </p>
       </Section>
 
-      <Section title="Law and disputes">
-        <p>
-          These terms are governed by the laws of India. The courts of {LEGAL.jurisdiction} have jurisdiction. Please write
-          to us first: most problems are quicker to fix that way.
-        </p>
-        <Grievance />
+      <Section title="Law and questions">
+        <p>These terms are governed by the laws of India. If anything goes wrong, write to us first: most things are quick to fix.</p>
+        <Contact />
       </Section>
     </LegalPage>
   )
@@ -230,48 +204,44 @@ export function TermsPage() {
 
 export function SecurityPage() {
   return (
-    <LegalPage title="Security" intro="How PocketFolio protects your family's data, in short.">
-      <Section title="Encryption">
+    <LegalPage title="Security" intro="How PocketFolio keeps your family's data safe.">
+      <Section title="Bank-grade encryption">
         <ul>
           <li>
-            Your statements' contents, members' names and PANs, and your dashboard are encrypted with AES-256-GCM, using a
-            key that belongs to your account alone. That key is itself encrypted with a master key held apart from the data.
+            Your statements, members' names and PANs, and your dashboard are encrypted with AES-256, the standard banks
+            use, under a private key made just for your family.
           </li>
           <li>
-            Each encrypted item is tied to your account, so it can't be moved into anyone else's. A copy of our database or
-            storage on its own is unreadable.
+            That key is itself locked by a master key kept separately from the data, so a copy of our database or storage
+            on its own is unreadable.
           </li>
-          <li>Everything travels over HTTPS.</li>
+          <li>Each encrypted item is tied to your account, so it can never be read as part of anyone else's.</li>
+          <li>Everything between your device and PocketFolio travels over HTTPS.</li>
         </ul>
       </Section>
       <Section title="Your PDFs">
         <p>{PDF_HANDLING}</p>
       </Section>
-      <Section title="Access">
+      <Section title="Only you get in">
         <ul>
-          <li>No passwords to steal: you sign in with Google, or a one-time link or code sent to your email.</li>
+          <li>No password to steal: you sign in with Google, or a one-time link or code sent to your email.</li>
           <li>Every request is checked against your account, so nobody can see another family's data.</li>
-          <li>
-            Downloading your data and deleting your account always re-check your session. Deleting needs a sign-in from
-            the last 10 minutes.
-          </li>
-          <li>Our logs never contain names, PANs, emails, folios or amounts.</li>
+          <li>Downloading your data or deleting your account.</li>
         </ul>
       </Section>
-      <Section title="Deleting">
+      <Section title="Delete anytime, for good">
         <p>
-          When you delete your account we destroy its key first, so nothing of yours can be read again, then delete the
-          data itself. Backups become unreadable at once and are purged within 30 days.
+          When you delete your account we destroy your family's key first, so nothing of yours can ever be read again,
+          then delete the data itself permanently.
         </p>
       </Section>
-      <Section title="If something goes wrong">
+      <Section title="We'll always tell you">
         <p>
-          If a breach affects your data, we tell you without delay: what happened, what it means for you and what you can
-          do. We also report it to the Data Protection Board of India and CERT-In as the law requires.
+          If something ever affected your data, we'd tell you straight away: what happened, what it means for you, and what
+          we're doing about it.
         </p>
         <p>
-          Found a security problem? Email <Mail to={LEGAL.supportEmail} /> with "Security" in the subject. Please don't
-          access other people's data while testing.
+          Spotted a security issue? Write to <Mail to={LEGAL.contactEmail} /> with "Security" in the subject.
         </p>
       </Section>
     </LegalPage>

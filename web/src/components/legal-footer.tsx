@@ -16,7 +16,7 @@ export function LegalFooter({ className }: { className?: string }) {
           <Link href="/privacy" className={linkClass}>Privacy</Link>
           <Link href="/terms" className={linkClass}>Terms</Link>
           <Link href="/security" className={linkClass}>Security</Link>
-          <a href={`mailto:${LEGAL.grievanceEmail.replace(/[[\]]/g, "")}`} className={linkClass}>Grievances</a>
+          <a href={`mailto:${LEGAL.contactEmail}`} className={linkClass}>Contact</a>
         </nav>
       </div>
     </footer>

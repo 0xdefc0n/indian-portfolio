@@ -1546,8 +1546,9 @@ review before launch.
 
 ✅ M14 as built: the pages and the consent screen are in `web/src/pages/legal.tsx` and `consent.tsx`. The notice
 version is `NOTICE_VERSION` in `worker/src/lib/consent.ts` and `web/src/lib/legal.ts`; they must match, and a bump asks
-everyone again. The legal details are in `web/src/lib/legal.ts`: entity "PocketFolio", grievance email
-`support@pocketfolio.in`, jurisdiction Gujarat (owner, 2026-11-26); the grievance officer's name is still to come.
+everyone again. The legal details are in `web/src/lib/legal.ts`: entity "PocketFolio"; questions and
+complaints go to `support@pocketfolio.in`, answered within 30 days; no named officer and no court named (owner,
+2026-11-26). User-facing text names no hosting provider or data location (owner); Rule 3 doesn't require either.
 **The lawyer review is deferred about 6 months** (owner, 2026-11-26: no budget yet), so it no longer gates M17. The footer (every page, including /login) carries "Not investment advice" and the legal links. The tax-harvest
 and health-check panels aren't in the UI yet; the fund dialog's tax split has the disclaimer inline. The emails ("Your
 account was deleted", the inactivity notice) are in `src/lib/email.ts`. Breach plan: `docs/INCIDENT_RESPONSE.md`.
