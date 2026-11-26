@@ -2008,7 +2008,9 @@ get a nightly rebuild; parse ~1.5 vCPU-s on average; build ~0.5 vCPU-s.
 - Shared households (invite a spouse with roles), billing and plans, an NSDL CAS parser, and a native mobile app.
 - Daily web push ("PocketFolio today: +₹2,340") after the market day is final. Needs the installed PWA on iOS
   (16.4+), the user's opt-in and VAPID keys. It builds on §10.5 and §13A.
-- Exchange prices for ETFs and stocks held in CDSL, so they're included in daily returns.
+- Exchange prices for ETFs and stocks held in CDSL, so they're included in daily returns. Scheduled as M20 (after launch).
+- Manually entered FD, PPF and EPF with approximate returns (M19), and stock gains from broker tradebooks or manual buy
+  prices (M21). Owner request, 2026-11-26; see `docs/MILESTONES.md` Phase 8. Design to be written before each starts.
 - A Python Worker for the engine, if Pyodide memory limits and the `pillow`/`rapidfuzz` gaps change (re-run the §3.1 test).
 - **A per-household Durable Object** for live status over WebSocket (hibernating), instead of polling. It would also
   serialise that household's rebuilds natively. Worth it only if polling shows up in D1 load after launch.

@@ -33,6 +33,9 @@ Claude updates this table at the end of every milestone.
 | M16 | Hardening and load tests | 6 | todo | | | |
 | M17 | Production launch | 6 | todo | | | |
 | M18 | AMC disclosure scraper (after launch) | 7 | todo | | | |
+| M19 | Manual assets: FD, PPF, EPF (after launch) | 8 | todo | | | |
+| M20 | Stock and ETF prices (after launch) | 8 | todo | | | |
+| M21 | Stock gains: buy prices and corporate actions (after launch) | 8 | todo | | | |
 
 Status values: `todo` · `in progress` · `blocked (needs owner: …)` · `done`.
 
@@ -375,6 +378,63 @@ data and nothing else.
 **Build:** the adapter framework, the top 10 AMC adapters (each with its own ⚠️ VERIFY notes at the top of the file),
 `scrape_run` monitoring, and BharatStock limited to the gaps.
 **Done when:** ≥ 80% of tracked equity schemes have `source='amc'` holdings by day 15 of the month.
+
+## Phase 8: beyond mutual funds (after launch; owner request, 2026-11-26)
+These extend tracking to stocks/ETFs and to manually entered instruments. The plan has no design for them yet: the
+first session of each milestone writes the plan section (data model, API, UI, privacy), gets the owner's OK on it, and
+only then builds. Keep the design system (plan §13), tenant guard (§9.1) and encryption (§8) as for everything else.
+
+## M19: Manual assets: FD, PPF, EPF (after launch)
+**Goal:** a family adds fixed deposits, PPF and EPF by hand and sees an approximate current value and return next to
+their funds.
+**Read:** plan §6 (member), §8, §9.1, §10.2, §13.
+**Needs from owner:** OK on the plan section written in the first session (which instruments, which inputs).
+**Build:**
+- **Members without a statement.** Today a member exists only from a statement, and `member.pan_hmac` is NOT NULL (D19).
+  Decide (in the plan section) between members added by hand (name, optional PAN) or assets owned by the household with
+  an optional member, and migrate accordingly.
+- `manual_asset` table (D1): household-scoped, inputs sealed with the household DEK (amounts are personal financial
+  data). Per type: FD (principal, rate, compounding, start, maturity, payout or cumulative), PPF (yearly deposits, start
+  year), EPF (balance on a date, monthly contribution). CRUD API behind the tenant guard.
+- A pure, unit-tested calculator in the Worker (`lib/manual-assets.ts`): FD compound interest, PPF yearly at the
+  government rate, EPF monthly at the EPFO rate. A small rate table (PPF quarterly, EPF yearly) with a user override.
+  Values are labelled "approximate".
+- `GET /api/portfolio` adds them at read time (no engine rebuild). Totals and asset allocation include them (Debt /
+  Fixed income). Export (M14) and account deletion include them.
+- Frontend: add/edit/delete forms in the existing dialog style, a section on the dashboard and in Members.
+
+**Done when:** golden tests for each calculator (including a premature FD, a PPF with irregular deposits, and an EPF
+rate change mid-year); isolation tests (another household gets 404); no plaintext amounts in D1; the screens are checked
+at 360 px and desktop, dark and light.
+
+## M20: Stock and ETF prices (after launch)
+**Goal:** stocks and ETFs already in CDSL statements are valued at the latest exchange price and are included in daily
+returns.
+**Read:** plan §10.4 (the NAV store pattern), §10.5, §20 ("Exchange prices for ETFs and stocks").
+**Needs from owner:** none expected (public NSE/BSE end-of-day files); confirm the source in the plan section.
+**Build:**
+- An end-of-day price table in `pocketfolio-market` and an ingest job modelled on `nav-ingest` (NSE/BSE bhavcopy by
+  ISIN), with ⚠️ VERIFY notes for the source format and terms.
+- Track the equity ISINs seen in statements (like `tracked_scheme`).
+- The snapshot values "Stocks & bonds" holdings at the latest price instead of the statement's; daily returns
+  (§10.5) include them.
+- Frontend: show stocks and ETFs in holdings and allocation, with the price date.
+
+**Done when:** the ingest parses saved public files (committed fixtures), idempotent re-runs insert 0 rows, a CDSL
+statement's stocks are revalued in a snapshot test, and daily returns include them.
+
+## M21: Stock gains: buy prices and corporate actions (after launch)
+**Goal:** gains, XIRR and capital-gains tax for stocks and ETFs, as for funds.
+**Read:** plan §10.2, the engine's `analysis.py` (FIFO, LTCG), and the M20 section.
+**Needs from owner:** which brokers to support first (tradebook formats), and OK on the plan section.
+**Build:**
+- CDSL statements carry holdings but usually no buy prices. Add one or both: a broker tradebook / P&L import (one
+  parser per broker, in the engine, same privacy rules as statements) and a manual average buy price per holding.
+- Corporate actions (splits, bonuses, dividends) adjusting units and cost.
+- Reuse the FIFO and LTCG/STCG logic for listed equity.
+
+**Done when:** golden tests for FIFO with a split and a bonus, a parser test per supported broker on synthetic files,
+and private tradebooks checked with counts only.
 
 ---
 
