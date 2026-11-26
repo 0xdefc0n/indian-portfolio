@@ -228,6 +228,7 @@ export const jobMessage = (code: string | null) => (code && MESSAGES[code]) || M
 
 const MESSAGES: Record<string, string> = {
   invalid_email: "Enter a valid email address.",
+  disposable_email: "That looks like a temporary email address. Use an inbox you'll keep, or continue with Google.",
   turnstile_failed: "We couldn't check that you're not a bot. Try again.",
   rate_limited: "Too many sign-in emails. Wait a bit, then try again.",
   INVALID_OTP: "That code didn't work. Check it and try again.",

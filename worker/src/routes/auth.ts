@@ -1,6 +1,7 @@
 // Sign-in routes (plan §7.1, §7.3, §13A.5).
 import { Hono } from 'hono'
 import { createAuth, type LoginCapture } from '../auth'
+import { allowedForLogin } from '../lib/disposable'
 import { isSinkAddress, sinkEnabled, sinkKeyValid, takeSink, type EmailJob } from '../lib/email'
 import { consume } from '../lib/rate-limit'
 import { verifyTurnstile } from '../lib/turnstile'
@@ -42,6 +43,13 @@ authRoutes.post('/login/email', async (c) => {
   const body = await c.req.json<{ email?: unknown; turnstile_token?: unknown }>().catch(() => ({}) as Record<string, unknown>)
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
   if (!EMAIL_RE.test(email) || email.length > 254) return c.json({ ok: false, code: 'invalid_email' }, 400)
+
+  // Before Turnstile, so the user's token isn't spent and they can retry with another address at once (§21.7).
+  // Existing users on a listed domain still sign in. The log carries the outcome code only: no address, no domain.
+  if (!(await allowedForLogin(c.env.DB, email))) {
+    console.log('login_email_refused', 'disposable_email')
+    return c.json({ ok: false, code: 'disposable_email' }, 400)
+  }
 
   const ip = c.req.header('cf-connecting-ip') ?? null
   // Automated staging tests: a sink address with the sink key skips Turnstile. Production has no sink key.

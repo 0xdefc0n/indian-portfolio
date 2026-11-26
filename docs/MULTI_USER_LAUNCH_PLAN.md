@@ -2324,6 +2324,16 @@ encryption, and demo data only in every screenshot, image and post.
 - An open-source disposable-domain list is bundled at build time. The check runs in `POST /api/login/email` before
   Turnstile and before an email is queued: `400 disposable_email`. Existing users on a listed domain still sign in.
   Logs carry the outcome code only, never the address or the domain.
+- ✅ M22 (2026-11-27): the list is npm `disposable-email-domains-js` (2.4.0, **CC0**, no dependencies, ~200 KB,
+  10,455 domains). It is a packaging of the main upstream list `disposable-email-domains/disposable-email-domains`
+  (CC0, ~5.8k stars, updated within the last day), released several times a month (2.0–2.4 in Nov 2026). Its
+  `isDisposableEmailDomain` is case-insensitive and checks every parent domain, so subdomains count. The older
+  `disposable-email-domains` package (ivolo, MIT) hasn't been published since 2022, so it wasn't used.
+- **As built** (`worker/src/lib/disposable.ts`): the check runs after the address format check and before Turnstile.
+  Only a listed domain costs a D1 read (`SELECT 1 FROM "user" WHERE email = ?`). A refusal doesn't count against the
+  per-address or per-IP limits, and the log line is `login_email_refused disposable_email`. Trade-off: because the
+  check runs before Turnstile, someone could find out without a token whether an account exists for a
+  *disposable* address (only those). That's accepted, since those accounts are the ones we don't want anyway.
 
 ### 21.8 AI portfolio analysis (D26, M31, M32)
 - **Model:** chosen in M31 from the measured cost per analysis: Workers AI (stays inside Cloudflare, no new
