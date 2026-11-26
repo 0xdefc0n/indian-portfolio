@@ -28,3 +28,17 @@ describe('EnginePool Durable Object', () => {
     expect((await after.status()).batch).toMatchObject({ busy: 0, avg_ms: 3000 })
   })
 })
+
+describe('EnginePool parked-PDF counter', () => {
+  it('is kept across eviction, and unpark with a ticket also drops the waiter', async () => {
+    const pool = env.ENGINE_POOL.getByName('pool-park-test')
+    for (let i = 0; i < 3; i++) await pool.acquire({ cls: 'fast' })
+    const r = await pool.acquire({ cls: 'fast', wait: true, park: 1234 })
+    if (r.ok || r.code !== 'busy') throw new Error('expected busy')
+    await evictDurableObject(pool)
+    const after = env.ENGINE_POOL.getByName('pool-park-test')
+    expect(await after.status()).toMatchObject({ parked: { objects: 1, bytes: 1234 }, fast: { waiting: 1 } })
+    await after.unpark(1234, r.ticket)
+    expect(await after.status()).toMatchObject({ parked: { objects: 0, bytes: 0 }, fast: { waiting: 0 } })
+  })
+})

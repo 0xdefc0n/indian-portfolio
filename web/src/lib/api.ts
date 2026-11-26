@@ -141,11 +141,30 @@ export type AddedStatement = {
   member: { id: string; name: string | null; pan_masked: string; created: boolean }
 }
 
+/** POST /api/statements, queued path (plan §10.1 D7): every check passed and the PDF waits for an engine slot. */
+export type QueuedUpload = { job: { id: string; position: number; eta_s: number } }
+
+/** GET /api/jobs (plan §9.2). No PDF data, names or PANs: a finished job points at its statement. */
+export type JobStatus = "queued" | "parsing" | "done" | "failed" | "expired"
+export type Job = {
+  id: string
+  status: JobStatus
+  position: number | null // 1 = next in line; only while queued
+  eta_s: number | null
+  error_code: string | null
+  statement_id: string | null
+  created_at: number
+}
+export type JobDetail = Job & Partial<AddedStatement>
+
 export type StatementRequestResult =
   | { mode: "sent"; password: string; msg: string }
   | { mode: "manual"; password: string; form_url: string }
 
 /** Safe, user-facing copy for the Worker's error codes ({ ok: false, code }). */
+/** The safe message for a failed job's code (plan §13 item 5). */
+export const jobMessage = (code: string | null) => (code && MESSAGES[code]) || MESSAGES.parse_error
+
 const MESSAGES: Record<string, string> = {
   invalid_email: "Enter a valid email address.",
   turnstile_failed: "We couldn't check that you're not a bot. Try again.",
@@ -174,6 +193,10 @@ const MESSAGES: Record<string, string> = {
   precheck_disagree: "We couldn't read this statement. Try again, or try the other statement type.",
   parse_timeout: "Reading this statement took too long. Try again in a minute.",
   busy: "We're reading a lot of statements right now. Try again in a few seconds.",
+  queue_full: "We're reading a lot of statements right now. Try again in a few minutes.",
+  job_running: "This statement is being read right now. It'll be done in a moment.",
+  password_unavailable: "The password for this statement expired before we could read it. Add it again.",
+  expired: "We couldn't read this statement in time. Add it again.",
   engine_unavailable: "We can't read statements right now. Try again in a minute.",
 }
 
@@ -279,7 +302,20 @@ export const api = {
     const fd = new FormData()
     fd.append("file", file)
     if (password) fd.append("password", password)
-    return call<AddedStatement>("/api/statements", { method: "POST", body: fd })
+    return call<AddedStatement | QueuedUpload>("/api/statements", { method: "POST", body: fd })
   },
+  jobs: () => call<{ jobs: Job[] }>("/api/jobs").then((r) => r.jobs),
+  /** One job, and the server's suggested next poll in seconds (Retry-After, §11). */
+  job: async (id: string) => {
+    const r = await fetch(`/api/jobs/${encodeURIComponent(id)}`)
+    if (r.status === 401) {
+      goToLogin()
+      throw new SignedOut("Signed out")
+    }
+    if (!r.ok) throw await readError(r)
+    const after = Number(r.headers.get("Retry-After"))
+    return { job: ((await r.json()) as { job: JobDetail }).job, retryAfter: Number.isFinite(after) && after > 0 ? after : null }
+  },
+  cancelJob: (id: string) => call<{ ok: true }>(`/api/jobs/${encodeURIComponent(id)}`, { method: "DELETE" }),
   deleteStatement: (id: string) => call<{ ok: true }>(`/api/statements/${encodeURIComponent(id)}`, { method: "DELETE" }),
 }

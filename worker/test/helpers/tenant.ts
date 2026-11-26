@@ -47,8 +47,8 @@ export async function addParkedJob(h: Household, memberId: string | null) {
   await env.BUCKET.put(key, await sealPdf(await h.tenant.vault(), key, pdf))
   const now = Date.now()
   await env.DB.prepare(
-    `INSERT INTO parse_job (id, household_id, member_id, blob_key, content_hash, kind, password_source, status, seq, created_at, expires_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, 'RTA', 'pan', 'queued', 1, ?6, ?7)`,
+    `INSERT INTO parse_job (id, household_id, member_id, blob_key, content_hash, kind, password_source, status, seq, created_at, updated_at, expires_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, 'RTA', 'pan', 'queued', 1, ?6, ?6, ?7)`,
   ).bind(id, h.householdId, memberId, key, crypto.randomUUID(), now, now + 86_400_000).run()
   return { id, key }
 }

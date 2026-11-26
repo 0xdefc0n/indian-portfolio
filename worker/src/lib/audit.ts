@@ -19,3 +19,10 @@ export async function auditStatement(c: Context<AppBindings>, event: AuditEvent,
      SELECT ?1, ?2, ?3, ?4, ?5, ?6 ${opts.onlyIfChanged ? 'WHERE changes() > 0' : ''}`,
   ).bind(c.var.user.id, c.var.householdId, event, country, uaHash, Date.now())
 }
+
+/** An audit row for work done outside a request (the parse consumer): no country or user agent to record. */
+export function auditJobStatement(db: D1Database, row: { userId: string | null; householdId: string; event: AuditEvent }) {
+  return db
+    .prepare('INSERT INTO audit_event (user_id, household_id, event, ip_country, ua_hash, at) VALUES (?1, ?2, ?3, NULL, NULL, ?4)')
+    .bind(row.userId, row.householdId, row.event, Date.now())
+}

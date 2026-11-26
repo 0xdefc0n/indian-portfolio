@@ -29,12 +29,14 @@ statementRoutes.post('/statements', signedIn, async (c) => {
   const password = form.get('password')
   const bytes = new Uint8Array(await file.arrayBuffer())
 
-  const added = await uploadStatement(
+  const result = await uploadStatement(
     tenant(c),
     { bytes, password: typeof password === 'string' ? password : null },
     await auditStatement(c, 'statement_added'),
   )
-  return c.json(added, 201)
+  // 201: parsed and stored now. 202: every check passed and the PDF is parked for the queue (§10.1 D7).
+  if ('queued' in result) return c.json({ job: result.queued }, 202)
+  return c.json(result.added, 201)
 })
 
 statementRoutes.delete('/statements/:id', signedIn, async (c) => {

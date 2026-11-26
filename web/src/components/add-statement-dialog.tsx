@@ -15,8 +15,9 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { QueuedUpload } from "@/components/jobs"
 import { RequestStatementForm } from "@/components/request-statement-form"
-import { type AddedStatement, ApiFailure, api, SignedOut } from "@/lib/api"
+import { type AddedStatement, ApiFailure, api, type QueuedUpload as Queued, SignedOut } from "@/lib/api"
 
 const PASSWORD_HINT =
   "For a CDSL eCAS this is usually the PAN in capital letters. For CAMS/KFintech it's the password you chose when requesting it."
@@ -31,9 +32,13 @@ function report({ member }: AddedStatement) {
 
 type Problem = { message: string; hint?: string }
 
-/** Only the file and an optional password (D19). Members' PANs and pending passwords are tried on the server. */
-function UploadForm({ onDone }: { onDone: () => void }) {
+/**
+ * Only the file and an optional password (D19). Members' PANs and pending passwords are tried on the server. Every
+ * check the user could fix happens before anything is queued, so a queued upload never needs them again (§10.1 A).
+ */
+function UploadForm({ onDone, onQueued }: { onDone: () => void; onQueued: () => void }) {
   const [busy, setBusy] = useState(false)
+  const [queued, setQueued] = useState<Queued["job"] | null>(null)
   const [problem, setProblem] = useState<Problem | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [showPassword, setShowPassword] = useState(false)
@@ -46,8 +51,14 @@ function UploadForm({ onDone }: { onDone: () => void }) {
     setBusy(true)
     setProblem(null)
     try {
-      report(await api.addStatement(file, password))
-      onDone()
+      const result = await api.addStatement(file, password)
+      if ("job" in result) {
+        setQueued(result.job) // 202: parked until an engine slot is free
+        onQueued()
+      } else {
+        report(result)
+        onDone()
+      }
     } catch (err) {
       if (err instanceof SignedOut) return
       if (err instanceof ApiFailure && err.code === "password_required") {
@@ -65,6 +76,29 @@ function UploadForm({ onDone }: { onDone: () => void }) {
       setBusy(false)
     }
   }
+
+  if (queued)
+    return (
+      <QueuedUpload
+        initial={queued}
+        onDone={(added) => {
+          report(added)
+          onDone()
+        }}
+        onFailed={(message) => {
+          // The file is already deleted on the server: start again from the form.
+          setQueued(null)
+          setFile(null)
+          setProblem({ message, hint: "Choose the statement PDF again to retry." })
+          onQueued()
+        }}
+        onCancelled={() => {
+          setQueued(null)
+          setFile(null)
+          onQueued()
+        }}
+      />
+    )
 
   return (
     <form onSubmit={submit} className="grid gap-4">
@@ -146,12 +180,24 @@ export function AddStatementDialog({
   onAdded,
   trigger,
   defaultTab = "upload",
+  open: controlledOpen,
+  onOpenChange,
 }: {
+  /** A statement was added, or a queued upload changed (queued, cancelled, failed): reload. */
   onAdded: () => void
-  trigger?: React.ReactNode
+  /** null: no trigger (the page opens it with `open`). */
+  trigger?: React.ReactNode | null
   defaultTab?: Tab
+  /** Optional control from the page ("Try again" in the Processing list opens it). */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }) {
-  const [open, setOpen] = useState(false)
+  const [ownOpen, setOwnOpen] = useState(false)
+  const open = controlledOpen ?? ownOpen
+  const setOpen = (o: boolean) => {
+    setOwnOpen(o)
+    onOpenChange?.(o)
+  }
   const [tab, setTab] = useState<Tab>(defaultTab)
   const done = () => {
     setOpen(false)
@@ -165,14 +211,16 @@ export function AddStatementDialog({
         if (o) setTab(defaultTab)
       }}
     >
-      <DialogTrigger asChild>
-        {trigger ?? (
-          <Button>
-            <PlusIcon />
-            Add statement
-          </Button>
-        )}
-      </DialogTrigger>
+      {trigger !== null && (
+        <DialogTrigger asChild>
+          {trigger ?? (
+            <Button>
+              <PlusIcon />
+              Add statement
+            </Button>
+          )}
+        </DialogTrigger>
+      )}
       <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Add a statement</DialogTitle>
@@ -187,7 +235,7 @@ export function AddStatementDialog({
             <TabsTrigger value="request">Request</TabsTrigger>
           </TabsList>
           <TabsContent value="upload" className="pt-4">
-            <UploadForm onDone={done} />
+            <UploadForm onDone={done} onQueued={onAdded} />
           </TabsContent>
           <TabsContent value="otp" className="pt-4">
             <OtpComingSoon onUpload={() => setTab("upload")} />

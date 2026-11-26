@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client"
 import { Route, Switch } from "wouter"
 
 import App from "./App.tsx"
+import { FailedJobNotices } from "@/components/jobs"
 import { Toaster } from "@/components/ui/sonner"
 import { Skeleton } from "@/components/ui/skeleton"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -37,7 +38,12 @@ function SignedIn({ page: Page }: { page: React.ComponentType<{ me: Me }> }) {
       </p>
     )
   if (!me) return <Skeleton className="mx-auto mt-24 h-40 max-w-md rounded-[22px]" />
-  return <Page me={me} />
+  return (
+    <>
+      <Page me={me} />
+      <FailedJobNotices />
+    </>
+  )
 }
 
 function NotFound() {

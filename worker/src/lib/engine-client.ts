@@ -1,8 +1,11 @@
 // The one way routes and jobs reach the engine: lease a slot from EnginePool, call that slot, release it.
-import type { AcquireOptions, EngineClass } from '../pool-core'
+import type { AcquireOptions, AcquireResult, EngineClass } from '../pool-core'
 
 export type Busy = { ok: false; code: 'busy'; queued_ahead: number; eta_s: number; ticket?: number }
+export type Full = { ok: false; code: 'full'; retry_after: number }
 export type Leased<T> = { ok: true; slot: string; value: T }
+/** A held engine slot (from acquireEngine). Pass it to parseOnLease or releaseLease exactly once. */
+export type EngineLease = Extract<AcquireResult, { ok: true }> & { cls: EngineClass; started: number }
 
 export function enginePool(env: Env) {
   return env.ENGINE_POOL.getByName('pool')
@@ -23,7 +26,7 @@ export async function withEngine<T>(
 ): Promise<Leased<T> | Busy> {
   const pool = enginePool(env)
   const lease = await pool.acquire({ cls: opts.cls, wait: opts.wait, ticket: opts.ticket })
-  if (!lease.ok) return lease
+  if (!lease.ok) return lease.code === 'busy' ? lease : { ok: false, code: 'busy', queued_ahead: 0, eta_s: lease.retry_after }
   const started = Date.now()
   let ok = false
   try {
@@ -65,19 +68,36 @@ export function passwordHeader(password: string): string {
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
-/** Parse one verified PDF on a leased EngineFast slot. `busy` when no slot is free (the caller queues it, M8). */
-export function parseOnEngine(env: Env, req: ParseRequest): Promise<Leased<EngineParse> | Busy> {
-  return withEngine(env, { cls: 'fast' }, async (engine) => {
-    let timer: ReturnType<typeof setTimeout> | undefined
+/**
+ * Ask EnginePool for a slot. `busy` (with a ticket when `wait`) when none is free; `full` when `park` was asked and
+ * the global parked-PDF cap is reached.
+ */
+export async function acquireEngine(env: Env, opts: AcquireOptions): Promise<EngineLease | Busy | Full> {
+  const r = await enginePool(env).acquire(opts)
+  return r.ok ? { ...r, cls: opts.cls, started: Date.now() } : r
+}
+
+/** Give a slot back without using it. */
+export async function releaseLease(env: Env, lease: EngineLease, ok = false): Promise<void> {
+  await enginePool(env).release(lease.lease_id, { duration_ms: Date.now() - lease.started, ok, record: ok })
+}
+
+/** Parse one verified PDF on a held EngineFast slot. The lease is always released, also when this throws. */
+export async function parseOnLease(env: Env, lease: EngineLease, req: ParseRequest): Promise<EngineParse> {
+  let ok = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const engine = engineNamespace(env, 'fast').getByName(lease.name)
     const timeout = new Promise<EngineParse>((done) => {
       timer = setTimeout(() => done({ ok: false, code: 'parse_timeout' }), PARSE_TIMEOUT_MS)
     })
-    try {
-      return await Promise.race([callParse(engine, req), timeout])
-    } finally {
-      clearTimeout(timer)
-    }
-  })
+    const res = await Promise.race([callParse(engine, req), timeout])
+    ok = res.ok
+    return res
+  } finally {
+    clearTimeout(timer)
+    await releaseLease(env, lease, ok)
+  }
 }
 
 async function callParse(engine: Fetcher, req: ParseRequest): Promise<EngineParse> {
@@ -102,5 +122,8 @@ async function callParse(engine: Fetcher, req: ParseRequest): Promise<EnginePars
   }
 }
 
-/** The engine calls the upload route makes. A plain object so tests can swap in a fake engine (vi.spyOn). */
-export const engineApi = { parse: parseOnEngine }
+/**
+ * The engine calls the upload route and the parse consumer make. A plain object so tests can swap in a fake engine
+ * (vi.spyOn), or a pool with no free slot.
+ */
+export const engineApi = { acquire: acquireEngine, parse: parseOnLease, release: releaseLease }

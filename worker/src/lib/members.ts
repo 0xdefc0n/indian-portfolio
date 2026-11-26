@@ -25,6 +25,8 @@ export const fieldKey = {
   pan: (memberId: string) => `member/${memberId}/pan`,
   name: (memberId: string) => `member/${memberId}/name`,
   pendingPassword: (hmac: string) => `pending/${hmac}/password`,
+  /** The verified password of a queued upload (password_source = 'typed'), cleared with the parked PDF. */
+  jobPassword: (jobId: string) => `job/${jobId}/password`,
 }
 
 /** A display name we accept from a rename: trimmed, 1–60 characters, no control characters. */

@@ -11,7 +11,8 @@ import { contentHash, schemeRows, trackSchemes } from '../src/lib/statements'
 import { call } from './helpers/auth'
 import { cdslPages, FAKE_PAN, FAKE_PAN_2, FAKE_TRUST_PAN, kfinPages, makePdf } from './helpers/pdf-fixture'
 import { addMember, addStatement, count, type Household, newHousehold, r2Keys } from './helpers/tenant'
-import { busyEngine, fakeEngine, FUND_A, FUND_B, parsed, statementPdf, upload } from './helpers/upload'
+import { fakeEngine, FUND_A, FUND_B, parsed, statementPdf, upload } from './helpers/upload'
+import { engineApi } from '../src/lib/engine-client'
 
 // The first test in a busy run also loads pdf.js into the isolate.
 vi.setConfig({ testTimeout: 30_000 })
@@ -187,8 +188,8 @@ describe('Upload checks (§16 "Upload")', () => {
     const queued = statementPdf(cdslPages())
     const now = Date.now()
     await env.DB.prepare(
-      `INSERT INTO parse_job (id, household_id, content_hash, kind, password_source, status, seq, created_at, expires_at)
-       VALUES (?1, ?2, ?3, 'CDSL', 'pan', 'queued', 1, ?4, ?5)`,
+      `INSERT INTO parse_job (id, household_id, content_hash, kind, password_source, status, seq, created_at, updated_at, expires_at)
+       VALUES (?1, ?2, ?3, 'CDSL', 'pan', 'queued', 1, ?4, ?4, ?5)`,
     ).bind(crypto.randomUUID(), h.householdId, await contentHash(env, queued), now, now + 86_400_000).run()
     const processing = await upload(h.jar, queued)
     expect([processing.res.status, processing.body.code]).toEqual([409, 'already_processing'])
@@ -225,8 +226,8 @@ describe('Upload checks (§16 "Upload")', () => {
     const now = Date.now()
     for (let i = 0; i < LIMITS.openJobsPerHousehold; i++) {
       await env.DB.prepare(
-        `INSERT INTO parse_job (id, household_id, content_hash, kind, password_source, status, seq, created_at, expires_at)
-         VALUES (?1, ?2, ?3, 'CDSL', 'pan', 'queued', ?4, ?5, ?6)`,
+        `INSERT INTO parse_job (id, household_id, content_hash, kind, password_source, status, seq, created_at, updated_at, expires_at)
+         VALUES (?1, ?2, ?3, 'CDSL', 'pan', 'queued', ?4, ?5, ?5, ?6)`,
       ).bind(crypto.randomUUID(), h.householdId, crypto.randomUUID(), i, now, now + 86_400_000).run()
     }
     await expect429('jobs_limit')
@@ -278,11 +279,11 @@ describe('Upload checks (§16 "Upload")', () => {
     expect(await rows(h)).toEqual(NOTHING)
   })
 
-  it('all engine slots busy: 503 with Retry-After and nothing stored (the queued path is M8)', async () => {
+  it('no free slot and the global parked-PDF cap reached: 503 queue_full with Retry-After, nothing stored', async () => {
     const h = await newHousehold('u11')
-    busyEngine()
+    vi.spyOn(engineApi, 'acquire').mockResolvedValue({ ok: false, code: 'full', retry_after: 60 })
     const { res, body } = await upload(h.jar, statementPdf(cdslPages()))
-    expect([res.status, body.code, res.headers.get('retry-after')]).toEqual([503, 'busy', '8'])
+    expect([res.status, body.code, res.headers.get('retry-after')]).toEqual([503, 'queue_full', '60'])
     expect(await rows(h)).toEqual(NOTHING)
   })
 

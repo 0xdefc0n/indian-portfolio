@@ -8,12 +8,13 @@ function pool(caps = { fast: 3, batch: 2 }) {
 }
 
 function leased(r: AcquireResult) {
-  if (!r.ok) throw new Error(`expected a lease, got busy (${r.queued_ahead} ahead)`)
+  if (!r.ok) throw new Error(`expected a lease, got ${r.code}`)
   return r
 }
 
 function busy(r: AcquireResult) {
   if (r.ok) throw new Error(`expected busy, got ${r.name}`)
+  if (r.code !== 'busy') throw new Error(`expected busy, got ${r.code}`)
   return r
 }
 
@@ -176,5 +177,64 @@ describe('busy, queue position and ETA', () => {
     expect(p.status('fast', t + 3).avg_ms).toBe(10_000)
     leased(p.acquire({ cls: 'fast' }, t + 4))
     expect(busy(p.acquire({ cls: 'fast' }, t + 4)).eta_s).toBe(10)
+  })
+})
+
+describe('queued jobs keep their place (M8)', () => {
+  it('a ticket asked again after the waiter TTL is re-registered at the same number, not sent to the back', () => {
+    const p = pool({ fast: 1, batch: 1 })
+    leased(p.acquire({ cls: 'fast' }, T0))
+    const first = busy(p.acquire({ cls: 'fast', wait: true }, T0))
+    leased(p.acquire({ cls: 'fast' }, T0 + WAITER_TTL_MS)) // the first lease expired; someone else holds the slot now
+    busy(p.acquire({ cls: 'fast', wait: true }, T0 + WAITER_TTL_MS)) // a later job
+    const back = busy(p.acquire({ cls: 'fast', wait: true, ticket: first.ticket }, T0 + WAITER_TTL_MS + 1))
+    expect(back).toMatchObject({ ticket: first.ticket, queued_ahead: 0 })
+    // A ticket the pool never issued gets a new one.
+    expect(busy(p.acquire({ cls: 'fast', wait: true, ticket: 999 }, T0 + WAITER_TTL_MS + 2)).ticket).toBe(3)
+  })
+
+  it('positions() reports where tickets stand without renewing them', () => {
+    const p = pool({ fast: 1, batch: 1 })
+    leased(p.acquire({ cls: 'fast' }, T0))
+    const a = busy(p.acquire({ cls: 'fast', wait: true }, T0))
+    const b = busy(p.acquire({ cls: 'fast', wait: true }, T0))
+    expect(p.positions('fast', [a.ticket!, b.ticket!], T0 + 1)).toEqual([
+      { ticket: a.ticket, queued_ahead: 0, eta_s: 2 },
+      { ticket: b.ticket, queued_ahead: 1, eta_s: 4 },
+    ])
+    p.forget('fast', a.ticket!)
+    expect(p.positions('fast', [b.ticket!], T0 + 2)[0]!.queued_ahead).toBe(0)
+    expect(p.status('fast', T0 + WAITER_TTL_MS + 1).waiting).toBe(0) // positions() didn't renew b
+  })
+})
+
+describe('parked-PDF cap (§11)', () => {
+  const capped = () => {
+    let n = 0
+    return new PoolCore(emptyPoolState(), { fast: 1, batch: 1 }, () => `lease-${++n}`, { objects: 0, bytes: 0 }, { objects: 2, bytes: 1000 })
+  }
+
+  it('a busy answer with `park` takes the counter; at the cap the answer is `full`, with no ticket and nothing counted', () => {
+    const p = capped()
+    leased(p.acquire({ cls: 'fast', wait: true, park: 100 }, T0)) // a free slot: nothing is parked
+    expect(p.parked).toEqual({ objects: 0, bytes: 0 })
+    busy(p.acquire({ cls: 'fast', wait: true, park: 100 }, T0))
+    busy(p.acquire({ cls: 'fast', wait: true, park: 100 }, T0))
+    expect(p.parked).toEqual({ objects: 2, bytes: 200 })
+    expect(p.acquire({ cls: 'fast', wait: true, park: 100 }, T0)).toEqual({ ok: false, code: 'full', retry_after: 60 })
+    expect(p.status('fast', T0).waiting).toBe(2)
+    p.unpark(100)
+    expect(p.parked).toEqual({ objects: 1, bytes: 100 })
+    // The byte cap counts too.
+    expect(p.acquire({ cls: 'fast', wait: true, park: 901 }, T0)).toMatchObject({ code: 'full' })
+    busy(p.acquire({ cls: 'fast', wait: true, park: 900 }, T0))
+  })
+
+  it('unpark never goes below zero, and setParked (the tmp-sweep recount) replaces the counts', () => {
+    const p = capped()
+    p.unpark(50)
+    expect(p.parked).toEqual({ objects: 0, bytes: 0 })
+    p.setParked(7, 7000)
+    expect(p.parked).toEqual({ objects: 7, bytes: 7000 })
   })
 })

@@ -468,6 +468,9 @@ CREATE TABLE parse_job (                         -- queued uploads (§10.1 queue
 CREATE INDEX parse_job_status ON parse_job(status, expires_at);
 -- Finished rows ('done','failed','expired') are deleted by `cleanup` after 7 days. They hold no PDF and no password.
 -- Re-uploading the same file after a 'failed' or 'expired' job deletes that old row first, so the UNIQUE doesn't block a retry.
+-- ✅ M8: rebuilt in migrations/app/0004_parse_job.sql (SQLite can't alter a CHECK): password_source also allows 'none'
+-- (an unencrypted PDF), plus user_id (the uploader, for the audit row), pending_pan_hmac (the pending KFintech password
+-- used), pdf_bytes (for the parked-PDF recount) and updated_at (lost-message detection). Index on (household_id, created_at).
 
 CREATE TABLE pending_statement_password (        -- KFintech guided request (D9); replaces .statement-requests.json
   household_id  TEXT NOT NULL REFERENCES household(id) ON DELETE CASCADE,
@@ -824,10 +827,10 @@ export async function assertMember(c, memberId: string) {
 | `GET /api/members` | ✅ | list `{id, name, pan_masked, statements: [{id, kind, as_of, holdings_count}]}` | ✅ M6: returns `{ members: [...] }`; `name` is null until a statement or a rename sets it. One D1 batch |
 | `PATCH /api/members/:id` | ✅ | rename (display override) | ✅ M6: `{ name }`, 1–60 characters; replaces the sealed `display_name_enc` (a later statement doesn't overwrite it, M7) |
 | `DELETE /api/members/:id` | ✅ | delete member + their statements + blobs; enqueue rebuild | confirm in UI |
-| `POST /api/statements` | ✅ | multipart `file`, `password?` **only**: no PAN, no member (D19). The member comes from the statement |  §10.1. `201 {statement}` (direct path) or `202 {job: {id, position, eta_s}}` (queued path). ✅ M7: `201 { statement: {id, kind, as_of, holdings_count, warnings_count}, member: {id, name, pan_masked, created} }`; `503 busy` until M8 |
-| `GET /api/jobs` | ✅ | the household's open and recently finished parse jobs: `[{id, status, position, eta_s, error_code, statement_id}]` | drives the "Processing" list; no PDF data |
-| `GET /api/jobs/:id` | ✅ | one job's status | polled with backoff; `Retry-After` header set to the suggested next poll |
-| `DELETE /api/jobs/:id` | ✅ | cancel: delete the parked PDF and the job | |
+| `POST /api/statements` | ✅ | multipart `file`, `password?` **only**: no PAN, no member (D19). The member comes from the statement |  §10.1. `201 {statement}` (direct path) or `202 {job: {id, position, eta_s}}` (queued path). ✅ M7: `201 { statement: {id, kind, as_of, holdings_count, warnings_count}, member: {id, name, pan_masked, created} }`; ✅ M8: `202 { job }` when no slot is free, `503 queue_full` over the parked-PDF cap |
+| `GET /api/jobs` | ✅ | the household's open and recently finished parse jobs: `[{id, status, position, eta_s, error_code, statement_id}]` | drives the "Processing" list; no PDF data. ✅ M8: `{ jobs }`, open ones plus those finished in the last 24 h; one D1 read + one pool call |
+| `GET /api/jobs/:id` | ✅ | one job's status | polled with backoff; `Retry-After` header set to the suggested next poll. ✅ M8: `{ job }`; `Retry-After` 2–10 s while queued, 2 s while parsing, none once finished; a `done` job also returns `statement` and `member` (as the `201` does) |
+| `DELETE /api/jobs/:id` | ✅ | cancel: delete the parked PDF and the job | ✅ M8: also dismisses a finished job; `409 job_running` while it's being parsed |
 | `DELETE /api/statements/:id` | ✅ | delete one statement; enqueue rebuild | ✅ M7: row (`RETURNING blob_key`) + audit in one batch, then the blob; 404 for other households. The rebuild is enqueued from M10 |
 | `GET /api/portfolio` | ✅ | snapshot JSON (same shape as today's `Portfolio` type, with stable member IDs) + `{ stale, building }` | §10.2 |
 | `GET /api/portfolio/status` | ✅ | `{ status, built_at, market_date }` for polling after upload | one indexed D1 read; polled with backoff (1 → 10 s), `Retry-After` set |
@@ -939,7 +942,7 @@ tab (owner decision, 2026-11-25).
   `typed: true|false` (the SPA picks the message), `unrecognised`, `too_large`, `pan_mismatch` (the member PAN that
   opened the file differs from the PAN printed in it), `member_limit`, `parse_error`, `multi_pan`, `precheck_disagree`,
   `504 parse_timeout`, `429 upload_limit` / `too_many_failures` / `jobs_limit` with `retry_after` and `Retry-After`.
-- **Until M8, a busy pool answers `503 busy` with `Retry-After`** (the queued path replaces this).
+- ~~Until M8, a busy pool answers `503 busy`~~: replaced by the queued path in M8 (`202`, below).
 - A typed PAN in lower case is also tried upper-cased. If the PDF has no single labelled PAN but a member's PAN opened
   it, that PAN is the pre-check PAN.
 - **Failed parses** (`parse_fail`, 10 per hour) count wrong typed passwords, unrecognised files and parser failures.
@@ -989,6 +992,41 @@ tab (owner decision, 2026-11-25).
 10. **Time estimate.** `EnginePool` keeps a moving average of parse time per class (p50 over the last 200 jobs) and
     the number of free slots. `eta_s ≈ ceil((jobs ahead + 1) / slots) × avg_parse_s`, plus a cold-start allowance
     (3 s) when instances are asleep. `GET /api/jobs/:id` returns the current `position` and `eta_s`.
+
+✅ M8 (2026-11-26), as built in `src/lib/jobs.ts` + `src/routes/jobs.ts`:
+- **One pool call decides the path.** After every check in A, the upload asks `acquire({ class: "fast", wait: true,
+  park: bytes })`: a lease (direct path), `busy` with a ticket (queued path; the parked-PDF counter is taken in the same
+  call), or `full` when the global cap is reached (`503 queue_full`, `Retry-After: 60`, nothing stored).
+- **Park** = sealed PDF in `tmp/`, then one batch: delete a finished job row for the same file, insert the job (the
+  open-jobs cap is enforced inside the INSERT by writing NULL into the NOT NULL `status`, so a race can't pass 10),
+  extend the pending KFintech password to the job's expiry, and **take the upload quota now**, so a parked job never
+  fails on quota later. Any refusal deletes the PDF again. Then `{ job_id }` is sent; if that send fails the job is
+  safe and tmp-sweep re-sends it. Response `202 { job: { id, position, eta_s } }`.
+- **Password at parse time:** `typed` is kept sealed in `password_enc` (AAD `job/{id}/password`); `pan` is re-read from
+  the member (`member_id`); `kfintech_pending` from `pending_pan_hmac`; an unencrypted PDF is `none`.
+- **Slot waits re-send a fresh delayed message and ack the original** instead of `msg.retry()`. The Queues docs
+  (read 2026-11-26) don't say whether `retry()` counts toward `max_retries`, and retries are capped (100 at most), so a
+  long wait could have pushed a healthy job into the DLQ. The delay is about half the job's ETA, 5–60 s with ±20%
+  jitter (the plan said 5–30 s; longer waits far back in a 10k burst keep the pool's request rate down). A queued job
+  keeps its place: the pool re-registers an expired ticket at the same number (the ticket is `parse_job.seq`).
+- **Claim** is a compare-and-set on `status` + `updated_at`, so a message delivered twice is parsed once. A job left
+  `parsing` for 2 min is treated as crashed and re-claimed. An engine timeout, a crash or an infrastructure error goes
+  back to `queued` (attempts 1–2) and fails as `parse_timeout` on the 3rd. `parse_error`, `multi_pan`,
+  `precheck_disagree`, `member_limit` and `password_unavailable` fail at once. A missing parked object becomes
+  `expired`. A concurrent direct upload of the same file ends the job as `done`.
+- **Store** reuses `finishParsed` + `storeStatement` (the C6/C7 code of the direct path) with the job's `done` update in
+  the same batch and no second quota take. The statement_added audit row has no country or UA (no request). Then the
+  PDF is deleted and `blob_key` set NULL. Every end deletes the PDF first; if that fails, `blob_key` stays and
+  tmp-sweep deletes it. The pool's parked counter and waiter are released.
+- Failed queued parses don't count toward the hourly failed-upload limit (nothing the user did).
+- **tmp-sweep** (`15 * * * *`, dispatched on `event.cron`): expires open jobs past `expires_at` (PDF first), deletes
+  leftover PDFs of finished jobs, re-sends open jobs untouched for 15 min (waiting jobs touch `updated_at` every 5 min;
+  the sweep touches what it re-sends), and recounts the parked PDFs into `EnginePool.setParked()`.
+- **ETA:** `ceil((ahead + 1) / slots) × moving-average job time`, as before. The 3 s cold-start allowance isn't added:
+  a busy answer means every slot was used in the last minute, so none is asleep.
+- Tests: `test/jobs.test.ts` (16, real `EnginePool` forced to 0 free slots, fake engine container; one goes through the
+  real pf-parse queue), 6 new `EnginePool` tests, and 4 private statements through the queued path on the real engine
+  (consumer 0.35–1.7 s each, `tmp/` empty after).
 
 **Never logged:** file names, PANs, passwords, statement contents. Log only `job_id`, status changes, durations and
 error codes.
@@ -1050,7 +1088,7 @@ Engine `/parse` timeout: 60 s. On timeout return `parse_timeout`, and count it i
 | `snapshot-prebuild` | triggered when a market day becomes final (§10.4), at the latest `0 5 * * *` | Enqueue a rebuild for households with `last_active_at` in the last 7 days, with `sendBatch` (100 per call). The `rebuild` queue's `max_concurrency` and the `EngineBatch` cap set the drain rate, so this is the nightly burst handled at a steady pace. The per-message delay is spread over 0–30 min to smooth the wake-ups. |
 | `stocks-monthly` | `0 5 10-20 * *` | §10.3.1 |
 | `cleanup` | `0 21 * * *` | Expire pending passwords and old quota windows. Drop `tracked_scheme` rows unseen for 90 days. Delete finished `parse_job` rows older than 7 days and expired Better Auth `session` / `verification` rows. Send DPDP inactivity notices and do erasures (§12). |
-| `tmp-sweep` | `15 * * * *` (hourly) | Parked PDFs past `expires_at`: delete the R2 object, set `expired`. Re-enqueue `queued` jobs whose message was lost (no change for 15 min). Counts only in logs. |
+| `tmp-sweep` | `15 * * * *` (hourly) | Parked PDFs past `expires_at`: delete the R2 object, set `expired`. Re-enqueue `queued` jobs whose message was lost (no change for 15 min). Counts only in logs. ✅ M8: also deletes leftover PDFs of finished jobs and recounts the parked PDFs for `EnginePool` (§10.1 D, as built). |
 
 #### 10.3.1 Stocks inside funds: AMC scraper first, BharatStock fallback (D10)
 
@@ -1287,7 +1325,7 @@ Edge cases:
 | Uploads | 20 per day, 100 per month per user | `quota` |
 | Failed parses (wrong password, etc.) | 10 per hour per user | `quota`, then 429 "Try again later" |
 | Open parse jobs (queued, parsing) | 10 per household | `parse_job` count, then 429 "Finish the uploads in progress first" |
-| Parked PDFs, all users | 50,000 objects or 5 GB in `tmp/` | `EnginePool` counter. Above it, uploads get 503 + `Retry-After` and nothing is stored (protects R2 and the 24 h promise if the engine is down) |
+| Parked PDFs, all users | 50,000 objects or 5 GB in `tmp/` | `EnginePool` counter. Above it, uploads get 503 + `Retry-After` and nothing is stored (protects R2 and the 24 h promise if the engine is down). ✅ M8: taken in the same `acquire` call that queues the upload; `503 queue_full`, `Retry-After: 60`; tmp-sweep recounts it from D1 hourly |
 | Status polling | `Retry-After` 1 → 10 s, set by the server | the SPA follows it; the IP rate limit catches clients that don't |
 | API requests | 120 per 60 s per user; 300 per 60 s per IP | Rate Limiting binding (approximate, per location) |
 | Magic-link requests | 5 per hour per email, 20 per hour per IP, plus Turnstile | Better Auth rate limit + binding |
@@ -1661,7 +1699,8 @@ integration accept. Switch only if a later wrangler requires `exports`.
     ]
   },
   // max_concurrency of pf-parse / pf-rebuild must equal the EngineFast / EngineBatch pool caps (§14).
-  // Retries that only waited for a slot use msg.retry({ delaySeconds }) and don't count as attempts (tracked in parse_job.attempts).
+  // Slot waits send a fresh delayed message and ack the original (✅ M8, §10.1 D): they don't count as attempts
+  // (parse_job.attempts) and can't use up max_retries.
   "triggers": { "crons": ["30 17 * * *", "30 20 * * *", "30 1 * * *", "30 4 * * *", "0 5 * * *", "0 3 * * SUN", "0 5 10-20 * *", "0 21 * * *", "15 * * * *"] },
   // nav-ingest ×4 (23:00, 02:00, 07:00, 10:00 IST), snapshot-prebuild fallback, nav-repair (Sun), stocks, cleanup, tmp-sweep (hourly).
   // ⚠️ "0 5 * * *" serves both prebuild and stocks on the 10th–20th: dispatch on event.cron in scheduled().

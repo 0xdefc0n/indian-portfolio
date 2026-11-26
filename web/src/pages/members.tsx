@@ -5,6 +5,7 @@ import { type FormEvent, useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
 
 import { AddStatementDialog } from "@/components/add-statement-dialog"
+import { ProcessingList } from "@/components/jobs"
 import { PageShell } from "@/components/app-header"
 import { PageTitle } from "@/components/panel"
 import { Badge } from "@/components/ui/badge"
@@ -15,6 +16,7 @@ import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, type Me, type MemberSummary, SignedOut, type StatementKind } from "@/lib/api"
 import { day } from "@/lib/format"
+import { useJobs } from "@/lib/use-jobs"
 
 const KIND_LABEL: Record<StatementKind, string> = { CDSL: "CDSL eCAS", CAMS: "CAMS", KFINTECH: "KFintech" }
 const displayName = (m: MemberSummary) => m.name ?? "Unnamed member"
@@ -231,14 +233,23 @@ export function MembersPage({ me }: { me: Me }) {
     )
   }, [])
   useEffect(load, [load])
+  // Queued uploads: a finished one reloads the members (plan §13 item 5).
+  const { jobs, refresh: refreshJobs } = useJobs(load)
+  const reload = useCallback(() => { load(); refreshJobs() }, [load, refreshJobs])
+  // "Try again" (here, or in the failed-upload toast: /members?add=1) opens the add-statement dialog.
+  const [adding, setAdding] = useState(() => new URLSearchParams(window.location.search).get("add") === "1")
+  useEffect(() => {
+    if (adding && window.location.search) window.history.replaceState(null, "", window.location.pathname)
+  }, [adding])
 
   const n = members?.length ?? 0
   return (
     <PageShell me={me}>
       <div className="flex flex-wrap items-end justify-between gap-4">
         <PageTitle title="Members" detail={members && n ? `${n} ${n === 1 ? "person" : "people"} in your family portfolio` : undefined} />
-        {members && n > 0 && <AddStatementDialog onAdded={load} />}
+        {members && n > 0 && <AddStatementDialog onAdded={reload} />}
       </div>
+      <ProcessingList jobs={jobs} onRetry={() => setAdding(true)} onChange={reload} />
       {error && (
         <p className="rounded-xl bg-surface p-4 text-sm text-loss ring-1 ring-border" role="alert">
           Couldn't load members: {error}. Reload to try again.
@@ -250,7 +261,7 @@ export function MembersPage({ me }: { me: Me }) {
           <Skeleton className="h-44 rounded-[22px]" />
         </div>
       )}
-      {members && n === 0 && <EmptyMembers onAdded={load} />}
+      {members && n === 0 && <EmptyMembers onAdded={reload} />}
       {members && n > 0 && (
         <div className="grid gap-4 md:grid-cols-2">
           {members.map((m) => (
@@ -259,6 +270,7 @@ export function MembersPage({ me }: { me: Me }) {
           ))}
         </div>
       )}
+      <AddStatementDialog trigger={null} open={adding} onOpenChange={setAdding} onAdded={reload} />
       <RenameDialog key={`r-${renaming?.id}`} member={renaming} onClose={() => setRenaming(null)} onDone={() => { setRenaming(null); load() }} />
       <DeleteDialog key={`d-${deleting?.id}`} member={deleting} onClose={() => setDeleting(null)} onDone={() => { setDeleting(null); load() }} />
       <DeleteStatementDialog key={`s-${deletingStatement?.statement.id}`} target={deletingStatement} onClose={() => setDeletingStatement(null)}

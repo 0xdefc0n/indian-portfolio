@@ -7,6 +7,7 @@
 import { deleteBlobs, putJsonBlob } from './blob'
 import { type Bytes, hmacHex, type Vault } from './crypto'
 import { engineApi, type EngineParse, type ParsedStatement } from './engine-client'
+import { parkUpload, type QueuedUpload } from './jobs'
 import { ApiError, notFound } from './errors'
 import { failQuota, LIMITS, uploadQuota } from './limits'
 import { cleanName, fieldKey, maskPan, memberInsert, normalizePan, panHmac } from './members'
@@ -15,7 +16,7 @@ import { isQuotaRefusal, quotaStatement, quotaWindow, refusal, secondsLeft, take
 import type { Tenant } from './tenant'
 
 export type StatementKind = 'CDSL' | 'CAMS' | 'KFINTECH'
-export type PasswordSource = 'typed' | 'pan' | 'kfintech_pending'
+export type PasswordSource = 'typed' | 'pan' | 'kfintech_pending' | 'none'
 
 export type AddedStatement = {
   statement: { id: string; kind: StatementKind; as_of: string; holdings_count: number; warnings_count: number }
@@ -37,14 +38,15 @@ export const contentHash = (env: { PAN_PEPPER: string }, bytes: Uint8Array<Array
 export const isPdf = (bytes: Uint8Array) => bytes.length >= 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46
 
 /**
- * POST /api/statements, direct path. Throws ApiError for every refusal; nothing is stored unless it succeeds.
- * `audit` is the statement_added row, joined to the store batch.
+ * POST /api/statements. Throws ApiError for every refusal; nothing is stored unless it succeeds. With a free engine
+ * slot the statement is parsed and stored now (`added`, the direct path); otherwise the verified PDF is parked
+ * encrypted for the parse consumer (`queued`, §10.1 D). `audit` is the statement_added row of the direct path.
  */
 export async function uploadStatement(
   t: Tenant,
   input: { bytes: Uint8Array<ArrayBuffer>; password: string | null },
   audit: D1PreparedStatement,
-): Promise<AddedStatement> {
+): Promise<{ added: AddedStatement } | { queued: QueuedUpload }> {
   const { env } = t
   const db = env.DB
   const started = Date.now()
@@ -124,16 +126,35 @@ export async function uploadStatement(
     throw new ApiError(422, 'member_limit')
   }
 
-  // B + C5: a free slot, then the parse. With no slot the queued path (M8) will park it; until then, 503.
-  const leased = await engineApi.parse(env, { bytes, password: used?.password ?? '', kind: pre.kind })
-  if (!leased.ok) {
-    log('upload_busy', 'busy', started)
-    throw new ApiError(503, 'busy', { retry_after: Math.max(1, Math.ceil(leased.eta_s)), queued_ahead: leased.queued_ahead })
+  // B: a free slot, or a place in the queue with the parked-PDF counter taken (§10.1 B, D).
+  const slot = await engineApi.acquire(env, { cls: 'fast', wait: true, park: bytes.length })
+  if (!slot.ok && slot.code === 'full') {
+    log('upload_refused', 'queue_full', started) // the global parked-PDF cap (§11): nothing stored
+    throw new ApiError(503, 'queue_full', { retry_after: slot.retry_after })
   }
-  const parsed = leased.value
+  if (!slot.ok) {
+    // D: park it. Everything the user could fix was checked above, so the job never needs them again.
+    const job = await parkUpload(t, vault, {
+      bytes,
+      contentHash: hash,
+      kind: pre.kind,
+      source: used?.source ?? 'none',
+      typedPassword: used?.source === 'typed' ? used.password : null,
+      pendingPanHmac: used?.source === 'kfintech_pending' ? used.pendingPanHmac! : null,
+      prePanHmac,
+      memberId: prePanHmac ? (memberByHmac.get(prePanHmac)?.id ?? null) : null,
+      ticket: slot.ticket!,
+      queuedAhead: slot.queued_ahead,
+      etaS: slot.eta_s,
+    })
+    console.log('upload_queued', { kind: pre.kind, pages: pre.pages, position: job.position, ms: Date.now() - started, source: used?.source ?? 'none' })
+    return { queued: job }
+  }
+
+  // C5: parse on the leased slot (released inside, whatever happens).
+  const parsed = await engineApi.parse(env, slot, { bytes, password: used?.password ?? '', kind: pre.kind })
   if (!parsed.ok) {
-    const code = ENGINE_FAILURES.has(parsed.code) ? parsed.code : 'parse_error'
-    if (code === 'precheck_disagree') console.error('precheck_disagree', pre.kind) // a bug: counted in metrics
+    const code = engineFailure(parsed.code, pre.kind)
     if (code === 'parse_timeout') {
       log('upload_failed', code, started)
       throw new ApiError(504, code)
@@ -141,36 +162,51 @@ export async function uploadStatement(
     throw await fail(422, code)
   }
 
-  // C6: the parsed PAN is authoritative, and must agree with the pre-check's.
-  const pan = normalizePan(parsed.pan ?? '')
-  if (!pan) throw await fail(422, 'parse_error')
-  if (prePan && pan !== prePan) {
-    console.error('precheck_disagree', 'pan')
-    throw await fail(422, 'precheck_disagree')
-  }
-  const hmac = await panHmac(env, pan)
-  const existing = memberByHmac.get(hmac) ?? null
-  if (!existing && members.length >= LIMITS.membersPerHousehold) {
-    log('upload_refused', 'member_limit', started)
-    throw new ApiError(422, 'member_limit')
-  }
-
-  // C7: store.
-  const result = await storeStatement(t, vault, {
+  // C6 + C7: the member from the parsed PAN, then store.
+  const result = await finishParsed(t, vault, members, {
     parsed,
     contentHash: hash,
-    pan,
-    panHmac: hmac,
-    member: existing,
+    prePanHmac,
     pendingPanHmac: used?.source === 'kfintech_pending' ? used.pendingPanHmac! : null,
     audit,
   }).catch(async (err) => {
-    if (err instanceof ApiError && err.code === 'parse_error') await takeQuota(env, [failQuota(t.userId)]).catch(() => undefined)
+    // A statement the parser couldn't use counts as a failed upload; a full household doesn't.
+    if (err instanceof ApiError && (err.code === 'parse_error' || err.code === 'precheck_disagree')) throw await fail(422, err.code)
+    if (err instanceof ApiError) log('upload_refused', err.code, started)
     throw err
   })
   // C8: the rebuild (§10.2) is enqueued here from M10.
-  console.log('upload_ok', { kind: result.statement.kind, pages: pre.pages, slot: leased.slot, ms: Date.now() - started, source: used?.source ?? 'none' })
-  return result
+  console.log('upload_ok', { kind: result.statement.kind, pages: pre.pages, slot: slot.name, ms: Date.now() - started, source: used?.source ?? 'none' })
+  return { added: result }
+}
+
+/** An engine failure code as the API reports it. Anything unknown is parse_error; precheck_disagree is a bug. */
+export function engineFailure(code: string, kind: string): string {
+  const out = ENGINE_FAILURES.has(code) ? code : 'parse_error'
+  if (out === 'precheck_disagree') console.error('precheck_disagree', kind) // counted in metrics
+  return out
+}
+
+/**
+ * §10.1 C6 + C7, shared by the direct path and the parse consumer: the parsed PAN is authoritative and must agree
+ * with the pre-check's; find or create the member (within the cap), then store. Throws ApiError with the code.
+ */
+export async function finishParsed(
+  t: Tenant,
+  vault: Vault,
+  members: Array<Pick<MemberRow, 'id' | 'pan_hmac' | 'pan_masked' | 'display_name_enc'>>,
+  p: Omit<StoreInput, 'pan' | 'panHmac' | 'member'> & { prePanHmac: string | null },
+): Promise<AddedStatement> {
+  const pan = normalizePan(p.parsed.pan ?? '')
+  if (!pan) throw new ApiError(422, 'parse_error')
+  const hmac = await panHmac(t.env, pan)
+  if (p.prePanHmac && hmac !== p.prePanHmac) {
+    console.error('precheck_disagree', 'pan')
+    throw new ApiError(422, 'precheck_disagree')
+  }
+  const existing = members.find((m) => m.pan_hmac === hmac) ?? null
+  if (!existing && members.length >= LIMITS.membersPerHousehold) throw new ApiError(422, 'member_limit')
+  return storeStatement(t, vault, { ...p, pan, panHmac: hmac, member: existing })
 }
 
 async function candidatePasswords(vault: Vault, typed: string | null, members: MemberRow[], pending: PendingRow[]): Promise<Candidate[]> {
@@ -214,6 +250,10 @@ export type StoreInput = {
   /** The pending KFintech password that opened the file: deleted with the store. */
   pendingPanHmac: string | null
   audit: D1PreparedStatement
+  /** Take the upload quota in the batch (direct path). The queued path took it when the PDF was parked. */
+  quota?: boolean
+  /** More statements for the same batch, given the new statement's id (the parse job's 'done' update). */
+  extra?: (statementId: string) => D1PreparedStatement[]
   now?: number
 }
 
@@ -290,9 +330,10 @@ export async function storeStatement(t: Tenant, vault: Vault, s: StoreInput): Pr
   if (s.pendingPanHmac) {
     stmts.push(db.prepare('DELETE FROM pending_statement_password WHERE household_id = ?1 AND pan_hmac = ?2').bind(t.householdId, s.pendingPanHmac))
   }
-  const quota = uploadQuota(t.userId)
+  const quota = s.quota === false ? [] : uploadQuota(t.userId)
   for (const q of quota) stmts.push(quotaStatement(db, q, now))
   stmts.push(s.audit)
+  if (s.extra) stmts.push(...s.extra(id))
 
   let results: D1Result[]
   try {
@@ -300,7 +341,7 @@ export async function storeStatement(t: Tenant, vault: Vault, s: StoreInput): Pr
   } catch (err) {
     await env.BUCKET.delete(key).catch(() => undefined)
     const message = err instanceof Error ? err.message : ''
-    if (isQuotaRefusal(err)) {
+    if (quota.length && isQuotaRefusal(err)) {
       const full = await refusal(env, quota, now)
       throw tooMany('upload_limit', full.retryAfter)
     }
