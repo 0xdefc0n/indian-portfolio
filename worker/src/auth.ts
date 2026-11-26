@@ -1,7 +1,11 @@
 // Better Auth on Workers + D1 (plan §7.1). Created per request: the D1 binding only exists inside the handler.
 // Option names checked against better-auth 1.7.28 types in M5.
-import { betterAuth, type BetterAuthOptions } from 'better-auth'
+import { betterAuth, type BetterAuthOptions, type BetterAuthPlugin } from 'better-auth'
+import { createAuthMiddleware } from 'better-auth/api'
+import { setSessionCookie } from 'better-auth/cookies'
 import { emailOTP, magicLink } from 'better-auth/plugins'
+import { deviceAuthorization } from 'better-auth/plugins/device-authorization'
+import { QR_CLIENT_ID, QR_EXPIRES_S, QR_INTERVAL_S, requestPlace } from './lib/devices'
 import { ensureHousehold, touchHousehold } from './lib/household'
 import { LOGIN_EXPIRY_MINUTES } from './lib/email'
 import { d1RateLimitStorage } from './lib/rate-limit'
@@ -22,6 +26,26 @@ export const SESSION_FIELDS = {
   householdId: { type: 'string', input: false, required: false },
   consentVersion: { type: 'string', input: false, required: false }, // the accepted notice version (lib/consent.ts)
 } as const
+
+/**
+ * QR login (plan §7.4): Better Auth's /device/token creates the session but only returns its token (✅ M13, 1.7.28:
+ * it calls setNewSession, never setSessionCookie). This sets the normal session cookies on that response instead, and
+ * /api/login/qr/poll drops the token from the body, so it never reaches the page's JavaScript.
+ */
+const deviceSessionCookie = {
+  id: 'pf-device-session-cookie',
+  hooks: {
+    after: [
+      {
+        matcher: (ctx) => ctx.path === '/device/token',
+        handler: createAuthMiddleware(async (ctx) => {
+          const s = ctx.context.newSession
+          if (s) await setSessionCookie(ctx, s)
+        }),
+      },
+    ],
+  },
+} satisfies BetterAuthPlugin
 
 const NO_TOKENS = { accessToken: null, refreshToken: null, idToken: null, accessTokenExpiresAt: null, refreshTokenExpiresAt: null }
 
@@ -85,6 +109,15 @@ export function authOptions(env: AuthEnv, capture?: LoginCapture) {
           capture.otp = otp
         },
       }),
+      // One account, many devices (D2): the approved code becomes one more session for the approver's own user.
+      // The plugin's endpoints are reached only through /api/login/qr* and /api/link* (src/routes/devices.ts).
+      deviceAuthorization({
+        expiresIn: `${QR_EXPIRES_S}s`,
+        interval: `${QR_INTERVAL_S}s`,
+        verificationUri: `${env.APP_URL}/link`,
+        validateClient: (id) => id === QR_CLIENT_ID,
+      }),
+      deviceSessionCookie,
     ],
     databaseHooks: {
       // We only need Google to say who the user is. Its OAuth tokens are never used, so they are never stored.
@@ -99,6 +132,13 @@ export function authOptions(env: AuthEnv, capture?: LoginCapture) {
           before: async (session) => {
             const { householdId, consentVersion } = await ensureHousehold(env, session.userId)
             return { data: { ...session, householdId, consentVersion } }
+          },
+          // The approximate place for Settings → Devices (Cloudflare's view of the IP). Kept off the cookie cache:
+          // a plain column, written once per sign-in. auth.api calls (QR poll) have no request; that route sets it.
+          after: async (session, ctx) => {
+            const place = requestPlace(ctx?.request)
+            if (!place.city && !place.country) return
+            await env.DB.prepare('UPDATE session SET city = ?1, country = ?2 WHERE id = ?3').bind(place.city, place.country, session.id).run()
           },
         },
         // A used session is refreshed once a day (updateAge): that's activity for the DPDP inactivity job (§12).

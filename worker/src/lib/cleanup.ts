@@ -6,6 +6,7 @@
 // app (the session refresh stamps last_active_at), clears the notice.
 import { deleteAccount } from './account'
 import { AUDIT_RETENTION_MS } from './audit'
+import { DEVICE_CODE_KEEP_MS } from './devices'
 import type { InactivityEmailJob } from './email'
 import { quotaWindow } from './quota'
 import { holdingsKey } from '../market/stocks'
@@ -116,6 +117,10 @@ async function appRows(env: CleanupEnv, now: number): Promise<number> {
       db.prepare(`DELETE FROM session WHERE "expiresAt" < ?1 OR (typeof("expiresAt") IN ('integer','real') AND "expiresAt" < ?2)`).bind(nowIso, now),
       db.prepare(`DELETE FROM verification WHERE "expiresAt" < ?1 OR (typeof("expiresAt") IN ('integer','real') AND "expiresAt" < ?2)`).bind(nowIso, now),
       db.prepare('DELETE FROM audit_event WHERE at < ?1').bind(now - AUDIT_RETENTION_MS),
+      // QR login codes live 5 minutes (M13); the plugin deletes only the ones polled after expiry.
+      db.prepare(`DELETE FROM "deviceCode" WHERE "expiresAt" < ?1 OR (typeof("expiresAt") IN ('integer','real') AND "expiresAt" < ?2)`)
+        .bind(new Date(now - DEVICE_CODE_KEEP_MS).toISOString(), now - DEVICE_CODE_KEEP_MS),
+      db.prepare('DELETE FROM device_code_meta WHERE created_at < ?1').bind(now - DEVICE_CODE_KEEP_MS),
       // A skip for an instalment the member's newest statement already covers has done its job (M12).
       db.prepare(
         `DELETE FROM sip_override WHERE kind = 'skip'

@@ -11,7 +11,9 @@ export const authRoutes = new Hono<AppBindings>()
 
 // Better Auth endpoints the app uses. Everything else under /api/auth is a 404. In particular, the plugins' own email
 // endpoints (/sign-in/magic-link, /email-otp/send-verification-otp) aren't routed: every sign-in email goes through
-// /api/login/email below (Turnstile, per-address limit, one email holding both the link and the code).
+// /api/login/email below (Turnstile, per-address limit, one email holding both the link and the code). The device
+// plugin's endpoints are reached through /api/login/qr* and /api/link* (routes/devices.ts), and sessions are listed
+// and ended through /api/devices: Better Auth's list-sessions would hand every session token to the page (M13).
 const ALLOWED = new Set([
   'GET /get-session',
   'POST /sign-out',
@@ -19,9 +21,6 @@ const ALLOWED = new Set([
   'GET /callback/google',
   'GET /magic-link/verify',
   'POST /sign-in/email-otp',
-  'GET /list-sessions',
-  'POST /revoke-session',
-  'POST /revoke-other-sessions',
   'GET /error', // where Better Auth sends OAuth failures without an errorCallbackURL
 ])
 

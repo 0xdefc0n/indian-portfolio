@@ -6,6 +6,7 @@ import { lazy } from "react"
 export const App = lazy(() => import("../App.tsx"))
 export const ConsentPage = lazy(() => import("./consent").then((m) => ({ default: m.ConsentPage })))
 export const MembersPage = lazy(() => import("./members").then((m) => ({ default: m.MembersPage })))
+export const LinkPage = lazy(() => import("./link").then((m) => ({ default: m.LinkPage })))
 export const SettingsPage = lazy(() => import("./settings").then((m) => ({ default: m.SettingsPage })))
 export const PrivacyPage = lazy(() => import("./legal").then((m) => ({ default: m.PrivacyPage })))
 export const TermsPage = lazy(() => import("./legal").then((m) => ({ default: m.TermsPage })))

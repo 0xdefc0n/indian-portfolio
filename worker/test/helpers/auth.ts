@@ -31,7 +31,8 @@ export class Jar {
   }
 }
 
-type Init = { method?: string; body?: unknown; headers?: Record<string, string>; jar?: Jar }
+/** `cf`: what Cloudflare would attach (request.cf), e.g. { city, country } for the device list (M13). */
+type Init = { method?: string; body?: unknown; headers?: Record<string, string>; jar?: Jar; cf?: Record<string, unknown> }
 
 export function request(path: string, init: Init = {}) {
   const headers: Record<string, string> = { origin: ORIGIN, 'cf-connecting-ip': '203.0.113.7', ...init.headers }
@@ -42,7 +43,8 @@ export function request(path: string, init: Init = {}) {
     headers,
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
     redirect: 'manual',
-  })
+    ...(init.cf ? { cf: init.cf } : {}),
+  } as RequestInit)
 }
 
 export async function call(path: string, init: Init = {}) {

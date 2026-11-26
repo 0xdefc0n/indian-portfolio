@@ -3,6 +3,7 @@
 import { Hono } from 'hono'
 import { CLEANUP_CRON, cleanup } from './lib/cleanup'
 import { consentFromDb, NOTICE_VERSION } from './lib/consent'
+import { LINKED_NOTICE_SQL, NEW_DEVICE_MS, parseLinkedNotice } from './lib/devices'
 import { handleEmailBatch, type EmailJob } from './lib/email'
 import { withEngine } from './lib/engine-client'
 import { ApiError } from './lib/errors'
@@ -14,6 +15,7 @@ import { requestStocks, STOCKS_CRON } from './market/stocks'
 import { requireSession } from './middleware/session'
 import { accountRoutes } from './routes/account'
 import { authRoutes } from './routes/auth'
+import { deviceRoutes } from './routes/devices'
 import { jobRoutes } from './routes/jobs'
 import { marketRoutes } from './routes/market'
 import { memberRoutes } from './routes/members'
@@ -50,6 +52,7 @@ app.get('/health', async (c) => {
 
 // ─── Public ──────────────────────────────────────────────────────────────────────────────────────────────────────
 app.route('/', authRoutes)
+app.route('/', deviceRoutes) // QR login and /link; the signed-in routes there take requireSession themselves
 app.route('/', marketRoutes)
 
 const KFINTECH_FORM_URL = 'https://mfs.kfintech.com/investor/General/ConsolidatedAccountStatement'
@@ -68,17 +71,26 @@ app.get('/config', (c) =>
 
 app.get('/me', requireSession({ consent: false }), async (c) => {
   const user = c.var.user
-  const [household, consentOk] = await Promise.all([
-    c.env.DB.prepare('SELECT id, created_at FROM household WHERE id = ?1').bind(c.var.householdId).first<{ id: string; created_at: number }>(),
+  const now = Date.now()
+  // One query: the household, plus devices linked by QR since this session last looked (plan §7.4: the one-time
+  // "New device linked" notice on the account's other devices).
+  const [row, consentOk] = await Promise.all([
+    c.env.DB.prepare(`SELECT id, created_at, ${LINKED_NOTICE_SQL} AS linked FROM household WHERE id = ?1`)
+      .bind(c.var.householdId, user.id, c.var.sessionId, Math.max(c.var.sessionCreatedAt, now - NEW_DEVICE_MS))
+      .first<{ id: string; created_at: number; linked: string | null }>(),
     c.var.consentOk || consentFromDb(c.env.DB, user.id, c.var.sessionId),
   ])
   // A deleted account's other devices can hold a valid cookie cache for up to 5 min; the SPA loads /me first.
-  if (!household) return c.json({ ok: false, code: 'unauthorized' }, 401)
+  if (!row) return c.json({ ok: false, code: 'unauthorized' }, 401)
+  const linked = parseLinkedNotice(row.linked)
+  // Shown once per session: the next /me starts after now. Rare (only after a link), so the write costs nothing.
+  if (linked.length) await c.env.DB.prepare('UPDATE session SET "noticeAt" = ?1 WHERE id = ?2').bind(now, c.var.sessionId).run()
   return c.json({
     user: { name: user.name, email: user.email, image: user.image ?? null },
-    household,
+    household: { id: row.id, created_at: row.created_at },
     consent_ok: consentOk,
     notice_version: NOTICE_VERSION,
+    new_devices: linked,
   })
 })
 

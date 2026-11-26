@@ -622,7 +622,9 @@ export function createAuth(env: Env) {
       // sendLoginEmail: one email per sign-in request holding BOTH the link and the code. ✅ M5: the login form calls
       // POST /api/login/email, which runs both plugin endpoints server-side and captures the token and the code, then
       // queues ONE email. The plugins' own send endpoints are not routed (see "As built" below).
-      deviceAuthorization({ verificationUri: "/link", expiresIn: "5m", interval: "3s" }), // §7.4; ⚠️ VERIFY option names
+      // ✅ M13 (1.7.28): options verificationUri, expiresIn, interval (time strings) and validateClient exist as named.
+      // Built with an absolute `${APP_URL}/link`, "300s", "5s" (the plugin's default interval) and validateClient = "web-qr".
+      deviceAuthorization({ verificationUri: "/link", expiresIn: "5m", interval: "5s" }), // §7.4
     ],
     databaseHooks: { user: { create: { after: async (u) => createHousehold(env, u.id) } } },
   });
@@ -754,23 +756,44 @@ Implementation notes:
   `BarcodeDetector` where it exists (Chrome and Android), falling back to `qr-scanner` (jsQR-based). Most people will
   just use the phone's camera app, since the QR is a URL.
 - **Security** (these are required by the Better Auth docs and the IETF cross-device BCP):
-  - The approval page shows the requesting device's browser, OS and approximate location. Store `cf-ipcountry`,
-    `cf-ipcity` and the parsed UA when the code is created (⚠️ VERIFY: whether the plugin exposes a hook for extra
-    fields; if not, keep a side table `device_code_meta(user_code, ua, city, country)` written in a
-    `/api/auth/device/code` before-hook).
+  - The approval page shows the requesting device's browser, OS and approximate location. Store the country, the
+    city and the parsed UA when the code is created (✅ M13, better-auth 1.7.28: extra fields exist only through the
+    plugin's internal `grant` option, which also changes its client-id rules, so the fallback is used: a side table
+    `device_code_meta(user_code, label, city, country, created_at)`. `POST /api/login/qr` writes it, and it stores
+    a short label like "Chrome · macOS", not the raw UA. City and country come from `request.cf`, which a client
+    can't forge like a `cf-ipcity` header. Cleanup deletes rows after an hour).
   - It shows the user code to compare and needs an explicit **Approve**.
   - Warning text: "Only approve if you're signing in on a device in front of you right now."
   - The code lasts 5 minutes and is single use. Device-code creation is limited to 10 per hour per IP.
-- **Cookie bridge.** The device token endpoint returns a session token (⚠️ VERIFY: whether it already sets a cookie).
-  If it doesn't, `POST /api/session/adopt` does the following:
-  1. Validate the token with `auth.api.getSession({ headers: { Authorization: "Bearer …" } })` (requires the `bearer()` plugin).
-  2. Set the standard session cookie with Better Auth's cookie helper.
-  3. Accept only tokens issued by the device flow in the last 60 seconds.
+- **Cookie bridge.** The device token endpoint returns a session token (✅ M13, 1.7.28: it sets **no** cookie. It
+  only calls `setNewSession` and returns `access_token`). Built simpler and safer than the `/api/session/adopt`
+  sketch: the token never reaches the page.
+  - A tiny plugin (`pf-device-session-cookie` in `worker/src/auth.ts`) adds an after-hook on `/device/token` that
+    calls Better Auth's own `setSessionCookie`, so the cookie has the normal name, signature and cookie cache.
+  - `POST /api/login/qr/poll` calls the endpoint through `auth.api`, passes the `Set-Cookie` headers on, and drops
+    the token from the body.
+  - So there's no `bearer()` plugin, no adopt route and no 60-second window.
+- **Routes (M13).** Better Auth's `/device*` endpoints aren't routed. The app uses its own routes:
+  - `POST /api/login/qr` (10 an hour per IP) and `POST /api/login/qr/poll` (answers `pending`, `slow_down`,
+    `approved`, `denied` or `expired`);
+  - `GET /api/link?user_code=` (30 per 10 min per user). In 1.7.28 approval needs the code to be **claimed** first
+    by a signed-in `GET /device`, and this route does that claim. A code claimed by another account looks like a
+    wrong code;
+  - `POST /api/link/approve` and `POST /api/link/deny`;
+  - `GET /api/devices`, `DELETE /api/devices/:id` and `POST /api/devices/sign-out-others`. These replace Better
+    Auth's `list-sessions` and `revoke-*`, which are no longer routed, because `list-sessions` would hand every
+    session token to the page.
+  - The QR URL is `/link?user_code=ABCDEFGH` (the plugin's parameter name).
 - **Client ID.** Better Auth's device plugin expects one. Use the fixed value `web-qr` and validate it with
   `validateClient: id => id === "web-qr"`.
 - **Settings → Devices** lists sessions with UA, city and last active, with **Sign out this device** and **Sign out all
-  other devices** (`listSessions`, `revokeSession`, `revokeOtherSessions`). A device linked by QR in the last 7 days
-  shows a "New" badge.
+  other devices** (✅ M13: our `/api/devices` routes, see above). A device linked by QR in the last 7 days shows a
+  "New" badge.
+  - City and country are plain `session` columns, so they stay out of the cookie cache. They're written by a
+    `session.create` after-hook from `request.cf`, and by the poll route for QR sessions. `session.linkedAt`
+    marks a QR link.
+  - The one-time notice is a subquery inside `/api/me`'s single household read, so the D1 budget is unchanged.
+    `session.noticeAt` records that a device has shown it.
 
 ---
 

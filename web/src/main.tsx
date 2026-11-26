@@ -1,6 +1,7 @@
 import { ThemeProvider } from "next-themes"
 import { StrictMode, Suspense, useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
+import { toast } from "sonner"
 import { Route, Switch } from "wouter"
 
 import { FailedJobNotices } from "@/components/jobs"
@@ -8,13 +9,13 @@ import { InstallSheet, OfflinePanel, ThemeColorSync, UpdatePrompt } from "@/comp
 import { Toaster } from "@/components/ui/sonner"
 import { Skeleton } from "@/components/ui/skeleton"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { api, isOffline, type Me, SignedOut } from "@/lib/api"
+import { api, deviceLine, isOffline, type Me, SignedOut } from "@/lib/api"
 import { startInstallListeners } from "@/lib/install"
 import { countLaunch, useReloadWhenOnline } from "@/lib/pwa"
 import { LoginPage, VerifyLinkPage } from "@/pages/login"
 import "./index.css"
 
-import { App, ConsentPage, MembersPage, PrivacyPage, SecurityPage, SettingsPage, TermsPage } from "@/pages/lazy"
+import { App, ConsentPage, LinkPage, MembersPage, PrivacyPage, SecurityPage, SettingsPage, TermsPage } from "@/pages/lazy"
 
 // Before the first render: Chromium can fire beforeinstallprompt right after load (plan §13A.3).
 startInstallListeners(() => api.metric("app_installed"))
@@ -52,6 +53,17 @@ function SignedIn({ page: Page }: { page: React.ComponentType<{ me: Me }> }) {
   useEffect(() => {
     if (me?.consent_ok) countLaunch()
   }, [me?.consent_ok])
+  // One-time "New device linked" notice (plan §7.4): the server returns each link once per device, instead of an email.
+  useEffect(() => {
+    for (const [i, d] of (me?.new_devices ?? []).entries()) {
+      toast.info(`New device linked: ${deviceLine(d)}`, {
+        id: `device-linked-${i}`, // StrictMode runs effects twice in development
+        description: "Not you? Sign it out in Settings → Devices.",
+        duration: 12_000,
+        action: { label: "Devices", onClick: () => window.location.assign("/settings#devices") },
+      })
+    }
+  }, [me])
   const accepted = () => {
     mePromise = null
     load()
@@ -96,6 +108,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/">{() => <SignedIn page={App} />}</Route>
           <Route path="/members">{() => <SignedIn page={MembersPage} />}</Route>
           <Route path="/settings">{() => <SignedIn page={SettingsPage} />}</Route>
+          <Route path="/link">{() => <SignedIn page={LinkPage} />}</Route>
           <Route component={NotFound} />
         </Switch>
         </Suspense>
