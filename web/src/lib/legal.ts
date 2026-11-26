@@ -1,15 +1,14 @@
 // Legal details for the privacy notice, the legal pages and the footer (plan §12).
 //
-// ⚠️ PLACEHOLDERS (M14): the owner still has to give the legal entity name, the grievance officer's name and email,
-// and the jurisdiction (plan §19). Until then the bracketed values below show on the pages, with a "draft" banner,
-// and a lawyer reviews the text before launch (M17). Replace the values and set `placeholders: false`.
+// Filled in by the owner on 2026-11-26. ⚠️ The grievance officer's name is still to come. The lawyer review is
+// deferred about 6 months (owner, 2026-11-26). `placeholders: true` brings back the "draft" banner.
 
 export const LEGAL = {
-  placeholders: true,
-  entity: "[Legal entity name]",
+  placeholders: false,
+  entity: "PocketFolio",
   grievanceOfficer: "[Grievance officer name]",
-  grievanceEmail: "[grievance@pocketfolio.in]",
-  jurisdiction: "[City], India",
+  grievanceEmail: "support@pocketfolio.in",
+  jurisdiction: "Gujarat, India",
   supportEmail: "support@pocketfolio.in",
   /** The date the current texts took effect. */
   effective: "26 November 2026",
