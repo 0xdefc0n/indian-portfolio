@@ -514,7 +514,8 @@ export function SipTimeline({ upcoming, members, showMember }: { upcoming: Upcom
       <ul className="divide-y">
         {list.map(({ s, n, date, due, moved }) => {
           const [d, m] = day(date).split(" ")
-          const note = movedNote(moved, due, short)
+          const skipped = s.skipped?.filter((d) => d < due).at(-1)
+          const note = movedNote(moved, due, short) ?? (skipped ? `${short(skipped)} skipped` : null)
           return (
             <li key={`${s.member_id}-${s.folio}-${s.isin}`} className="flex items-center gap-3.5 py-2.5 text-sm">
               <span className="w-11 shrink-0 text-center leading-tight">

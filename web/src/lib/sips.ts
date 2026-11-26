@@ -41,6 +41,7 @@ export function nextRun(s: Sip, today = todayIso()): { date: string; due: string
       const last = new Date(y, m + 1, 0).getDate()
       due.setFullYear(y, m, Math.min(day, last))
     } else due.setDate(due.getDate() + stepDays)
+    if (s.skipped?.includes(isoOf(due))) continue
     const run = weekdayOf(due)
     if (isoOf(run.date) >= today) return { date: isoOf(run.date), due: isoOf(due), moved: run.moved }
   }
@@ -68,6 +69,9 @@ export function upcomingSips(sips: Sip[], limit = 4): Upcoming {
 }
 
 const MOVED_LABEL: Record<string, string> = { weekend: "weekend", holiday: "market holiday" }
+/** The upcoming instalment the user skipped, if any. */
+export const upcomingSkip = (s: Sip, today = todayIso()) => s.skipped?.filter((d) => d >= today).sort()[0] ?? null
+
 /** "Moved from 24 Nov (market holiday)" */
 export const movedNote = (moved: Moved, due: string, fmt: (iso: string) => string) =>
   moved ? `Moved from ${fmt(due)} (${MOVED_LABEL[moved] ?? moved})` : null

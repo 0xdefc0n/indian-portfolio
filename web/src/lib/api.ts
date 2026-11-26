@@ -115,14 +115,19 @@ export type Sip = {
   next_date: string | null // the next run date (moved past weekends and holidays)
   instalments: number
   invested: number
-  status: "active" | "stopped"
+  status: "active" | "stopped" | "cancelled" // cancelled: the user told PocketFolio (M12)
   sip_day?: number | null // the mandate's day of the month
   next_due?: string | null // the scheduled date behind next_date
   next_moved?: Moved
   /** The latest instalment run since the statement (estimated). */
   latest?: { due: string; date: string; moved: Moved; amount: number; status: InstalmentStatus; units_by: string } | null
   estimated?: { instalments: number; amount: number }
+  skipped?: string[] // upcoming due dates the user skipped
+  cancelled_on?: string | null
 }
+
+/** Which SIP a skip or cancel is about (the snapshot's member, fund and folio). */
+export type SipRef = { member_id: string; isin: string; folio: string | null }
 
 export type Activity = {
   member_id: string
@@ -254,6 +259,11 @@ const MESSAGES: Record<string, string> = {
   password_unavailable: "The password for this statement expired before we could read it. Add it again.",
   expired: "We couldn't read this statement in time. Add it again.",
   engine_unavailable: "We can't read statements right now. Try again in a minute.",
+  // SIP changes (M12)
+  bad_due_date: "Only the next instalment can be skipped. Reload to see the latest dates.",
+  sip_cancelled: "This SIP is cancelled in PocketFolio.",
+  too_many_changes: "Too many SIP changes saved. Add a newer statement to clear the old ones.",
+  confirm_required: "Confirm the cancellation to continue.",
 }
 
 /** A refused API call: `code` is the Worker's stable error code, `data` the rest of its JSON body. */
@@ -385,7 +395,12 @@ export const api = {
   },
   portfolioStatus: () => call<PortfolioStatus>("/api/portfolio/status"),
   /** The whole year for one member key (the server caches 366 days per key); views slice it. */
-  daily: (member: string, days = 366) => call<Daily>(`/api/portfolio/daily?days=${days}&member=${encodeURIComponent(member)}`),
+  daily: (member: string, days = 366) =>
+    call<Daily>(`/api/portfolio/daily?days=${days}&member=${encodeURIComponent(member)}`).then((d) => {
+      // A hint, never a reason to break the dashboard: anything malformed counts as "unavailable".
+      if (!d || !d.coverage || !Array.isArray(d.series) || !d.notes) throw new Error("bad daily answer")
+      return d
+    }),
   marketStatus: () => call<MarketStatus>("/api/market/status"),
   members: () => call<{ members: MemberSummary[] }>("/api/members").then((r) => r.members),
   renameMember: (id: string, name: string) =>
@@ -428,4 +443,8 @@ export const api = {
   },
   cancelJob: (id: string) => call<{ ok: true }>(`/api/jobs/${encodeURIComponent(id)}`, { method: "DELETE" }),
   deleteStatement: (id: string) => call<{ ok: true }>(`/api/statements/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** SIP changes made with the broker or fund house, so the estimates match (M12). The dashboard rebuilds after. */
+  skipSip: (sip: SipRef, due: string) => call<{ ok: true; skipped: string }>("/api/sips/skip", json({ ...sip, due })),
+  undoSkipSip: (sip: SipRef) => call<{ ok: true; removed: number }>("/api/sips/skip", { ...json(sip), method: "DELETE" }),
+  cancelSip: (sip: SipRef) => call<{ ok: true; cancelled_on: string }>("/api/sips/cancel", json({ ...sip, confirm: true })),
 }

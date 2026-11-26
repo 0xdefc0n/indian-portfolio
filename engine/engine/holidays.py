@@ -1,19 +1,23 @@
-"""Business days for SIP instalments (M12, owner request 2026-11-26).
+"""Exchange trading holidays, for SIP run days (M12, owner request 2026-11-26).
 
 A SIP due on a weekend or an exchange holiday runs on the next business day, at that day's NAV, as every broker and
-RTA does. For past dates the NAV store shows it directly: a weekday with no NAV for the fund, while later NAVs exist,
-was a holiday. For upcoming dates we need the exchange's calendar ahead of time, so the confirmed weekday trading
-holidays still ahead are listed here.
+RTA does. The Worker keeps the calendar current: a weekly job reads Upstox's public market-holidays API (NSE and BSE
+closures; worker/src/market/holidays.ts) into the market DB, and each build sends the dates (`market.holidays`).
 
-⚠️ Keep this list current: NSE publishes the next year's calendar in December (circular "Trading holidays for the
-calendar year"). Add only weekday dates confirmed from the circular. Until a year is listed, its upcoming dates move
-for weekends only, and holidays are picked up from the NAVs once they've passed.
+This list is only the fallback when a build carries none (local runs, tests, the job never having run): the 2026
+NSE trading holidays as Upstox lists them on 2026-11-26. It matches the NAV store: every past date on it has no NAV
+for an equity fund, except 31 Mar (financial-year end: NAVs are published, but the exchange and SIPs are closed).
 """
 
 from __future__ import annotations
 
-# Weekday NSE/BSE equity-segment trading holidays from today on (past ones come from the NAVs).
-# 2026-11-24 Guru Nanak Jayanti: confirmed by the NAV store (M9, only daily-NAV funds published).
-# 2026-12-25 Christmas: the last 2026 closure per NSE's 2026 calendar as reported by several brokers (NSE's own
-# circular didn't load on 2026-11-26; see the M12 notes).
-UPCOMING_HOLIDAYS: frozenset[str] = frozenset({"2026-11-24", "2026-12-25"})
+FALLBACK_HOLIDAYS: frozenset[str] = frozenset({
+    "2026-01-15", "2026-01-26", "2026-03-03", "2026-03-26", "2026-03-31", "2026-04-03", "2026-04-14", "2026-05-01",
+    "2026-05-28", "2026-06-26", "2026-09-14", "2026-10-02", "2026-10-20", "2026-11-10", "2026-11-24", "2026-12-25",
+})
+
+
+def calendar(sent: list | None) -> frozenset[str]:
+    """The holidays a build uses: the Worker's list when it sent one, else the fallback."""
+    dates = frozenset(str(d)[:10] for d in sent or [])
+    return dates or FALLBACK_HOLIDAYS

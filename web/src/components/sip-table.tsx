@@ -3,18 +3,19 @@ import { useState } from "react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import type { Member, Sip } from "@/lib/api"
 import { categoryColor, day, inr } from "@/lib/format"
-import { inProgress, movedNote, nextRun } from "@/lib/sips"
+import { SipActions } from "@/components/sip-actions"
+import { inProgress, movedNote, nextRun, upcomingSkip } from "@/lib/sips"
 import { cn } from "@/lib/utils"
 
-type Props = { sips: Sip[]; members: Map<string, Member>; showMember: boolean; missing: Member[] }
+type Props = { sips: Sip[]; members: Map<string, Member>; showMember: boolean; missing: Member[]; onChanged?: () => void }
 
 const monthYear = (iso: string) =>
   new Date(`${iso}T00:00:00`).toLocaleDateString("en-IN", { month: "short", year: "numeric" })
 
-export function SipTable({ sips, members, showMember, missing }: Props) {
+export function SipTable({ sips, members, showMember, missing, onChanged }: Props) {
   const [showStopped, setShowStopped] = useState(false)
   const active = sips.filter((s) => s.status === "active")
-  const stopped = sips.filter((s) => s.status === "stopped")
+  const stopped = sips.filter((s) => s.status !== "active") // stopped (from the statement) or cancelled (by the user)
   const rows = showStopped ? [...active, ...stopped] : active
 
   if (!sips.length) {
@@ -38,11 +39,13 @@ export function SipTable({ sips, members, showMember, missing }: Props) {
             <TableHead className="hidden px-4 md:table-cell">Last paid</TableHead>
             <TableHead className="hidden px-4 sm:table-cell">Next</TableHead>
             <TableHead className="hidden pr-0 text-right md:table-cell">Invested via SIP</TableHead>
+            {onChanged && <TableHead className="w-11 pr-0"><span className="sr-only">Change</span></TableHead>}
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.map((s) => {
-            const off = s.status === "stopped"
+            const off = s.status !== "active"
+            const skip = upcomingSkip(s)
             const run = nextRun(s)
             const running = inProgress(s)
             const moved = run ? movedNote(run.moved, run.due, day) : null
@@ -57,7 +60,11 @@ export function SipTable({ sips, members, showMember, missing }: Props) {
                     </span>
                     {showMember && <span>{members.get(s.member_id)?.name.split(" ")[0]}</span>}
                     {s.folio && <span>Folio {s.folio}</span>}
-                    {off && <span className="rounded-full bg-muted px-2 py-0.5 text-foreground/70">Stopped</span>}
+                    {s.status === "stopped" && <span className="rounded-full bg-muted px-2 py-0.5 text-foreground/70">Stopped</span>}
+                    {s.status === "cancelled" && (
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-foreground/70">Cancelled{s.cancelled_on ? ` ${day(s.cancelled_on)}` : ""}</span>
+                    )}
+                    {skip && <span className="rounded-full bg-muted px-2 py-0.5 text-foreground/70">Skipping {day(skip)}</span>}
                     {running && <span className="rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary">In progress</span>}
                     {run && <span className="sm:hidden">Next {day(run.date)}</span>}
                   </div>
@@ -88,6 +95,11 @@ export function SipTable({ sips, members, showMember, missing }: Props) {
                   {moved && <div className="text-xs text-muted-foreground">{moved}</div>}
                 </TableCell>
                 <TableCell className="hidden pr-0 text-right text-muted-foreground md:table-cell">{inr(s.invested)}</TableCell>
+                {onChanged && (
+                  <TableCell className="pr-0 text-right">
+                    <SipActions sip={s} onChanged={onChanged} />
+                  </TableCell>
+                )}
               </TableRow>
             )
           })}
@@ -101,7 +113,7 @@ export function SipTable({ sips, members, showMember, missing }: Props) {
         </span>
         {stopped.length > 0 && (
           <button className="-my-2 py-2 text-primary hover:underline" onClick={() => setShowStopped((v) => !v)}>
-            {showStopped ? "Hide stopped SIPs" : `Show ${stopped.length} stopped SIP${stopped.length === 1 ? "" : "s"}`}
+            {showStopped ? "Hide stopped SIPs" : `Show ${stopped.length} stopped or cancelled SIP${stopped.length === 1 ? "" : "s"}`}
           </button>
         )}
       </div>

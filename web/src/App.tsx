@@ -450,7 +450,7 @@ export default function App({ me }: { me: Me }) {
                   </dl>
                 )}
                 <Panel title="All SIPs">
-                  <SipTable sips={view.sips} members={memberMap} showMember={showMember} missing={view.sipsMissing} />
+                  <SipTable sips={view.sips} members={memberMap} showMember={showMember} missing={view.sipsMissing} onChanged={load} />
                 </Panel>
               </>
             )}

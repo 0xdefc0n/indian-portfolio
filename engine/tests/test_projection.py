@@ -300,3 +300,75 @@ def test_estimates_are_deterministic():
     a, b = build([st]), build([st])
     assert a == b
     assert (date.fromisoformat(a["holdings"][0]["as_of"]) - date(2026, 11, 25)) == timedelta(0)
+
+
+# ---------------------------------------------------------------- the user's skip and cancel (M12, owner request)
+
+def build_with(statements: list[dict], overrides: list[dict], today: date = TODAY, mkt: dict | None = None) -> dict:
+    return build_portfolio([{"member_id": "m-1", "pan": synthetic.PAN_A, "data": st} for st in statements],
+                           market() if mkt is None else mkt, today, overrides)
+
+
+def f1_sip(snap: dict) -> dict:
+    return next(s for s in snap["sips"] if s["isin"] == F1["isin"])
+
+
+def test_skip_the_next_instalment_only():
+    st = rta_statement("2026-10-12", "2026-09-30")
+    skip = [{"member_id": "m-1", "isin": F1["isin"], "folio": "F-1", "kind": "skip", "due": "2026-12-24"}]
+    snap = build_with([st], skip)
+    sip = f1_sip(snap)
+    assert sip["status"] == "active" and sip["skipped"] == ["2026-12-24"]
+    assert (sip["next_due"], sip["next_date"]) == ("2027-01-24", "2027-01-25")  # 24 Jan 2027 is a Sunday
+    # only that one: on 24 Jan the SIP runs again
+    later = build_with([st], skip, today=date(2027, 1, 26), mkt=market(end=date(2027, 1, 25)))
+    h = next(x for x in later["holdings"] if x["isin"] == F1["isin"])
+    est = [a for a in later["activity"] if a.get("estimated") and a["isin"] == F1["isin"]]
+    assert [a["due"] for a in est] == ["2027-01-24", "2026-11-24", "2026-10-24"]  # 24 Dec skipped
+    assert h["estimated"]["instalments"] == 3
+
+
+def test_skipping_a_past_instalment_takes_it_out_of_the_value():
+    st = rta_statement("2026-10-12", "2026-09-30")
+    base = build_with([st], [])
+    skipped = build_with([st], [{"member_id": "m-1", "isin": F1["isin"], "folio": "F-1", "kind": "skip", "due": "2026-11-24"}])
+    a = next(x for x in base["holdings"] if x["isin"] == F1["isin"])
+    b = next(x for x in skipped["holdings"] if x["isin"] == F1["isin"])
+    assert a["estimated"]["instalments"] == 2 and b["estimated"]["instalments"] == 1
+    assert b["invested"] == pytest.approx(a["invested"] - 10000, abs=0.01)
+    assert f1_sip(skipped)["latest"]["due"] == "2026-10-24"
+
+
+def test_cancel_stops_every_estimate_from_that_day():
+    st = rta_statement("2026-10-12", "2026-09-30")
+    snap = build_with([st], [{"member_id": "m-1", "isin": F1["isin"], "folio": "F-1", "kind": "cancel", "due": "2026-11-01"}])
+    sip = f1_sip(snap)
+    assert sip["status"] == "cancelled" and sip["cancelled_on"] == "2026-11-01" and sip["next_date"] is None
+    h = next(x for x in snap["holdings"] if x["isin"] == F1["isin"])
+    assert h["estimated"]["instalments"] == 1  # October's ran before the cancel; November's isn't counted
+    assert h["sip"] is None  # no "Active SIP" label any more
+    # other members' SIPs in the same fund aren't touched
+    other = build_with([st], [{"member_id": "m-2", "isin": F1["isin"], "folio": "F-1", "kind": "cancel", "due": "2026-11-01"}])
+    assert f1_sip(other)["status"] == "active"
+
+
+def test_a_newer_statement_beats_a_cancel():
+    old, new = rta_statement("2026-10-12", "2026-09-30"), rta_statement("2026-11-25", "2026-11-24")
+    cancel = [{"member_id": "m-1", "isin": F1["isin"], "folio": "F-1", "kind": "cancel", "due": "2026-11-01"}]
+    sip = f1_sip(build_with([old, new], cancel))
+    assert sip["status"] == "active" and sip["cancelled_on"] is None  # the statement shows instalments after it
+
+
+def test_holidays_from_the_worker_replace_the_fallback():
+    st = rta_statement("2026-10-12", "2026-09-30")
+    mkt = {**market(), "holidays": ["2026-12-24"]}  # say the exchange shuts on 24 Dec
+    sip = f1_sip(build([st], mkt))
+    assert (sip["next_due"], sip["next_date"], sip["next_moved"]) == ("2026-12-24", "2026-12-25", "holiday")
+    # with the fallback (no list sent), 24 Dec is a normal day and 25 Dec a holiday
+    assert f1_sip(build([st]))["next_date"] == "2026-12-24"
+
+
+def test_bad_overrides_are_ignored():
+    st = rta_statement("2026-10-12", "2026-09-30")
+    snap = build_with([st], [{"kind": "skip"}, {"member_id": "m-1", "isin": F1["isin"], "folio": "F-1", "kind": "other", "due": "2026-12-24"}])
+    assert f1_sip(snap)["status"] == "active" and f1_sip(snap)["skipped"] == []

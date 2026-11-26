@@ -7,6 +7,7 @@ import { ApiError } from './lib/errors'
 import { handleParseBatch, type ParseMessage, TMP_SWEEP_CRON, tmpSweep } from './lib/jobs'
 import { handleRebuildBatch, PREBUILD_CRON, prebuild, type RebuildMessage } from './lib/snapshot'
 import { handleMarketBatch, type MarketMessage, NAV_INGEST_CRONS, NAV_REPAIR_CRON, navIngest, navRepair } from './market/jobs'
+import { refreshHolidays } from './market/holidays'
 import { requestStocks, STOCKS_CRON } from './market/stocks'
 import { requireSession } from './middleware/session'
 import { authRoutes } from './routes/auth'
@@ -14,6 +15,7 @@ import { jobRoutes } from './routes/jobs'
 import { marketRoutes } from './routes/market'
 import { memberRoutes } from './routes/members'
 import { portfolioRoutes } from './routes/portfolio'
+import { sipRoutes } from './routes/sips'
 import { statementRoutes } from './routes/statements'
 import type { AppBindings, AppEnv } from './types'
 
@@ -76,6 +78,7 @@ app.route('/', memberRoutes)
 app.route('/', statementRoutes)
 app.route('/', jobRoutes)
 app.route('/', portfolioRoutes)
+app.route('/', sipRoutes)
 
 app.notFound((c) => c.json({ ok: false, code: 'not_found' }, 404))
 
@@ -123,6 +126,8 @@ export default {
     if (cron === STOCKS_CRON) {
       // The daily BharatStock run (M11): continues what yesterday's budget left, and fetches newer months.
       ctx.waitUntil(requestStocks(env, controller.scheduledTime, true).then(() => undefined))
+      // Exchange holidays for SIP run days (M12): fetched at most weekly, before the 10:00 IST builds.
+      ctx.waitUntil(refreshHolidays(env, { now: controller.scheduledTime }).then(() => undefined))
       return
     }
     console.log('cron_unhandled', controller.cron)

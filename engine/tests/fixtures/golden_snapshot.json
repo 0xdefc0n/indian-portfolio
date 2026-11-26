@@ -1683,6 +1683,7 @@
  "sips": [
   {
    "amount": 5000.0,
+   "cancelled_on": null,
    "category": "Flexi & multi cap",
    "estimated": {
     "amount": 0,
@@ -1702,6 +1703,7 @@
    "next_due": "2026-12-05",
    "next_moved": "weekend",
    "sip_day": 5,
+   "skipped": [],
    "start_date": "2023-01-05",
    "status": "active"
   }

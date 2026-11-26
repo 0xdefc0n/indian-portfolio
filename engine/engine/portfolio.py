@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import calendar
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
-from . import market, projection, stocks
+from . import holidays, market, projection, stocks
 from .analysis import asset_class, category_from_sebi, member_analysis, scheme_info
 from .market import NavSeries
 
@@ -286,13 +286,33 @@ def market_requirements(statements: list[dict], isin_to_code: dict[str, str] | N
     }
 
 
-def build_portfolio(statements: list[dict], market_data: dict | None = None, today: date | None = None) -> dict:
+def _overrides_by_member(overrides: list[dict] | None) -> dict[str, dict]:
+    """[{member_id, isin, folio, kind: skip|cancel, due}] → {member_id: {(folio, isin): {"skip": set, "cancel": date}}}.
+    The earliest cancel wins."""
+    out: dict[str, dict] = {}
+    for o in overrides or []:
+        try:
+            key = (o.get("folio"), o["isin"])
+            slot = out.setdefault(o["member_id"], {}).setdefault(key, {"skip": set(), "cancel": None})
+            due = str(o["due"])[:10]
+        except (KeyError, TypeError, AttributeError):
+            continue
+        if o.get("kind") == "skip":
+            slot["skip"].add(due)
+        elif o.get("kind") == "cancel" and (slot["cancel"] is None or due < slot["cancel"]):
+            slot["cancel"] = due
+    return out
+
+
+def build_portfolio(statements: list[dict], market_data: dict | None = None, today: date | None = None,
+                    overrides: list[dict] | None = None) -> dict:
     """Newest CDSL + newest CAMS/KFintech statement per member, merged into one family view.
 
     statements:  [{"member_id", "pan", "name"?, "data"}]: decrypted parsed statements of one household.
     market_data: {"navs": {amfi_code: [[iso_date, nav], ...]}, "isin_to_code": {isin: amfi_code},
                   "stocks": stock data (see stocks.py) or None}. Missing pieces degrade gracefully.
     today:       the build date (the caller's clock), so builds are reproducible.
+    overrides:   the user's SIP changes the statements can't show yet: skip one instalment, or cancel (M12).
     """
     market_data = market_data or {}
     today = today or date.today()
@@ -308,6 +328,8 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
     codes = _fund_codes(staged, market_data.get("isin_to_code") or {})
     navs = market.series_map(market_data.get("navs"))
     bench = navs.get(market.BENCHMARK_CODE)
+    hols = holidays.calendar(market_data.get("holidays"))
+    user_overrides = _overrides_by_member(overrides)
 
     for mid, cdsl, rta, merged, total, full_hist in sorted(staged, key=lambda s: -s[4]):
         pan = by_member[mid]["pan"]
@@ -359,7 +381,7 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
             })
             code = codes.get(h["isin"])
             est = _carry_forward(holdings[-1], h, code, navs.get(code or ""), member_sips.get(h["isin"], []), rta,
-                                 by_member[mid].get("CDSL_ALL", []), today)
+                                 by_member[mid].get("CDSL_ALL", []), today, hols, user_overrides.get(mid))
             # what the same rupees on the same days would be worth in a Nifty 50 index fund
             holdings[-1]["benchmark_value"] = market.replay(holdings[-1]["cashflows"], bench, holdings[-1]["as_of"])
             if est:
@@ -391,19 +413,24 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
         for s in (rta or {}).get("sips", []):
             day = projection.sip_day(rta.get("transactions", []), s.get("folio"), s["isin"])
             series = navs.get(codes.get(s["isin"], ""))
+            o = projection.override_for(user_overrides.get(mid), s)
+            status = "cancelled" if s["status"] == "active" and o["cancel"] else s["status"]
             # the next run date, moved past weekends and holidays as the broker would (owner request, M12)
-            nxt = projection.next_run(s, day, today, series) if s["status"] == "active" else None
+            nxt = projection.next_run(s, day, today, series, hols, o["skip"]) if status == "active" else None
             e = estimates.get(s["isin"], {})
             done = [i for i in e.get("instalments", []) if i["folio"] == s.get("folio")]
             ran = sorted(done + [i for i in e.get("pending", []) if i["folio"] == s.get("folio")], key=lambda i: i["date"])
             latest = ran[-1] if ran else None
-            sips.append({**s, "member_id": mid, "name": display_name(s["name"]),
+            sips.append({**s, "status": status, "member_id": mid, "name": display_name(s["name"]),
                          "category": cats.get(s["isin"], categorize(s["name"], "mutual_fund", s["isin"])),
                          "sip_day": day, "next_date": nxt["date"] if nxt else None,
                          "next_due": nxt["due"] if nxt else None, "next_moved": nxt["moved"] if nxt else None,
                          "latest": ({k: latest[k] for k in ("due", "date", "moved", "amount", "status", "units_by")}
                                     if latest else None),
-                         "estimated": {"instalments": len(done), "amount": round(sum(i["amount"] for i in done), 2)}})
+                         "estimated": {"instalments": len(done), "amount": round(sum(i["amount"] for i in done), 2)},
+                         # the user's own changes: an upcoming instalment they skipped, the day they cancelled
+                         "skipped": sorted(d for d in o["skip"] if d >= (today - timedelta(days=10)).isoformat()),
+                         "cancelled_on": o["cancel"]})
         m["sips_known"] = rta is not None
 
     # Label each holding with its active SIP(s): same member and fund (a fund can have SIPs in two folios)
@@ -429,7 +456,8 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
 
 
 def _carry_forward(out: dict, h: dict, code: str | None, series: NavSeries | None, sips: list[dict], rta: dict | None,
-                   cdsl_all: list[dict], today: date) -> dict | None:
+                   cdsl_all: list[dict], today: date, hols: frozenset[str] = holidays.FALLBACK_HOLIDAYS,
+                   overrides: dict | None = None) -> dict | None:
     """Units over time, estimated SIP instalments since the statement, and the value at the latest NAV (§10.5.1).
 
     `out` is the snapshot holding (changed in place); `h` the merged statement row. The statement's own figures stay
@@ -443,7 +471,7 @@ def _carry_forward(out: dict, h: dict, code: str | None, series: NavSeries | Non
         return None  # ETFs and shares have no AMFI NAV: shown as on the statement, left out of daily returns
     rta_for = rta if any(s.get("isin") == h["isin"] for s in (rta or {}).get("schemes", [])) else None
     timeline, exact = projection.units_timeline(h["isin"], rta_for, cdsl_all, as_of, h["units"])
-    est = (projection.estimate_sips(sips, (rta or {}).get("transactions", []), as_of, series, today)
+    est = (projection.estimate_sips(sips, (rta or {}).get("transactions", []), as_of, series, today, hols, overrides)
            if sips else {"instalments": [], "pending": []})
     inst = est["instalments"]
     out["units_timeline"] = projection.extend_timeline(timeline, inst)

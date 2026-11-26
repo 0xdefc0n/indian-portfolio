@@ -82,10 +82,10 @@ def due_dates(sip: dict, day: int | None, after: date, until: date) -> list[date
 ALLOTMENT_DAYS = 2  # units show by T+2 business days at the latest (KFintech NACH: T+1/T+2; AMFI: T)
 
 
-def is_business_day(d: date, series: NavSeries | None = None) -> bool:
+def is_business_day(d: date, series: NavSeries | None = None, hols: frozenset[str] = holidays.FALLBACK_HOLIDAYS) -> bool:
     """A weekday that isn't an exchange holiday. A past weekday with no NAV for the fund (later NAVs exist) was one."""
     iso = d.isoformat()
-    if d.weekday() >= 5 or iso in holidays.UPCOMING_HOLIDAYS:
+    if d.weekday() >= 5 or iso in hols:
         return False
     if series and series.dates and series.dates[-1] > iso:
         i = bisect.bisect_left(series.dates, iso)
@@ -93,29 +93,33 @@ def is_business_day(d: date, series: NavSeries | None = None) -> bool:
     return True
 
 
-def run_date(due: date, series: NavSeries | None = None) -> tuple[date, str | None]:
+def run_date(due: date, series: NavSeries | None = None, hols: frozenset[str] = holidays.FALLBACK_HOLIDAYS) -> tuple[date, str | None]:
     """The business day an instalment due on `due` runs (is debited and priced), and why it moved, if it did."""
     d, reason = due, None
     for _ in range(14):
-        if is_business_day(d, series):
+        if is_business_day(d, series, hols):
             return d, reason
         reason = reason or ("weekend" if d.weekday() >= 5 else "holiday")
         d += timedelta(days=1)
     return d, reason
 
 
-def add_business_days(d: date, n: int, series: NavSeries | None = None) -> date:
+def add_business_days(d: date, n: int, series: NavSeries | None = None, hols: frozenset[str] = holidays.FALLBACK_HOLIDAYS) -> date:
     while n > 0:
         d += timedelta(days=1)
-        if is_business_day(d, series):
+        if is_business_day(d, series, hols):
             n -= 1
     return d
 
 
-def next_run(sip: dict, day: int | None, today: date, series: NavSeries | None = None) -> dict | None:
-    """The next instalment that hasn't run yet: {"due", "date" (the run date), "moved"}. None for irregular SIPs."""
+def next_run(sip: dict, day: int | None, today: date, series: NavSeries | None = None, hols: frozenset[str] = holidays.FALLBACK_HOLIDAYS,
+             skip: frozenset[str] = frozenset()) -> dict | None:
+    """The next instalment that hasn't run yet: {"due", "date" (the run date), "moved"}, passing over instalments the
+    user skipped. None for irregular SIPs."""
     for due in due_dates(sip, day, today - timedelta(days=10), today + timedelta(days=130)):
-        run, moved = run_date(due, series)
+        if due.isoformat() in skip:
+            continue
+        run, moved = run_date(due, series, hols)
         if run > today:
             return {"due": due.isoformat(), "date": run.isoformat(), "moved": moved}
     return None
@@ -127,23 +131,35 @@ def next_due(sip: dict, day: int | None, today: date) -> date | None:
     return dates[0] if dates else None
 
 
-def execution(series: NavSeries | None, due: date) -> tuple[str, float] | None:
+def execution(series: NavSeries | None, due: date, hols: frozenset[str] = holidays.FALLBACK_HOLIDAYS) -> tuple[str, float] | None:
     """(NAV date, NAV) an instalment due on `due` is allotted at, or None while that NAV isn't out."""
     if not series:
         return None
-    run, _ = run_date(due, series)
+    run, _ = run_date(due, series, hols)
     i = bisect.bisect_left(series.dates, run.isoformat())
     if i >= len(series.dates) or (_d(series.dates[i]) - run).days > EXECUTE_WITHIN_DAYS:
         return None
     return series.dates[i], series.navs[i]
 
 
-def estimate_sips(sips: list[dict], transactions: list[dict], after: str, series: NavSeries | None, today: date) -> dict:
+def override_for(overrides: dict | None, sip: dict) -> dict:
+    """The user's skip/cancel for one SIP ({"skip": set of due dates, "cancel": date or None}). A cancel is ignored
+    once a statement shows an instalment on or after it: the statement is the truth."""
+    o = (overrides or {}).get((sip.get("folio"), sip["isin"])) or {}
+    cancel = o.get("cancel")
+    if cancel and sip.get("last_date", "") >= cancel:
+        cancel = None
+    return {"skip": frozenset(o.get("skip") or ()), "cancel": cancel}
+
+
+def estimate_sips(sips: list[dict], transactions: list[dict], after: str, series: NavSeries | None, today: date,
+                  hols: frozenset[str] = holidays.FALLBACK_HOLIDAYS, overrides: dict | None = None) -> dict:
     """Estimated instalments of one fund's active SIPs that have run after the statement date `after`.
 
     {"instalments": [...]} with each {"due", "date" (run date T), "moved" (None | "weekend" | "holiday"), "amount",
     "units", "nav", "folio", "status" ("in_progress" | "done"), "units_by"}; `units`/`nav` are None while T's NAV
-    isn't out (pending: not counted in the value). "pending" lists those.
+    isn't out (pending: not counted in the value). "pending" lists those. Instalments the user skipped, and any due
+    on or after a cancel, are left out (`overrides`: {(folio, isin): {"skip": [...], "cancel": date}}).
     """
     out = []
     start = _d(after)
@@ -151,12 +167,15 @@ def estimate_sips(sips: list[dict], transactions: list[dict], after: str, series
         if s.get("status") != "active" or not s.get("amount"):
             continue
         day = sip_day(transactions, s.get("folio"), s["isin"])
+        o = override_for(overrides, s)
         for due in due_dates(s, day, start, today):
-            run, moved = run_date(due, series)
+            if due.isoformat() in o["skip"] or (o["cancel"] and due.isoformat() >= o["cancel"]):
+                continue
+            run, moved = run_date(due, series, hols)
             if run > today:
                 continue  # moved past today: still upcoming
-            units_by = add_business_days(run, ALLOTMENT_DAYS, series)
-            got = execution(series, due)
+            units_by = add_business_days(run, ALLOTMENT_DAYS, series, hols)
+            got = execution(series, due, hols)
             inst = {"due": due.isoformat(), "date": run.isoformat(), "moved": moved, "amount": float(s["amount"]),
                     "units": None, "nav": None, "folio": s.get("folio"),
                     "status": "done" if got and today >= units_by else "in_progress", "units_by": units_by.isoformat()}

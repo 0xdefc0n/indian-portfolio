@@ -77,3 +77,14 @@ def test_build_endpoint_matches_golden(client):
 def test_build_bad_request(client):
     assert client.post("/build", content=b"{}", headers={"X-Engine-Key": KEY}).status_code == 400
     assert client.post("/build", content=b"nope", headers={"X-Engine-Key": KEY}).status_code == 400
+    bad = json.dumps({"statements": [], "overrides": {"kind": "skip"}}).encode()
+    assert client.post("/build", content=bad, headers={"X-Engine-Key": KEY}).status_code == 400
+
+
+def test_build_endpoint_applies_overrides(client):
+    body = {"statements": synthetic.statements(), "market": synthetic.market(), "today": synthetic.TODAY.isoformat(),
+            "overrides": [{"member_id": "m-alpha", "isin": synthetic.F1["isin"], "folio": "F-1001", "kind": "cancel",
+                           "due": "2026-11-21"}]}
+    r = client.post("/build", content=json.dumps(body), headers={"X-Engine-Key": KEY, "Content-Type": "application/json"})
+    sip = next(s for s in r.json()["snapshot"]["sips"] if s["isin"] == synthetic.F1["isin"])
+    assert sip["status"] == "cancelled" and sip["next_date"] is None

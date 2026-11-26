@@ -835,6 +835,8 @@ export async function assertMember(c, memberId: string) {
 | `GET /api/portfolio` | ✅ | snapshot JSON (same shape as today's `Portfolio` type, with stable member IDs) + `{ stale, building }` | §10.2 |
 | `GET /api/portfolio/status` | ✅ | `{ status, built_at, market_date }` for polling after upload. ✅ M10: also `building`, `pending` (`snapshot.requested_at > checked_at`: a rebuild is due) and `stale`; `status` is `empty`/`pending`/`building`/`failed`/`ready` | one indexed D1 read; polled with backoff (2 → 15 s), `Retry-After: 3` while due |
 | `GET /api/portfolio/daily?days=30&member=all` | ✅ | daily returns (§10.5): `{ as_of, coverage, today, series }` | `days` ≤ 366; `member` is `all` or a member ID, checked with `assertMember` |
+| `POST /api/sips/skip` · `DELETE /api/sips/skip` | ✅ | skip the next instalment of one SIP, or undo it (§10.5.1, M12): `{ member_id, isin, folio, due }` | `member_id` checked with `assertMember`; `due` today to +100 days; one skip per SIP |
+| `POST /api/sips/cancel` | ✅ | cancel one SIP in PocketFolio for good (§10.5.1, M12): `{ member_id, isin, folio, confirm: true }` | `assertMember`; no undo; ≤ 200 changes per household |
 | `GET /api/market/status` | – | `{ latest_nav_date, coverage_pct, final }` for the "NAVs updating" hint | public, cacheable for 5 min |
 | `POST /api/kfintech/guide` | ✅ | `{ member_id or pan, password? }` → stores a pending password, returns `{ password, form_url }` | the manual path only (D9); same validation as `kfintech.password_problem`. **The one place a PAN may be typed:** KFintech's own form needs it, and a new person isn't a member yet. Picking an existing member needs no PAN |
 | `GET /api/account/export` | ✅ | JSON download of all parsed statements and members (decrypted) | DPDP access right; 3 per day |
@@ -1351,13 +1353,18 @@ consumer):
   - **Run day, as brokers do it.** ✅ AMFI "Payment modes and their efficiency", Annexure A2: NACH/e-NACH debits on
     T (the SIP date) and allots on T. Auto-debit and internet SIP allot on T+1. KFintech's SIP TAT table for
     non-liquid schemes gives NACH T debit, T+1/T+2 allotment, and internet SIP T+2. A due date on a weekend or
-    exchange holiday runs on the next business day, at that day's NAV. Past holidays come from the NAVs: a weekday
-    with no NAV for the fund while later NAVs exist was a holiday. Upcoming ones come from
-    `engine/engine/holidays.py`. ⚠️ VERIFY: NSE's 2026 circular (FAOP71777) didn't load on 2026-11-26. The list holds
-    the remaining confirmed weekday closure (25 Dec 2026, from several brokers' copies of NSE's calendar) plus 24 Nov
-    2026 (seen in the NAV store). Fallback until verified: upcoming dates move for weekends and the listed dates only,
-    and other holidays are picked up from the NAVs once they've passed. Add the 2027 list when NSE publishes it in
-    December.
+    exchange holiday runs on the next business day, at that day's NAV.
+  - **The holiday calendar** (owner request: "a job that checks for holidays"). ✅ 2026-11-26: Upstox's public
+    market-holidays API (`https://api.upstox.com/v2/market/holidays`, no key) lists NSE/BSE closures as JSON. NSE's
+    own API turns away automated clients, and its circular is a PDF. Its 2026 list (16 NSE trading holidays) matches
+    the NAV store: every past date has no NAV for an equity fund, except 31 Mar (financial-year end: NAVs are
+    published, but the exchange and SIPs are closed). The job `refreshHolidays` (`worker/src/market/holidays.ts`)
+    rides the daily `0 4 * * *` cron and fetches at most weekly into `market_holiday` (migration
+    `market/0004_holiday.sql`). The next year's dates arrive once the exchanges publish them in December. A failed
+    fetch keeps the stored dates and retries the next day. Each build sends the dates from 400 days back on
+    (`market.holidays`, part of the inputs hash, so a new holiday rebuilds). The engine falls back to its own 2026
+    list (`engine/engine/holidays.py`) when none are sent. Past weekdays with no NAV for the fund also count as
+    holidays.
   - **Status, as the broker shows it.** An instalment is `in_progress` from its run day T until units show (T+2
     business days, the latest in KFintech's table), then `done`. Its units count in the value as soon as T's NAV is
     out. Until then it's `pending`: debited but not yet valued. Each SIP carries `next_date` (the run date),
@@ -1367,6 +1374,16 @@ consumer):
     `value_date` and `estimated` totals. The month-end chart carries on to the latest NAV when it already covers every
     fund. ETFs and shares keep the statement's value.
   - **A newer statement replaces every estimate:** estimates only ever start after the newest statement date.
+  - **Skip and cancel** (owner decision, 2026-11-26, instead of a time limit on estimates). As at brokers, the user
+    can skip the **next** instalment only (one per SIP, undoable until its date), or cancel a SIP for good, after a
+    confirmation saying it can't be undone. PocketFolio doesn't place or stop SIPs, so both only record what the
+    user did with their broker or fund house, and the dialog says so. Skipped instalments and anything due on or after
+    a cancel aren't estimated, and the SIP shows "Skipping 24 Dec" or "Cancelled". A newer statement that shows
+    instalments after a cancel wins. Stored in `sip_override` (migration `app/0006_sip_override.sql`): the SIP (ISIN,
+    folio) is sealed with the household key, with an HMAC to find it again. Rows go with the member and household
+    (FK cascade). Sent to `/build` as `overrides` and part of the inputs hash. Routes: `POST /api/sips/skip`,
+    `DELETE /api/sips/skip`, `POST /api/sips/cancel` (`confirm: true` required), each audited and followed by a
+    rebuild.
   - Tax figures (`tax`, `analysis.harvest`) stay as of the statement.
 - **ETFs and shares held in CDSL** (`asset_type == "equity_or_bond"`) have no AMFI NAV. They're excluded and listed
   as "not included".
