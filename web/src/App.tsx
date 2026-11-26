@@ -23,7 +23,7 @@ import {
 } from "@/components/overview"
 import { Segmented } from "@/components/ui/segmented"
 import { OpenFundContext } from "@/lib/fund-context"
-import { api, type Holding, type Me, type Member, type Portfolio, SignedOut, waitForPortfolio } from "@/lib/api"
+import { api, type Holding, type MarketStatus, type Me, type Member, type Portfolio, SignedOut, waitForPortfolio } from "@/lib/api"
 import { day, inr, monthly } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { upcomingSips } from "@/lib/sips"
@@ -130,6 +130,16 @@ function BuildingState() {
   )
 }
 
+/** The latest NAV day is still filling in (nav-ingest runs a few times a night): say so, quietly. */
+function NavsUpdatingHint({ market }: { market: MarketStatus }) {
+  return (
+    <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+      <InfoIcon className="size-3.5" />
+      Some funds' NAVs for {day(market.latest_nav_date)} are still coming in. Values update by themselves.
+    </p>
+  )
+}
+
 /** "Updating to today's NAV…" while a rebuild is due (plan §13 item 8). */
 function UpdatingBanner({ stale }: { stale: boolean }) {
   return (
@@ -165,6 +175,11 @@ export default function App({ me }: { me: Me }) {
     api.portfolio().then(setData, (e: Error) => !(e instanceof SignedOut) && setError(e.message))
   }, [])
   useEffect(load, [load])
+
+  const [market, setMarket] = useState<MarketStatus | null>(null)
+  useEffect(() => {
+    api.marketStatus().then(setMarket, () => undefined) // a hint only
+  }, [])
 
   // While a rebuild is due, wait for it (status polling with backoff and Retry-After), then reload once.
   const updating = !!data && (data.stale || data.building)
@@ -275,7 +290,11 @@ export default function App({ me }: { me: Me }) {
 
         {ready && (
           <div className="space-y-8 pt-3 sm:pt-4">
-            {updating && <UpdatingBanner stale={data.stale} />}
+            {updating ? (
+              <UpdatingBanner stale={data.stale} />
+            ) : (
+              market?.latest_nav_date && !market.final && <NavsUpdatingHint market={market} />
+            )}
             {multi && tab !== "overview" && <MemberSwitch members={data.members} value={who} onChange={switchMember} />}
 
             {tab === "overview" && (

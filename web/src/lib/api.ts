@@ -124,6 +124,9 @@ export type Portfolio = {
   building: boolean
 }
 
+/** GET /api/market/status (public, cached 5 min): the latest full NAV day and how complete it is. */
+export type MarketStatus = { latest_nav_date: string | null; coverage_pct: number | null; final: boolean }
+
 /** GET /api/portfolio/status: whether the dashboard is up to date with the latest statements and NAVs. */
 export type PortfolioStatus = {
   status: "empty" | "ready" | "building" | "pending" | "failed"
@@ -341,6 +344,7 @@ export const api = {
     return { ...body, stale: r.headers.get("X-Snapshot-Stale") === "1", building: r.headers.get("X-Snapshot-Building") === "1" }
   },
   portfolioStatus: () => call<PortfolioStatus>("/api/portfolio/status"),
+  marketStatus: () => call<MarketStatus>("/api/market/status"),
   members: () => call<{ members: MemberSummary[] }>("/api/members").then((r) => r.members),
   renameMember: (id: string, name: string) =>
     call<{ member: { id: string; name: string } }>(`/api/members/${encodeURIComponent(id)}`, { ...json({ name }), method: "PATCH" }),

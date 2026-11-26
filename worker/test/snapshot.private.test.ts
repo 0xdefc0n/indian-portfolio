@@ -1,7 +1,7 @@
 // Parity (M10): the private statements uploaded through the Worker (real engine /parse), built by the pf-rebuild
 // consumer on a real EngineBatch container that reads its NAV series from R2 through market.internal, and served by
-// GET /api/portfolio, equal the original local app's /api/portfolio on the same files (member ids aside), and the
-// engine's own build. Expectations come from test/helpers/portfolio_expect.py via test/global-setup.ts; the PDFs are
+// GET /api/portfolio, equal the engine's own build of the same files (member ids aside). Until M10 deleted it, they
+// also equalled the original local app's /api/portfolio (0 differing paths, 2026-11-26). Expectations come from test/helpers/portfolio_expect.py via test/global-setup.ts; the PDFs are
 // git-ignored and the test skips without them (CI).
 // Privacy (§0.1): only differing JSON paths and counts are reported, never values. Don't use toEqual on snapshots.
 import { env } from 'cloudflare:test'
@@ -21,7 +21,6 @@ const fromBase64 = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCode
 type Snapshot = { members: { id: string }[]; holdings: { member_id: string }[]; activity: { member_id: string }[]; sips: { member_id: string }[] }
 type Expected = {
   engine: Snapshot
-  legacy: Snapshot | null
   navs: Record<string, { dates: string[]; navs: number[] }>
   isin_to_code: Record<string, string>
   members: Record<string, string> // engine member id → sha256(PAN)
@@ -59,7 +58,7 @@ async function sha256(text: string) {
 }
 
 describe.skipIf(!pdfs.length || !expectedJson)(`snapshot parity on private statements (${pdfs.length} PDFs${expectedJson ? '' : ', no expectations'})`, () => {
-  it('Worker snapshot = old app /api/portfolio = engine build (member ids aside)', { timeout: 600_000 }, async () => {
+  it('Worker snapshot = engine build (member ids aside)', { timeout: 600_000 }, async () => {
     const expected = JSON.parse(expectedJson!) as Expected
     const ist = new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10)
     expect(ist, 'expectations computed on another day: re-run').toBe(expected.today)
@@ -108,11 +107,6 @@ describe.skipIf(!pdfs.length || !expectedJson)(`snapshot parity on private state
 
     const vsEngine = diffPaths(got, expected.engine)
     expect(vsEngine, 'Worker vs engine build differ at these paths').toEqual([])
-    // The old app names members m0, m1… in the same value order. (null once app/ is gone)
-    const legacy = expected.legacy
-    if (legacy) remap(legacy, new Map(legacy.members.map((m, i) => [m.id, expected.engine.members[i]?.id ?? 'extra'])))
-    const vsLegacy = legacy ? diffPaths(got, legacy) : []
-    expect(vsLegacy, 'Worker vs old app differ at these paths').toEqual([])
-    console.log(`parity ok: ${got.members.length} members, ${got.holdings.length} holdings, ${Object.keys(expected.navs).length} NAV series; build ${buildMs} ms; legacy ${expected.legacy ? 'compared' : 'gone'}`)
+    console.log(`parity ok: ${got.members.length} members, ${got.holdings.length} holdings, ${Object.keys(expected.navs).length} NAV series; build ${buildMs} ms`)
   })
 })
