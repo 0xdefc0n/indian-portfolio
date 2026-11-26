@@ -372,3 +372,35 @@ def test_bad_overrides_are_ignored():
     st = rta_statement("2026-10-12", "2026-09-30")
     snap = build_with([st], [{"kind": "skip"}, {"member_id": "m-1", "isin": F1["isin"], "folio": "F-1", "kind": "other", "due": "2026-12-24"}])
     assert f1_sip(snap)["status"] == "active" and f1_sip(snap)["skipped"] == []
+
+
+# ---------------------------------------------------------------- the mandate day after a date change (owner's case)
+
+def sip_rows(dates: list[str], isin: str = F1["isin"], folio: str = "F-1") -> list[dict]:
+    return [{"isin": isin, "folio": folio, "date": d, "type": "PURCHASE_SIP", "units": 1.0, "amount": 1000.0} for d in dates]
+
+
+def test_sip_day_follows_a_date_change():
+    # On the 20th until May (two moved by a weekend), then changed to the 24th from June; 24 Oct was a Saturday
+    old = ["2025-11-20", "2025-12-22", "2026-01-20", "2026-02-20", "2026-03-20", "2026-04-20", "2026-05-18"]
+    new = ["2026-06-25", "2026-07-24", "2026-08-24", "2026-09-24", "2026-10-26"]
+    assert projection.sip_day(sip_rows(old + new), "F-1", F1["isin"]) == 24  # the most common day would say 20
+    # and so the November instalment is estimated (due 24 Nov, a holiday: runs 25 Nov)
+    sip = {"isin": F1["isin"], "folio": "F-1", "status": "active", "amount": 1000.0, "frequency": "monthly",
+           "interval_days": 30, "last_date": "2026-10-26"}
+    est = projection.estimate_sips([sip], sip_rows(old + new), "2026-11-23", NavSeries(series_for(F1)), TODAY)
+    assert [(i["due"], i["date"]) for i in est["instalments"]] == [("2026-11-24", "2026-11-25")]
+    assert projection.next_run(sip, 24, TODAY)["date"] == "2026-12-24"
+
+
+def test_sip_day_edge_cases():
+    # only a Monday instalment after a weekend: due Saturday at the earliest
+    assert projection.sip_day(sip_rows(["2026-10-26"]), "F-1", F1["isin"]) == 24
+    # a mandate on the 31st runs on the last business day of short months
+    assert projection.sip_day(sip_rows(["2026-09-30", "2026-10-30", "2026-11-30"]), "F-1", F1["isin"]) == 30
+    assert projection.sip_day(sip_rows(["2026-07-31", "2026-08-31", "2026-09-30", "2026-10-30"]), "F-1", F1["isin"]) == 31
+    # (without 31 Jul it's ambiguous: Monday 31 Aug could be due on Sat 29 or Sun 30 too, so the earliest fitting, 30)
+    assert projection.sip_day(sip_rows(["2026-08-31", "2026-09-30", "2026-10-30"]), "F-1", F1["isin"]) == 30
+    # the one-off first instalment after a change doesn't decide the day
+    assert projection.sip_day(sip_rows(["2026-06-25", "2026-07-24", "2026-08-24"]), "F-1", F1["isin"]) == 24
+    assert projection.sip_day([], "F-1", F1["isin"]) is None

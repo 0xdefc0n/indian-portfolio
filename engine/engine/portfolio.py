@@ -411,8 +411,8 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
         # SIPs only come from CAMS/KFintech (CDSL doesn't say which purchases are SIPs)
         cats = {h["isin"]: categorize(h["raw_name"], h["asset_type"], h["isin"]) for h in merged}
         for s in (rta or {}).get("sips", []):
-            day = projection.sip_day(rta.get("transactions", []), s.get("folio"), s["isin"])
             series = navs.get(codes.get(s["isin"], ""))
+            day = projection.sip_day(rta.get("transactions", []), s.get("folio"), s["isin"], series, hols)
             o = projection.override_for(user_overrides.get(mid), s)
             status = "cancelled" if s["status"] == "active" and o["cancel"] else s["status"]
             # the next run date, moved past weekends and holidays as the broker would (owner request, M12)

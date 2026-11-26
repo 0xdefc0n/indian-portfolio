@@ -1345,8 +1345,11 @@ consumer):
 - **After the latest statement date** (🔒 owner change, 2026-11-26, M12; this replaces "units are assumed constant"):
   the dashboard shows the portfolio as of today from the last statement, without asking for an upload every month.
   Code: `engine/engine/projection.py`.
-  - **Estimated SIP instalments.** Each active SIP is rolled forward on its mandate day (the most common day of the
-    month among its latest instalments, so one holiday shift doesn't move the schedule). Every due date after the
+  - **Estimated SIP instalments.** Each active SIP is rolled forward on its mandate day. Walking back from the
+    latest instalment, keep the days each one could have been due on (its date, or a weekend/holiday just before it)
+    and stop at the first that doesn't fit, which is where the date was changed. (M12 fix, owner's case: three SIPs
+    moved from the 20th to the 24th in June. The first rule, the most common day over a year, still said 20th, so
+    their November instalments weren't estimated.) Every due date after the
     statement and up to today is an estimated instalment. Its units are the amount after 0.005% stamp duty, divided by
     the NAV of its run day. They're added to `units_timeline`, `units`, `invested` and the XIRR `cashflows`, and listed
     in `activity` with `estimated: true`. Irregular and stopped SIPs aren't estimated.

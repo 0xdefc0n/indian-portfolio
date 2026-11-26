@@ -34,9 +34,10 @@ import { Tenant } from './tenant'
 
 /**
  * Bump to rebuild every snapshot (a change in what the Worker sends to /build, or in what the engine builds).
- * 2: stock data (M11). 3: units timelines, estimated SIPs and values at the latest NAV (M12).
+ * 2: stock data (M11). 3: units timelines, estimated SIPs and values at the latest NAV (M12). 4: the SIP mandate day
+ * follows a date change (M12 fix). An older snapshot is stale, so it rebuilds on its next read (snapshot.version).
  */
-export const SNAPSHOT_VERSION = 3
+export const SNAPSHOT_VERSION = 4
 /** Debounce: every trigger's message arrives this much later (§10.2). */
 export const REBUILD_DELAY_S = 10
 /** A claim outlives the engine call (100 s) and matches the batch lease (120 s). */
