@@ -77,6 +77,13 @@ check('6-digit code signs in', code.status === 200, String(code.status))
 const meA = await req('/api/me', { jar: a })
 const bodyA = (await meA.json()) as { household?: { id?: string } }
 check('GET /api/me → 200 with a household', meA.status === 200 && !!bodyA.household?.id, String(meA.status))
+// M14: a new account must accept the privacy notice before any data route works.
+const gated = await req('/api/members', { jar: a })
+check('data route before consent → 403 consent_required', gated.status === 403, String(gated.status))
+const notice = (bodyA as { notice_version?: string }).notice_version
+const consent = await req('/api/consent', { body: { notice_version: notice, adult: true }, jar: a })
+check('POST /api/consent → 200', consent.status === 200, String(consent.status))
+check('data route after consent → 200', (await req('/api/members', { jar: a })).status === 200)
 
 // 2. Magic link (same user → same household)
 const linkMail = await loginEmail(email)

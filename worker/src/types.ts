@@ -17,5 +17,15 @@ export type SessionUser = { id: string; name: string; email: string; image?: str
 
 export type AppBindings = {
   Bindings: AppEnv
-  Variables: { user: SessionUser; householdId: string; sessionId: string }
+  Variables: {
+    user: SessionUser
+    householdId: string
+    sessionId: string
+    /** ms; the account-deletion route needs a session younger than 10 minutes (plan §9.2). */
+    sessionCreatedAt: number
+    /** The session carries consent to the current notice (always true past a consent-gated requireSession). */
+    consentOk: boolean
+    /** Set by a route that deleted the session (DELETE /api/account): the middleware then adds no cookies. */
+    sessionEnded?: boolean
+  }
 }

@@ -42,7 +42,7 @@ be verified during implementation are marked ⚠️ VERIFY, with what to check a
 | # | Topic | Decision | Why |
 |---|---|---|---|
 | D1 | Account model 🔒 | **One login owns one household with many members (PANs).** No sharing between logins at launch. | Matches today's family view. |
-| D2 | Extra devices 🔒 | **WhatsApp-Web-style QR login.** The new device shows a QR code; a logged-in device scans and approves it. | Owner request. Built on Better Auth's Device Authorization plugin (RFC 8628), §7.4. |
+| D2 | Extra devices 🔒 | **WhatsApp-Web-style QR login.** The new device shows a QR code; a logged-in device scans and approves it. The new device then shares that account (same user, same household): no new account, no email to type. Linking shows an in-app notice, not an email (owner, 2026-11-26). | Owner request. Built on Better Auth's Device Authorization plugin (RFC 8628), §7.4. |
 | D3 | Sign-in methods 🔒 | **Google + email magic link.** Phone OTP and Apple are later. | Owner request. |
 | D4 | Auth provider 🧪 | **Better Auth** (open source, runs inside our Worker, users stored in our D1). | No MAU fees at any scale. First-class D1 support since v1.5, an official Cloudflare guide, a real magic-link plugin, and a Device Authorization plugin for D2. Hosted options at 100k MAU cost ≈$275 (Firebase), ≈$1,025 (Clerk) or $3,500+ (Auth0) a month. WorkOS (free to 1M MAU) sends 6-digit codes, not magic links. Firebase's free plan sends only 5 email-link emails a day. |
 | D5 | Magic-link email 🔒 | **Cloudflare Email Service** (Email Sending, beta) through the Worker's `send_email` binding, behind an `EmailSender` interface. Workers Paid includes 3,000 emails a month, then $0.35 per 1,000, to any recipient. Sends go through the `email` queue (§7.3). **Before public launch, request a higher daily quota.** Resend stays the fallback implementation if the beta or its quotas get in the way. | Owner decision (2026-11-25), replacing Resend. It is cheaper than Resend Pro ($20/month), adds no extra vendor or API key, and SPF/DKIM/DMARC are managed in the same Cloudflare zone. The risk is the beta: new accounts get an unpublished daily quota and no batch endpoint. Google is the primary sign-in and sends no email, and the interface makes switching back a one-file change. |
@@ -677,7 +677,6 @@ export function createAuth(env: Env) {
   pages … Removing one does not affect the other"), and both record sets are live on `pocketfolio.in`.
 - **Emails at launch:**
   - the sign-in email (magic link plus a 6-digit code, §13A.5)
-  - "New device signed in" (after a QR link)
   - "Your account was deleted"
   - the DPDP inactivity notice (§12)
 - **Keep emails plain.** The magic-link email contains no portfolio data: link, expiry, "didn't request this? ignore it".
@@ -729,10 +728,19 @@ poll POST /api/auth/device/token every `interval`
 ◄── token response (Better Auth session token)
 POST /api/session/adopt {token} ─────► validate token → set the session cookie
 redirect to /
-                                       email the owner "New device signed in"; audit_event
+                                       session for the approver's own user; audit_event;
+                                       in-app "New device linked" notice on the other devices
 ```
 
 Implementation notes:
+- **One account, many devices (owner, 2026-11-26).** Like WhatsApp Web, the new device joins the approver's account.
+  The device grant issues a session for the approving user (`deviceCode.userId`), so it carries the same
+  `householdId` and sees the same data. No user row is created, nothing is typed on the new device, and there's no
+  signup or consent step for it (consent belongs to the user, §12). Signing out of it, or revoking it in Settings →
+  Devices, ends only that session.
+- **No email on link (owner, 2026-11-26).** Instead of a "New device signed in" email, the other signed-in devices
+  show a one-time toast "New device linked: Chrome · macOS · Mumbai" (from the `audit_event`, read with the next
+  `/api/me`), and Settings → Devices marks that session "New" for 7 days. This saves the email budget (§7.3).
 - **Libraries.** Generate the QR in the browser with `uqr` or `qrcode` (small, no network). Scan in-app with
   `BarcodeDetector` where it exists (Chrome and Android), falling back to `qr-scanner` (jsQR-based). Most people will
   just use the phone's camera app, since the QR is a URL.
@@ -752,7 +760,8 @@ Implementation notes:
 - **Client ID.** Better Auth's device plugin expects one. Use the fixed value `web-qr` and validate it with
   `validateClient: id => id === "web-qr"`.
 - **Settings → Devices** lists sessions with UA, city and last active, with **Sign out this device** and **Sign out all
-  other devices** (`listSessions`, `revokeSession`, `revokeOtherSessions`).
+  other devices** (`listSessions`, `revokeSession`, `revokeOtherSessions`). A device linked by QR in the last 7 days
+  shows a "New" badge.
 
 ---
 
@@ -792,7 +801,10 @@ bucket or D1 export is useless on its own.
   Time Travel (30 days) can still hold rows, but they're useless without the DEK. Say this in the privacy policy:
   "backups purged within 30 days".
   ✅ M6: `shredHousehold()` in `src/lib/household.ts` (blanks `dek_wrapped`, deletes both prefixes, then the household
-  row, which cascades). M14 calls it from `DELETE /api/account` and also removes the user and session rows.
+  row, which cascades). ✅ M14: `deleteAccount()` (`src/lib/account.ts`) calls it from `DELETE /api/account` and the
+  inactivity erasure, then removes every other row naming the user. A test scans every table and column for the
+  user id, household id and email afterwards: only `audit_event` remains. Sealed `/daily` entries in the edge cache
+  expire within a day and are unreadable without the DEK.
 
 ---
 
@@ -821,8 +833,8 @@ export async function assertMember(c, memberId: string) {
 |---|---|---|---|
 | `GET/POST /api/auth/*` | – | Better Auth (Google, magic link, device flow, sessions) | |
 | `POST /api/session/adopt` | device token | QR cookie bridge (§7.4) | only if needed |
-| `GET /api/me` | ✅ | `{ user: {name, email, image}, household: {id, created_at}, consent_ok, limits, usage }` | |
-| `POST /api/consent` | ✅ | record acceptance of `notice_version` | Blocks every `/api/*` data route until accepted (403 `consent_required`) |
+| `GET /api/me` | ✅ | `{ user: {name, email, image}, household: {id, created_at}, consent_ok, limits, usage }` | ✅ M14: also `notice_version`; `consent_ok` comes from the session, else one D1 check. 401 when the household is gone (a deleted account's other devices hold a valid cookie cache for ≤ 5 min). `limits`/`usage` not built yet |
+| `POST /api/consent` | ✅ | record acceptance of `notice_version` | Blocks every `/api/*` data route until accepted (403 `consent_required`). ✅ M14: body `{ notice_version, adult: true }` (`409 notice_changed`, `400 adult_required`). Writes `consent`, stamps every session of the user and re-issues the cookie cache, so gating costs 0 D1 queries on a consented request. A session without the current version pays one query (`UPDATE session … WHERE EXISTS consent … RETURNING`), which also covers consent given on another device. `requireSession()` gates by default; `/me`, `/consent`, export and delete pass `consent: false` |
 | `GET /api/config` | – | `{ features: { cdsl_fetch: false, kfintech_auto: false, stocks: true }, kfintech_form_url, turnstile_site_key }` | replaces today's sandbox config |
 | `GET /api/members` | ✅ | list `{id, name, pan_masked, statements: [{id, kind, as_of, holdings_count}]}` | ✅ M6: returns `{ members: [...] }`; `name` is null until a statement or a rename sets it. One D1 batch |
 | `PATCH /api/members/:id` | ✅ | rename (display override) | ✅ M6: `{ name }`, 1–60 characters; replaces the sealed `display_name_enc` (a later statement doesn't overwrite it, M7) |
@@ -839,8 +851,8 @@ export async function assertMember(c, memberId: string) {
 | `POST /api/sips/cancel` | ✅ | cancel one SIP in PocketFolio for good (§10.5.1, M12): `{ member_id, isin, folio, confirm: true }` | `assertMember`; no undo; ≤ 200 changes per household |
 | `GET /api/market/status` | – | `{ latest_nav_date, coverage_pct, final }` for the "NAVs updating" hint | public, cacheable for 5 min |
 | `POST /api/kfintech/guide` | ✅ | `{ member_id or pan, password? }` → stores a pending password, returns `{ password, form_url }` | the manual path only (D9); same validation as `kfintech.password_problem`. **The one place a PAN may be typed:** KFintech's own form needs it, and a new person isn't a member yet. Picking an existing member needs no PAN |
-| `GET /api/account/export` | ✅ | JSON download of all parsed statements and members (decrypted) | DPDP access right; 3 per day |
-| `DELETE /api/account` | ✅ + recent auth | delete everything (§8), sign out all sessions, send the confirmation email | requires a session less than 10 min old or a fresh magic link |
+| `GET /api/account/export` | ✅ | JSON download of all parsed statements and members (decrypted) | DPDP access right; 3 per day. ✅ M14: fresh session (D1), `429 export_limit`. Streams: account, sign-in methods, sessions (IP, UA), consents, household, members (name, PAN), SIP changes, uploads, pending passwords, the user's security log, then each statement's parsed JSON. Leaves out internal keys and lookup values (DEK, HMACs, R2 keys, hashes, tokens) and snapshots (derived) |
+| `DELETE /api/account` | ✅ + recent auth | delete everything (§8), sign out all sessions, send the confirmation email | requires a session less than 10 min old or a fresh magic link. ✅ M14: `{ confirm: "DELETE" }` (`400 confirm_required`), `403 reauth_required` past 10 min (the UI signs out and back in, then reopens the dialog). `shredHousehold()`, then quota, pending codes/links, the per-address rate-limit row and the user (cascades session, account, consent), a second prefix sweep, and the email. `audit_event` rows stay (ids only, 400 days) |
 | `POST /api/cdsl/*`, `POST /api/kfintech/request` | – | **Not deployed** (D8, D9). Return 404. | Keep the old code in `engine/legacy/` or git history |
 
 Errors: JSON `{ error: { code, message } }`. Messages are safe to show and never contain PANs or file names.
@@ -1106,7 +1118,7 @@ Engine `/parse` timeout: 60 s. On timeout return `parse_timeout`, and count it i
 | `nav-ingest`, `nav-backfill`, `nav-repair` | see §10.4 | Official AMFI NAVs for every scheme into D1, several times a night. This replaces the old per-scheme mfapi refresh. |
 | `snapshot-prebuild` | triggered when a market day becomes final (§10.4), at the latest `0 5 * * *` | Enqueue a rebuild for households with `last_active_at` in the last 7 days, with `sendBatch` (100 per call). The `rebuild` queue's `max_concurrency` and the `EngineBatch` cap set the drain rate, so this is the nightly burst handled at a steady pace. The per-message delay is spread over 0–30 min to smooth the wake-ups. |
 | `stocks-monthly` | `0 5 10-20 * *` | §10.3.1. ✅ M11: until the AMC scrapers ship (M18) this cron is replaced by a daily BharatStock run, `stocks` at `0 4 * * *` (09:30 IST: after BharatStock's UTC day resets, before the 10:00 IST final NAV run and prebuild). M18 adds the monthly scrape cron back. |
-| `cleanup` | `0 21 * * *` | Expire pending passwords and old quota windows. Drop `tracked_scheme` rows unseen for 90 days. Delete finished `parse_job` rows older than 7 days and expired Better Auth `session` / `verification` rows. Send DPDP inactivity notices and do erasures (§12). |
+| `cleanup` | `0 21 * * *` | Expire pending passwords and old quota windows. Drop `tracked_scheme` rows unseen for 90 days. Delete finished `parse_job` rows older than 7 days and expired Better Auth `session` / `verification` rows. Send DPDP inactivity notices and do erasures (§12). ✅ M14 (`src/lib/cleanup.ts`): also expired `rate_limit` rows, `audit_event` older than 400 days, SIP skips older than the member's newest statement, `nav_run` older than 90 days, and `stock_match` rows unwanted for 90 days with every `fund_portfolio` row (and R2 blob) no wanted row reads. Inactivity: 500 notices and 50 erasures per run. Each step fails alone (logged by class) |
 | `tmp-sweep` | `15 * * * *` (hourly) | Parked PDFs past `expires_at`: delete the R2 object, set `expired`. Re-enqueue `queued` jobs whose message was lost (no change for 15 min). Counts only in logs. ✅ M8: also deletes leftover PDFs of finished jobs and recounts the parked PDFs for `EnginePool` (§10.1 D, as built). |
 
 #### 10.3.1 Stocks inside funds: AMC scraper first, BharatStock fallback (D10)
@@ -1516,7 +1528,7 @@ days and months; the refusal says which counter and the seconds until it resets.
 | **Security safeguards (Rule 6)** | Encryption (§8), access control (§9.1), and `audit_event` kept for at least 1 year. No PII in logs. Backups are D1 Time Travel only. |
 | **Breach (Rule 7)** | Write `docs/INCIDENT_RESPONSE.md`. Notify affected users without delay. Send the Data Protection Board an initial notice, then a detailed report within 72 h. Report to **CERT-In within 6 h**. Keep a contact list and email templates. |
 | **Uploaded PDFs** | Say it plainly in the consent notice and the privacy page: "We read your statement and keep only the parsed data, encrypted. Usually the PDF is never stored. When many people upload at once, it's held encrypted until it's processed, usually for minutes, and always deleted within 24 hours." The `tmp-sweep` job and the R2 lifecycle rule enforce this (§10.1). |
-| **Retention and erasure (Rule 8)** | Data is erased on account deletion (immediately; backups within 30 days). Inactivity: after **12 months** with no login, email a 48-hour notice, then erase. ⚠️ VERIFY the inactivity period against the gazette text (the strict 3-year Third Schedule may apply only to large platforms); 12 months is the conservative choice. |
+| **Retention and erasure (Rule 8)** | Data is erased on account deletion (immediately; backups within 30 days). Inactivity: after **3 years** with no login (owner, 2026-11-26), email a 48-hour notice, then erase. ✅ M14 (DSCI's DPDP retention FAQ and MeitY/PIB's notification summary; the gazette text itself, G.S.R. 846(E), wasn't read): the fixed 3-year period of Rule 8(1) and the Third Schedule binds only e-commerce entities and social media intermediaries with ≥ 2 crore registered users and online gaming intermediaries with ≥ 50 lakh, counted from the user's last contact or exercise of a right. Everyone else erases "as soon as it is reasonable to assume the specified purpose is no longer being served" (Act s. 8(7)), with no fixed period. PocketFolio isn't in those classes, so 3 years matches the strictest period the Rules name. Rule 8(2): tell the user at least 48 h before erasure that it happens unless they sign in. Rule 8(3) with Rule 6(1)(e): keep personal data, traffic data and logs for at least a year from processing, so `audit_event` is kept 400 days. Rule 8 applies from 13 May 2027. Lawyer to confirm (M17). |
 | **Contact (Rule 9)** | A grievance/DPO contact on the privacy page and in the app footer. |
 | **Rights (Rule 14)** | Access = export. Correction = re-upload or delete a statement. Erasure = delete account or member. Withdraw consent = delete account. Respond to emails within 90 days. |
 | **Children (Rule 10)** | Terms require 18+ and there is a checkbox at consent. Minors' PANs can be added by a parent as members; the parent is the user. |
@@ -1531,6 +1543,14 @@ days and months; the refusal says which counter and the seconds until it resets.
 
 The owner must provide the legal entity name, grievance officer name and email, and jurisdiction. Get a lawyer to
 review before launch.
+
+✅ M14 as built: the pages and the consent screen are in `web/src/pages/legal.tsx` and `consent.tsx`. The notice
+version is `NOTICE_VERSION` in `worker/src/lib/consent.ts` and `web/src/lib/legal.ts`; they must match, and a bump asks
+everyone again. The legal details are in `web/src/lib/legal.ts`: entity "PocketFolio", grievance email
+`support@pocketfolio.in`, jurisdiction Gujarat (owner, 2026-11-26); the grievance officer's name is still to come.
+**The lawyer review is deferred about 6 months** (owner, 2026-11-26: no budget yet), so it no longer gates M17. The footer (every page, including /login) carries "Not investment advice" and the legal links. The tax-harvest
+and health-check panels aren't in the UI yet; the fund dialog's tax split has the disclaimer inline. The emails ("Your
+account was deleted", the inactivity notice) are in `src/lib/email.ts`. Breach plan: `docs/INCIDENT_RESPONSE.md`.
 
 **Also rewrite the README "Privacy" section.** "Everything stays on this machine" is no longer true.
 
@@ -1589,7 +1609,7 @@ review before launch.
    delete a member.
 7. **Settings**:
    - Account (name, email, sign-in methods)
-   - **Devices** (sessions list, sign out others, **Link a device** opening the scanner)
+   - **Devices** (sessions list with a "New" badge on recently linked ones, sign out others, **Link a device** opening the scanner)
    - Fair-use usage
    - **Download my data**
    - **Delete account** (typed confirmation)
@@ -1994,7 +2014,7 @@ until those features ship.
 | Kind | Must cover |
 |---|---|
 | **Tenant isolation** (Worker, vitest) | User A cannot read, delete or upload to user B's members, statements or snapshot by ID guessing (all 404). The R2 key always contains the session's household. Two households with the same PAN stay separate. |
-| Auth | Magic link single use and expiry. Google account linking to an existing magic-link user. Session revoke. QR flow: approve, deny, expired code, code reuse, approving while logged out. |
+| Auth | Magic link single use and expiry. Google account linking to an existing magic-link user. Session revoke. QR flow: approve, deny, expired code, code reuse, approving while logged out; the approved session has the approver's user and `householdId`, no user row is created, no email is queued, and the other device gets the "New device linked" notice once. |
 | Crypto | Round trip, both compress-then-encrypt JSON (flags bit set) and a parked PDF (no gzip). Tampering with the AAD or ciphertext fails. KEK rotation re-wrap. Deletion crypto-shreds. |
 | Upload | Wrong password, then a candidate password works. Different PAN rejected. Duplicate gives 409 (including while the same file is queued). Non-PDF rejected. Over 10 MB rejected. Quotas give 429. A failed parse leaves no empty member. |
 | **Queued upload** | With the pool forced to 0 free slots: `202` with position and ETA. The R2 `tmp/` object is encrypted (raw read shows no `%PDF`). After processing, **the `tmp/` object is gone** and `blob_key` is NULL. Cancel deletes the PDF. Expiry: a job older than 24 h is swept and its object deleted. Account deletion removes `tmp/{household_id}/`. A lost queue message is re-enqueued by `tmp-sweep`. |
@@ -2015,7 +2035,7 @@ until those features ship.
 
 ## 17. Implementation phases
 
-**The build order is [MILESTONES.md](MILESTONES.md).** It splits these phases into milestones M0–M18, one Claude Code
+**The build order is [MILESTONES.md](MILESTONES.md).** It splits these phases into milestones M0–M21, one Claude Code
 session each, with owner inputs and done-checks per milestone. Phase → milestones:
 
 | Phase | Milestones |
@@ -2030,6 +2050,10 @@ session each, with owner inputs and done-checks per milestone. Phase → milesto
 | 5b | M15 |
 | 6 | M16–M17 |
 | 7 | M18 |
+| 8 | M19–M21 |
+
+The build order isn't the phase order (owner, 2026-11-26): … M12 → M14 → M15 → **M13** → M18 → M19 → M20 → M21 →
+**M16** → **M17** (hardening and load tests, then production launch, last).
 
 The phase text below stays the reference for acceptance criteria. Each phase ends with its acceptance criteria met and
 a commit/PR.
@@ -2094,7 +2118,8 @@ a commit/PR.
 
 ### Phase 4: QR device login
 - Device authorization plugin, `/login` QR tab, the `/link` approval page, the in-app scanner, the cookie bridge if
-  needed, the Devices list, the "new device" email.
+  needed, the Devices list, the in-app "New device linked" notice (no email). The linked device shares the
+  approver's account.
 - **Accept:** all the QR auth tests pass, and linking from a phone to a desktop works on staging.
 
 ### Phase 5: Privacy and compliance
@@ -2110,6 +2135,8 @@ a commit/PR.
 - **Accept:** everything in §13A.7.
 
 ### Phase 6: Hardening and launch
+- **Hardening (M16) and launch (M17) wait until Phases 7 and 8 are built** (owner, 2026-11-26), so the load tests
+  cover everything that ships.
 - Rate limits and quotas (§11), the "Coming soon" states (D8, D9), security headers (CSP: `default-src 'self'`; `manifest-src 'self'`; `worker-src 'self'`;
   allow Google and Turnstile origins; `frame-ancestors 'none'`; HSTS), dependency audit, **the burst, nightly and polling
   load tests (§16)**, staging soak.
@@ -2123,7 +2150,7 @@ a commit/PR.
   - pool caps and queue `max_concurrency` set from the load-test results
 - **Accept:** everything in §16 is green, and the launch checklist is done.
 
-### Phase 7: AMC disclosure scraper (can ship after launch)
+### Phase 7: AMC disclosure scraper (before launch)
 - The adapter framework, the top 10 AMC adapters, `scrape_run` monitoring, and BharatStock limited to gaps.
 - **Accept:**
   - At least 80% of tracked equity schemes have `source='amc'` holdings for the latest month by day 15.
@@ -2175,7 +2202,7 @@ get a nightly rebuild; parse ~1.5 vCPU-s on average; build ~0.5 vCPU-s.
 - Shared households (invite a spouse with roles), billing and plans, an NSDL CAS parser, and a native mobile app.
 - Daily web push ("PocketFolio today: +₹2,340") after the market day is final. Needs the installed PWA on iOS
   (16.4+), the user's opt-in and VAPID keys. It builds on §10.5 and §13A.
-- Exchange prices for ETFs and stocks held in CDSL, so they're included in daily returns. Scheduled as M20 (after launch).
+- Exchange prices for ETFs and stocks held in CDSL, so they're included in daily returns. Scheduled as M20 (before launch).
 - Manually entered FD, PPF and EPF with approximate returns (M19), and stock gains from broker tradebooks or manual buy
   prices (M21). Owner request, 2026-11-26; see `docs/MILESTONES.md` Phase 8. Design to be written before each starts.
 - A Python Worker for the engine, if Pyodide memory limits and the `pillow`/`rapidfuzz` gaps change (re-run the §3.1 test).

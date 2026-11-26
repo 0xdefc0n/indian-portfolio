@@ -9,6 +9,8 @@ import { Toaster } from "@/components/ui/sonner"
 import { Skeleton } from "@/components/ui/skeleton"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { api, type Me, SignedOut } from "@/lib/api"
+import { ConsentPage } from "@/pages/consent"
+import { PrivacyPage, SecurityPage, TermsPage } from "@/pages/legal"
 import { LoginPage, VerifyLinkPage } from "@/pages/login"
 import { MembersPage } from "@/pages/members"
 import { SettingsPage } from "@/pages/settings"
@@ -24,13 +26,20 @@ const loadMe = () => {
   return mePromise
 }
 
-/** Loads the session (/api/me); a 401 sends the user to /login via the global handler in lib/api.ts. */
+/**
+ * Loads the session (/api/me); a 401 sends the user to /login via the global handler in lib/api.ts. Until the
+ * current privacy notice is accepted, every signed-in page is the consent screen (plan §12, M14).
+ */
 function SignedIn({ page: Page }: { page: React.ComponentType<{ me: Me }> }) {
   const [me, setMe] = useState<Me | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     loadMe().then(setMe, (e: Error) => !(e instanceof SignedOut) && setError(e.message))
   }, [])
+  const accepted = () => {
+    mePromise = null
+    loadMe().then(setMe, (e: Error) => !(e instanceof SignedOut) && setError(e.message))
+  }
   if (error)
     return (
       <p className="mx-auto mt-24 max-w-md rounded-xl bg-surface p-4 text-sm text-loss ring-1 ring-border" role="alert">
@@ -38,6 +47,7 @@ function SignedIn({ page: Page }: { page: React.ComponentType<{ me: Me }> }) {
       </p>
     )
   if (!me) return <Skeleton className="mx-auto mt-24 h-40 max-w-md rounded-[22px]" />
+  if (!me.consent_ok) return <ConsentPage me={me} onAccepted={accepted} />
   return (
     <>
       <Page me={me} />
@@ -62,6 +72,9 @@ createRoot(document.getElementById("root")!).render(
         <Switch>
           <Route path="/login/verify" component={VerifyLinkPage} />
           <Route path="/login" component={LoginPage} />
+          <Route path="/privacy" component={PrivacyPage} />
+          <Route path="/terms" component={TermsPage} />
+          <Route path="/security" component={SecurityPage} />
           <Route path="/">{() => <SignedIn page={App} />}</Route>
           <Route path="/members">{() => <SignedIn page={MembersPage} />}</Route>
           <Route path="/settings">{() => <SignedIn page={SettingsPage} />}</Route>

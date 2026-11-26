@@ -2,6 +2,7 @@ import { BuildingIcon, FileTextIcon, InfoIcon, Loader2Icon, SmartphoneIcon } fro
 import { useCallback, useEffect, useMemo, useState } from "react"
 
 import { AppHeader } from "@/components/app-header"
+import { LegalFooter } from "@/components/legal-footer"
 import { AddStatementDialog } from "@/components/add-statement-dialog"
 import { AllocationStrip, type Slice } from "@/components/allocation-strip"
 import { HoldingsTable } from "@/components/holdings-table"
@@ -309,7 +310,7 @@ export default function App({ me }: { me: Me }) {
         actions={data && data.members.length > 0 ? <AddStatementDialog onAdded={load} /> : undefined}
       />
 
-      <main className="mx-auto max-w-[1240px] px-4 pb-28 sm:px-7 md:pb-20">
+      <main className="mx-auto max-w-[1240px] px-4 pb-4 sm:px-7 md:pb-12">
         {error && (
           <p className="mt-10 rounded-xl bg-surface p-4 text-sm text-loss ring-1 ring-border" role="alert">
             Couldn't load the portfolio: {error}. Reload to try again.
@@ -514,6 +515,7 @@ export default function App({ me }: { me: Me }) {
           </div>
         )}
       </main>
+      <LegalFooter className={ready ? "pb-28 md:pb-8" : undefined} />
       {ready && <BottomNav tab={tab} onChange={setTab} />}
       <FundDialog
         holding={fund}

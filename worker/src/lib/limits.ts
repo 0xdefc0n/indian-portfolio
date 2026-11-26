@@ -9,7 +9,11 @@ export const LIMITS = {
   uploadsPerMonth: 100,
   failedParsesPerHour: 10,
   openJobsPerHousehold: 10,
+  exportsPerDay: 3, // plan §9.2: GET /api/account/export
 } as const
+
+/** Data exports (DPDP access right): a few a day is plenty, and each one decrypts every statement. */
+export const exportQuota = (userId: string): QuotaSpec => ({ subject: `user:${userId}`, metric: 'export', period: 'day', limit: LIMITS.exportsPerDay })
 
 /** The two upload counters, taken together when a statement is stored. */
 export const uploadQuota = (userId: string): QuotaSpec[] => [

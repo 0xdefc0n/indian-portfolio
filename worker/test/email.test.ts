@@ -2,9 +2,9 @@
 import { createExecutionContext, createMessageBatch, env, getQueueResult } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 import { decodeKey, unwrapDek, wrapDek } from '../src/lib/crypto'
-import { EmailSendError, errorCode, handleEmailBatch, loginEmail, SINK_DOMAIN, takeSink, type EmailJob, type EmailSender, type OutgoingEmail } from '../src/lib/email'
+import { EmailSendError, errorCode, handleEmailBatch, loginEmail, SINK_DOMAIN, takeSink, type EmailJob, type EmailSender, type LoginEmailJob, type OutgoingEmail } from '../src/lib/email'
 
-const job = (to: string, created_at = Date.now()): EmailJob => ({ kind: 'login', to, link: 'http://localhost:8787/login/verify#token=t', otp: '123456', created_at })
+const job = (to: string, created_at = Date.now()): LoginEmailJob => ({ kind: 'login', to, link: 'http://localhost:8787/login/verify#token=t', otp: '123456', created_at })
 
 function fakeSender(fail: Record<string, string> = {}) {
   const sent: OutgoingEmail[] = []

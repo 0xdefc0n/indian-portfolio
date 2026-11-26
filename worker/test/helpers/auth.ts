@@ -2,6 +2,7 @@
 import { env } from 'cloudflare:test'
 import { exports } from 'cloudflare:workers'
 import worker from '../../src/index'
+import { NOTICE_VERSION } from '../../src/lib/consent'
 import { SINK_DOMAIN } from '../../src/lib/email'
 
 export const ORIGIN = 'http://localhost:8787' // = APP_URL in vitest.config.ts
@@ -69,13 +70,23 @@ export async function requestLoginEmail(email: string) {
   throw new Error('no email in the sink')
 }
 
-/** `ip` gives the sign-in its own client address, so files that create many households stay under the per-IP limit. */
-export async function signInWithCode(email: string, jar = new Jar(), ip?: string) {
+/**
+ * `ip` gives the sign-in its own client address, so files that create many households stay under the per-IP limit.
+ * The user also accepts the consent notice (M14), as every real user must before using the app, unless
+ * `consent: false`.
+ */
+export async function signInWithCode(email: string, jar = new Jar(), ip?: string, opts: { consent?: boolean } = {}) {
   const mail = await requestLoginEmail(email)
   const headers = ip ? { 'cf-connecting-ip': ip } : undefined
   const res = await call('/api/auth/sign-in/email-otp', { body: { email, otp: mail.otp }, jar, headers })
   if (res.status !== 200) throw new Error(`sign-in/email-otp ${res.status}`)
+  if (opts.consent !== false) await acceptConsent(jar)
   return jar
+}
+
+export async function acceptConsent(jar: Jar) {
+  const res = await call('/api/consent', { body: { notice_version: NOTICE_VERSION, adult: true }, jar })
+  if (res.status !== 200) throw new Error(`consent ${res.status}`)
 }
 
 /** env with DB wrapped so every prepared statement's SQL is recorded (for the D1-budget tests, plan §16). */
