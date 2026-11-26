@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import bisect
 import calendar
-from collections import Counter
 from datetime import date, timedelta
 
 from . import holidays
@@ -39,17 +38,42 @@ def _add_months(y: int, m: int, k: int) -> tuple[int, int]:
     return n // 12, n % 12 + 1
 
 
-def sip_day(transactions: list[dict], folio: str | None, isin: str) -> int | None:
-    """The SIP's usual day of the month: the most common day among its latest instalments (a holiday moves one
-    instalment, not the mandate). Ties go to the latest instalment's day."""
-    days = sorted(t["date"] for t in transactions
-                  if t.get("type") == "PURCHASE_SIP" and t.get("isin") == isin and t.get("folio") == folio and t.get("amount"))
-    if not days:
+def _due_candidates(run: date, series: NavSeries | None, hols: frozenset[str]) -> set[int]:
+    """Days of the month an instalment that ran on `run` could have been due on: that day, and the weekend or holiday
+    days just before it (a SIP due on a closed day runs on the next business day). On the month's last business day,
+    the later days too (a mandate on the 31st runs on the 30th or earlier in a short month)."""
+    days = {run.day}
+    d = run - timedelta(days=1)
+    while d.month == run.month and not is_business_day(d, series, hols):
+        days.add(d.day)
+        d -= timedelta(days=1)
+    last = calendar.monthrange(run.year, run.month)[1]
+    if all(not is_business_day(date(run.year, run.month, x), series, hols) for x in range(run.day + 1, last + 1)):
+        days.update(range(run.day + 1, 32))
+    return days
+
+
+def sip_day(transactions: list[dict], folio: str | None, isin: str, series: NavSeries | None = None,
+            hols: frozenset[str] = holidays.FALLBACK_HOLIDAYS) -> int | None:
+    """The SIP's current mandate day of the month.
+
+    Walk back from the latest instalment and keep the days every instalment so far could have been due on (its own
+    date, or a weekend/holiday just before it). Stop at the first instalment that doesn't fit: that's where the date
+    was changed (owner's case, M12: a SIP moved from the 20th to the 24th; the most common day over a year still said
+    20th). Several days left (e.g. only a Monday instalment after a weekend): the earliest.
+    """
+    runs = sorted({t["date"][:10] for t in transactions
+                   if t.get("type") == "PURCHASE_SIP" and t.get("isin") == isin and t.get("folio") == folio and t.get("amount")})
+    if not runs:
         return None
-    recent = [int(d[8:10]) for d in days[-SIP_DAY_SAMPLE:]]
-    counts = Counter(recent)
-    top = max(counts.values())
-    return next(d for d in reversed(recent) if counts[d] == top)
+    keep: set[int] | None = None
+    for iso in reversed(runs[-SIP_DAY_SAMPLE:]):
+        cand = _due_candidates(_d(iso), series, hols)
+        both = cand if keep is None else keep & cand
+        if not both:
+            break
+        keep = both
+    return min(keep) if keep else int(runs[-1][8:10])
 
 
 def due_dates(sip: dict, day: int | None, after: date, until: date) -> list[date]:
@@ -166,7 +190,7 @@ def estimate_sips(sips: list[dict], transactions: list[dict], after: str, series
     for s in sips:
         if s.get("status") != "active" or not s.get("amount"):
             continue
-        day = sip_day(transactions, s.get("folio"), s["isin"])
+        day = sip_day(transactions, s.get("folio"), s["isin"], series, hols)
         o = override_for(overrides, s)
         for due in due_dates(s, day, start, today):
             if due.isoformat() in o["skip"] or (o["cancel"] and due.isoformat() >= o["cancel"]):
