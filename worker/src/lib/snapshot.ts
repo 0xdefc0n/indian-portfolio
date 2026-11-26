@@ -442,7 +442,8 @@ export async function readSnapshotRow(env: { DB: D1Database }, householdId: stri
 
 export function snapshotState(row: StateRow, market: MarketStatus, now = Date.now()): SnapshotState {
   const building = row.status === 'building' && (row.building_until ?? 0) > now
-  const pending = row.statements > 0 && (row.requested_at ?? 0) > (row.checked_at ?? 0)
+  // Due while asked for and not yet handled, also when the last statement just went and the old blob is still up.
+  const pending = (row.statements > 0 || !!row.blob_key) && (row.requested_at ?? 0) > (row.checked_at ?? 0)
   const latest = market.latest_nav_date
   const stale = !!row.blob_key && !!latest && !!row.market_date && row.market_date < latest
   return {
