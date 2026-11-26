@@ -1,6 +1,8 @@
 // PocketFolio Worker (plan §4). Static assets (web/dist, SPA fallback) are served by the platform;
 // only /api/* reaches this code (assets.run_worker_first in wrangler.jsonc).
 import { Hono } from 'hono'
+import { CLEANUP_CRON, cleanup } from './lib/cleanup'
+import { consentFromDb, NOTICE_VERSION } from './lib/consent'
 import { handleEmailBatch, type EmailJob } from './lib/email'
 import { withEngine } from './lib/engine-client'
 import { ApiError } from './lib/errors'
@@ -10,6 +12,7 @@ import { handleMarketBatch, type MarketMessage, NAV_INGEST_CRONS, NAV_REPAIR_CRO
 import { refreshHolidays } from './market/holidays'
 import { requestStocks, STOCKS_CRON } from './market/stocks'
 import { requireSession } from './middleware/session'
+import { accountRoutes } from './routes/account'
 import { authRoutes } from './routes/auth'
 import { jobRoutes } from './routes/jobs'
 import { marketRoutes } from './routes/market'
@@ -58,22 +61,27 @@ app.get('/config', (c) =>
 )
 
 // ─── Signed in ───────────────────────────────────────────────────────────────────────────────────────────────────
-// Every route below takes `signedIn` (per route, so unknown paths stay JSON 404s). Routes read c.var.user and
-// c.var.householdId and never take a household from the client (§9.1).
-const signedIn = requireSession()
+// Every route below takes requireSession() (per route, so unknown paths stay JSON 404s). Routes read c.var.user and
+// c.var.householdId and never take a household from the client (§9.1). requireSession() also gates on consent to
+// the current notice (403 consent_required, M14); /me, /consent, export and delete account opt out.
 
-app.get('/me', signedIn, async (c) => {
+app.get('/me', requireSession({ consent: false }), async (c) => {
   const user = c.var.user
-  const household = await c.env.DB.prepare('SELECT id, created_at FROM household WHERE id = ?1')
-    .bind(c.var.householdId)
-    .first<{ id: string; created_at: number }>()
+  const [household, consentOk] = await Promise.all([
+    c.env.DB.prepare('SELECT id, created_at FROM household WHERE id = ?1').bind(c.var.householdId).first<{ id: string; created_at: number }>(),
+    c.var.consentOk || consentFromDb(c.env.DB, user.id, c.var.sessionId),
+  ])
+  // A deleted account's other devices can hold a valid cookie cache for up to 5 min; the SPA loads /me first.
+  if (!household) return c.json({ ok: false, code: 'unauthorized' }, 401)
   return c.json({
     user: { name: user.name, email: user.email, image: user.image ?? null },
     household,
-    consent_ok: true, // the consent screen and gating arrive in M14
+    consent_ok: consentOk,
+    notice_version: NOTICE_VERSION,
   })
 })
 
+app.route('/', accountRoutes)
 app.route('/', memberRoutes)
 app.route('/', statementRoutes)
 app.route('/', jobRoutes)
@@ -103,9 +111,13 @@ class EngineUnavailable extends Error {
 export default {
   fetch: app.fetch,
 
-  // Dispatch on event.cron (wrangler.jsonc triggers). Still to come: M14 (cleanup), M18 (AMC scrapers).
+  // Dispatch on event.cron (wrangler.jsonc triggers). Still to come: M18 (AMC scrapers).
   async scheduled(controller, env, ctx) {
     const cron = controller.cron
+    if (cron === CLEANUP_CRON) {
+      ctx.waitUntil(cleanup(env, { now: controller.scheduledTime }).then(() => undefined))
+      return
+    }
     if (cron === TMP_SWEEP_CRON) {
       ctx.waitUntil(tmpSweep(env).then(() => undefined))
       return

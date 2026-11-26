@@ -11,7 +11,12 @@ export interface EmailSender {
 }
 
 /** Queue message on pf-email. One sign-in email holds both the link and the 6-digit code (§13A.5). */
-export type EmailJob = { kind: 'login'; to: string; link: string; otp: string; created_at: number }
+export type LoginEmailJob = { kind: 'login'; to: string; link: string; otp: string; created_at: number }
+/** "Your account was deleted" (§7.3): after DELETE /api/account, or the DPDP inactivity erasure (`reason: 'inactive'`). */
+export type DeletedEmailJob = { kind: 'account_deleted'; to: string; reason: 'user' | 'inactive'; created_at: number }
+/** The DPDP inactivity notice (§12, Rule 8(2)): sign in before `erase_on` (an IST date) to keep the account. */
+export type InactivityEmailJob = { kind: 'inactivity_notice'; to: string; erase_on: string; created_at: number }
+export type EmailJob = LoginEmailJob | DeletedEmailJob | InactivityEmailJob
 
 export class EmailSendError extends Error {
   override name = 'EmailSendError'
@@ -84,10 +89,12 @@ export const sinkKeyValid = (env: SinkEnv, given: string | undefined) =>
 
 const sinkObjectKey = async (env: SinkEnv, to: string) => `email-sink/${await hmacHex(env.EMAIL_SINK_KEY!, to.toLowerCase())}.json`
 
-export type SinkedEmail = { subject: string; link: string; otp: string; at: number }
+/** link and otp are empty for emails other than sign-in; `text` is the plain-text body. */
+export type SinkedEmail = { kind: EmailJob['kind']; subject: string; link: string; otp: string; text: string; at: number }
 
-export async function writeSink(env: SinkEnv, job: EmailJob, subject: string): Promise<void> {
-  const body: SinkedEmail = { subject, link: job.link, otp: job.otp, at: Date.now() }
+export async function writeSink(env: SinkEnv, job: EmailJob, email: OutgoingEmail): Promise<void> {
+  const login = job.kind === 'login' ? job : null
+  const body: SinkedEmail = { kind: job.kind, subject: email.subject, link: login?.link ?? '', otp: login?.otp ?? '', text: email.text, at: Date.now() }
   await env.BUCKET.put(await sinkObjectKey(env, job.to), JSON.stringify(body))
 }
 
@@ -105,7 +112,7 @@ export async function takeSink(env: SinkEnv, to: string): Promise<SinkedEmail | 
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`)
 
-export function loginEmail(job: EmailJob, minutes: number): OutgoingEmail {
+export function loginEmail(job: LoginEmailJob, minutes: number): OutgoingEmail {
   const subject = "Sign in to PocketFolio" // no code here: subjects show on lock screens and in previews
   const text = [
     'Sign in to PocketFolio',
@@ -130,9 +137,52 @@ export function loginEmail(job: EmailJob, minutes: number): OutgoingEmail {
   return { to: job.to, subject, html, text }
 }
 
+/** The same card as the sign-in email, with paragraphs and an optional button. */
+function plainHtml(title: string, paragraphs: string[], button?: { label: string; href: string }): string {
+  const rows = paragraphs.map((p) => `<tr><td style="padding-top:16px;font-size:14px;line-height:1.5;color:#5B6176">${esc(p)}</td></tr>`).join('')
+  const cta = button
+    ? `<tr><td style="padding-top:20px"><a href="${esc(button.href)}" style="display:inline-block;background:#3D4DB7;color:#FFFFFF;text-decoration:none;font-weight:500;font-size:14px;padding:10px 18px;border-radius:10px">${esc(button.label)}</a></td></tr>`
+    : ''
+  return `<!doctype html><html><body style="margin:0;padding:24px;background:#F2F3F7;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;color:#12141C">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:440px;background:#FFFFFF;border-radius:22px;padding:28px">
+<tr><td style="font-size:15px;font-weight:600">PocketFolio</td></tr>
+<tr><td style="padding-top:20px;font-size:20px;font-weight:600">${esc(title)}</td></tr>
+${rows}${cta}
+</table></td></tr></table></body></html>`
+}
+
+const SUPPORT = 'support@pocketfolio.in'
+
+/** No portfolio data and no names: only what happened and who to ask (§7.3). */
+export function accountDeletedEmail(job: DeletedEmailJob): OutgoingEmail {
+  const subject = 'Your PocketFolio account was deleted'
+  const paragraphs = [
+    job.reason === 'inactive'
+      ? "We deleted your PocketFolio account because nobody had signed in to it for 3 years, as our privacy policy says. We emailed you about it 2 days before."
+      : 'Your PocketFolio account was deleted, as you asked.',
+    'Your family members, statements and portfolio are gone, and so is the key that encrypted them. Copies in our backups become unreadable straight away and are purged within 30 days.',
+    `You can sign up again at any time. Questions? Write to ${SUPPORT}.`,
+  ]
+  return { to: job.to, subject, text: [subject, '', ...paragraphs.flatMap((p) => [p, ''])].join('\n').trim(), html: plainHtml(subject, paragraphs) }
+}
+
+export function inactivityEmail(job: InactivityEmailJob, appUrl: string): OutgoingEmail {
+  const subject = 'Your PocketFolio account will be deleted in 2 days'
+  const when = new Date(`${job.erase_on}T00:00:00+05:30`).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' })
+  const link = `${appUrl}/login`
+  const paragraphs = [
+    "Nobody has signed in to your PocketFolio account for 3 years. Our privacy policy says we then delete the account and everything in it.",
+    `To keep it, sign in before ${when}. That's all you need to do. Otherwise we'll delete it on ${when}.`,
+    `Questions? Write to ${SUPPORT}.`,
+  ]
+  const text = [subject, '', paragraphs[0]!, '', paragraphs[1]!, '', `Sign in: ${link}`, '', paragraphs[2]!].join('\n')
+  return { to: job.to, subject, text, html: plainHtml(subject, paragraphs, { label: 'Sign in', href: link }) }
+}
+
 // ─── Consumer ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-type ConsumerEnv = SinkEnv & { EMAIL: SendEmail; EMAIL_FROM: string }
+type ConsumerEnv = SinkEnv & { EMAIL: SendEmail; EMAIL_FROM: string; APP_URL: string }
 export const LOGIN_EXPIRY_MINUTES = 10
 
 export async function handleEmailBatch(batch: MessageBatch<EmailJob>, env: ConsumerEnv, sender?: EmailSender) {
@@ -140,20 +190,20 @@ export async function handleEmailBatch(batch: MessageBatch<EmailJob>, env: Consu
   let sent = 0
   for (const msg of batch.messages) {
     const job = msg.body
-    if (job?.kind !== 'login') {
+    const email = render(job, env)
+    if (!email) {
       console.error('email_bad_message')
       msg.ack()
       continue
     }
     // The link and code expire after LOGIN_EXPIRY_MINUTES: a later delivery would only confuse.
-    if (Date.now() - job.created_at > LOGIN_EXPIRY_MINUTES * 60_000) {
+    if (job.kind === 'login' && Date.now() - job.created_at > LOGIN_EXPIRY_MINUTES * 60_000) {
       console.error('email_expired', msg.attempts)
       msg.ack()
       continue
     }
-    const email = loginEmail(job, LOGIN_EXPIRY_MINUTES)
     try {
-      if (sinkEnabled(env) && isSinkAddress(job.to)) await writeSink(env, job, email.subject)
+      if (sinkEnabled(env) && isSinkAddress(job.to)) await writeSink(env, job, email)
       else await real.send(email)
       msg.ack()
       sent++
@@ -171,4 +221,12 @@ export async function handleEmailBatch(batch: MessageBatch<EmailJob>, env: Consu
     }
   }
   if (sent) console.log('email_sent', sent)
+}
+
+function render(job: EmailJob | undefined, env: { APP_URL: string }): OutgoingEmail | null {
+  if (typeof job?.to !== 'string') return null
+  if (job.kind === 'login') return loginEmail(job, LOGIN_EXPIRY_MINUTES)
+  if (job.kind === 'account_deleted') return accountDeletedEmail(job)
+  if (job.kind === 'inactivity_notice') return inactivityEmail(job, env.APP_URL)
+  return null
 }

@@ -2,7 +2,7 @@
 // Option names checked against better-auth 1.7.28 types in M5.
 import { betterAuth, type BetterAuthOptions } from 'better-auth'
 import { emailOTP, magicLink } from 'better-auth/plugins'
-import { ensureHousehold } from './lib/household'
+import { ensureHousehold, touchHousehold } from './lib/household'
 import { LOGIN_EXPIRY_MINUTES } from './lib/email'
 import { d1RateLimitStorage } from './lib/rate-limit'
 
@@ -20,7 +20,7 @@ export type LoginCapture = { token?: string; otp?: string }
 
 export const SESSION_FIELDS = {
   householdId: { type: 'string', input: false, required: false },
-  consentVersion: { type: 'string', input: false, required: false }, // filled once consent exists (M14)
+  consentVersion: { type: 'string', input: false, required: false }, // the accepted notice version (lib/consent.ts)
 } as const
 
 const NO_TOKENS = { accessToken: null, refreshToken: null, idToken: null, accessTokenExpiresAt: null, refreshTokenExpiresAt: null }
@@ -94,10 +94,18 @@ export function authOptions(env: AuthEnv, capture?: LoginCapture) {
       },
       session: {
         create: {
-          // Every new session (signup or sign-in, any method) carries its household, so requests never look it up.
-          before: async (session) => ({
-            data: { ...session, householdId: await ensureHousehold(env, session.userId) },
-          }),
+          // Every new session (signup or sign-in, any method) carries its household and consent, so requests never
+          // look them up.
+          before: async (session) => {
+            const { householdId, consentVersion } = await ensureHousehold(env, session.userId)
+            return { data: { ...session, householdId, consentVersion } }
+          },
+        },
+        // A used session is refreshed once a day (updateAge): that's activity for the DPDP inactivity job (§12).
+        update: {
+          after: async (session) => {
+            if (session?.userId) await touchHousehold(env.DB, session.userId)
+          },
         },
       },
     },

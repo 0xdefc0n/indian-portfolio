@@ -4,16 +4,28 @@ import type { Context } from 'hono'
 import type { AppBindings } from '../types'
 import { hmacHex } from './crypto'
 
-export type AuditEvent = 'member_renamed' | 'member_deleted' | 'statement_added' | 'statement_deleted' | 'sip_skipped' | 'sip_skip_undone' | 'sip_cancelled'
+export type AuditEvent =
+  | 'member_renamed' | 'member_deleted' | 'statement_added' | 'statement_deleted' | 'sip_skipped' | 'sip_skip_undone' | 'sip_cancelled'
+  | 'consent_given' | 'export' | 'account_deleted' | 'account_erased_inactive' | 'inactivity_notice'
+
+/** Security-log rows are kept this long (DPDP Rule 6(1)(e) and 8(3): at least a year), then cleanup deletes them. */
+export const AUDIT_RETENTION_MS = 400 * 86_400_000
+
+/** The request's country and an HMAC of its user agent (no PII), for audit rows written outside auditStatement. */
+export async function requestMeta(c: Context<AppBindings>): Promise<{ country: string | null; uaHash: string | null }> {
+  const ua = c.req.header('user-agent')
+  return {
+    uaHash: ua ? (await hmacHex(c.env.BETTER_AUTH_SECRET, `ua:${ua}`)).slice(0, 16) : null,
+    country: (c.req.raw.cf as { country?: string } | undefined)?.country ?? null,
+  }
+}
 
 /**
  * INSERT for one audit row. With `onlyIfChanged`, the row is written only when the previous statement in the same
  * batch changed a row (SQLite changes()), so a 404 delete leaves no audit trail of a guess.
  */
 export async function auditStatement(c: Context<AppBindings>, event: AuditEvent, opts: { onlyIfChanged?: boolean } = {}) {
-  const ua = c.req.header('user-agent')
-  const uaHash = ua ? (await hmacHex(c.env.BETTER_AUTH_SECRET, `ua:${ua}`)).slice(0, 16) : null
-  const country = (c.req.raw.cf as { country?: string } | undefined)?.country ?? null
+  const { country, uaHash } = await requestMeta(c)
   return c.env.DB.prepare(
     `INSERT INTO audit_event (user_id, household_id, event, ip_country, ua_hash, at)
      SELECT ?1, ?2, ?3, ?4, ?5, ?6 ${opts.onlyIfChanged ? 'WHERE changes() > 0' : ''}`,
