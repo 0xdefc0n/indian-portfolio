@@ -108,8 +108,10 @@ export type SnapshotRow = {
   requested_at: number | null
   checked_at: number | null
   failed_at: number | null
+  /** SNAPSHOT_VERSION of the build; older (or NULL) counts as stale (M12). */
+  version: number | null
 }
-const SNAPSHOT_COLUMNS = 'blob_key, inputs_hash, market_date, status, building_hash, building_until, built_at, requested_at, checked_at, failed_at'
+const SNAPSHOT_COLUMNS = 'blob_key, inputs_hash, market_date, status, building_hash, building_until, built_at, requested_at, checked_at, failed_at, version'
 
 /**
  * The statements a build uses: every CDSL statement (their month-end histories are joined) and each member's newest
@@ -214,7 +216,7 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
 
   if (!used.length) return clearSnapshot(env, msg, snap, hash, market, loadedAt)
 
-  if (!msg.force && snap.inputs_hash === hash && snap.blob_key) {
+  if (!msg.force && snap.inputs_hash === hash && snap.blob_key && snap.version === SNAPSHOT_VERSION) {
     await db.prepare('UPDATE snapshot SET checked_at = MAX(COALESCE(checked_at, 0), ?1) WHERE household_id = ?2 AND inputs_hash = ?3').bind(loadedAt, hid, hash).run()
     return done(env, msg, 'current')
   }
@@ -258,10 +260,10 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
       db
         .prepare(
           `UPDATE snapshot SET blob_key = ?1, inputs_hash = ?2, market_date = ?3, status = 'ready', building_hash = NULL,
-             building_until = NULL, built_at = ?4, checked_at = ?5, failed_at = NULL
+             building_until = NULL, built_at = ?4, checked_at = ?5, failed_at = NULL, version = ?7
            WHERE household_id = ?6 AND building_hash = ?2`,
         )
-        .bind(newKey, hash, market.marketDate, Date.now(), loadedAt, hid),
+        .bind(newKey, hash, market.marketDate, Date.now(), loadedAt, hid, SNAPSHOT_VERSION),
     ])
     if (!(cas!.meta.changes ?? 0)) {
       // A newer build claimed the household meanwhile: ours never becomes visible.
@@ -352,10 +354,10 @@ async function clearSnapshot(env: Env, msg: RebuildMessage, snap: SnapshotRow, h
     db
       .prepare(
         `UPDATE snapshot SET blob_key = NULL, inputs_hash = ?1, market_date = ?2, status = 'ready', building_hash = NULL,
-           building_until = NULL, built_at = ?3, checked_at = ?3, failed_at = NULL
+           building_until = NULL, built_at = ?3, checked_at = ?3, failed_at = NULL, version = ?5
          WHERE household_id = ?4 AND (building_hash IS NULL OR building_until < ?3)`,
       )
-      .bind(hash, market.marketDate, loadedAt, hid),
+      .bind(hash, market.marketDate, loadedAt, hid, SNAPSHOT_VERSION),
   ])
   if (!(upd!.meta.changes ?? 0)) return done(env, msg, 'taken') // a build is running; its recheck asks again
   const prev = prevRes!.results[0]?.blob_key
@@ -506,7 +508,9 @@ export function snapshotState(row: StateRow, market: MarketStatus, now = Date.no
   // Due while asked for and not yet handled, also when the last statement just went and the old blob is still up.
   const pending = (row.statements > 0 || !!row.blob_key) && (row.requested_at ?? 0) > (row.checked_at ?? 0)
   const latest = market.latest_nav_date
-  const stale = !!row.blob_key && !!latest && !!row.market_date && row.market_date < latest
+  // Stale: built on an older market day, or by an older SNAPSHOT_VERSION (a deploy changed what a build produces),
+  // so the first read after such a deploy rebuilds it (M12).
+  const stale = !!row.blob_key && ((!!latest && !!row.market_date && row.market_date < latest) || (row.version ?? 0) < SNAPSHOT_VERSION)
   return {
     statements: row.statements,
     blob_key: row.blob_key,

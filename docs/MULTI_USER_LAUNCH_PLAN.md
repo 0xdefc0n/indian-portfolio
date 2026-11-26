@@ -1374,6 +1374,9 @@ consumer):
     `value_date` and `estimated` totals. The month-end chart carries on to the latest NAV when it already covers every
     fund. ETFs and shares keep the statement's value.
   - **A newer statement replaces every estimate:** estimates only ever start after the newest statement date.
+  - **Deploys that change the build** bump `SNAPSHOT_VERSION`. Each snapshot row records the version it was built
+    with (`snapshot.version`, `app/0007`), and an older one counts as stale, so the next read rebuilds it (M12 fix:
+    the bump alone didn't, until the next market day).
   - **Skip and cancel** (owner decision, 2026-11-26, instead of a time limit on estimates). As at brokers, the user
     can skip the **next** instalment only (one per SIP, undoable until its date), or cancel a SIP for good, after a
     confirmation saying it can't be undone. PocketFolio doesn't place or stop SIPs, so both only record what the

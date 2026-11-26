@@ -5,7 +5,7 @@ import { env } from 'cloudflare:test'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { blobKeys } from '../src/lib/blob'
 import { acquireEngine, engineApi, type EngineLease, releaseLease } from '../src/lib/engine-client'
-import { CLAIM_MS, FAILED_BACKOFF_MS, prebuild, requestRebuild, runRebuild, usedStatements } from '../src/lib/snapshot'
+import { CLAIM_MS, FAILED_BACKOFF_MS, prebuild, requestRebuild, runRebuild, SNAPSHOT_VERSION, usedStatements } from '../src/lib/snapshot'
 import { marketHooks } from '../src/market/jobs'
 import { call } from './helpers/auth'
 import { cdslPages, FAKE_PAN, FAKE_PAN_2 } from './helpers/pdf-fixture'
@@ -291,6 +291,22 @@ describe('GET /api/portfolio', () => {
     const fresh = await portfolio(h)
     expect([fresh.stale, fresh.building]).toEqual(['0', '0'])
     expect((await fresh.res.json<Snap>()).market_date).toBe(iso(day))
+  })
+
+  it('a snapshot from an older SNAPSHOT_VERSION is stale on the same market day: the first read after a deploy rebuilds it', async () => {
+    const { h } = await builtHousehold('p-version')
+    expect((await snapshotRow(h.householdId))?.version).toBe(SNAPSHOT_VERSION)
+    // as it was for households built before M12's deploy: same inputs and market day, older build (NULL version)
+    await env.DB.prepare('UPDATE snapshot SET version = NULL WHERE household_id = ?1').bind(h.householdId).run()
+    const old = await portfolio(h)
+    expect([old.res.status, old.stale, old.building]).toEqual([200, '1', '1'])
+    const status = await (await call('/api/portfolio/status', { jar: h.jar })).json<{ stale: boolean; status: string }>()
+    expect(status).toMatchObject({ stale: true, status: 'pending' })
+    fakeBuild()
+    expect(await deliverRebuilds(takeRebuilds(h.householdId))).toEqual([{ outcome: 'built' }]) // not "current"
+    const fresh = await portfolio(h)
+    expect([fresh.stale, fresh.building]).toEqual(['0', '0'])
+    expect((await snapshotRow(h.householdId))?.version).toBe(SNAPSHOT_VERSION)
   })
 
   it('a recent failure holds lazy rebuilds back for 10 minutes', async () => {
