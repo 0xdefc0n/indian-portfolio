@@ -73,10 +73,6 @@ export function PrivacyPage() {
             names or amounts.
           </li>
         </ul>
-        <p>
-          A statement also contains each member's PAN. We keep it encrypted, use it only to file each statement under the
-          right person and to open their next statement for you, and only ever show it masked, like AB••••••4F.
-        </p>
       </Section>
 
       <Section title="Why">
