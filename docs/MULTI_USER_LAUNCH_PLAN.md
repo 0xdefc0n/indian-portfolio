@@ -18,7 +18,8 @@ be verified during implementation are marked ⚠️ VERIFY, with what to check a
    error class names. This already applies in the current code (see `README.md` → Privacy) and continues.
    When testing with real PDFs, print counts and ok/fail only.
 2. **Keep the UI consistent with the current design.** The bento overview, dark-first theme, and mobile layout from
-   commit `089634a` are the design system. Every new screen (login, onboarding, members, settings, link device,
+   commit `089634a` are the design system **until M24**, which replaces it with the premium design system v2 (D21,
+   §21.1). From then on, v2 is the system everything reuses. Every new screen (login, onboarding, members, settings, link device,
    legal pages, "coming soon" states) must reuse it. See §13.
 3. **Work phase by phase (§17).** Finish each phase's acceptance criteria before starting the next. Commit per phase.
 4. **Tenant isolation is non-negotiable.** Every read and write of user data goes through one helper that takes the
@@ -60,6 +61,14 @@ be verified during implementation are marked ⚠️ VERIFY, with what to check a
 | D17 | Two D1 databases 🧪 | **`pocketfolio-app`** (auth, households, statements metadata, quotas, jobs) and **`pocketfolio-market`** (scheme, nav, market_day, backfill, fund portfolios). | Each D1 database runs one query at a time (§3.4). The nightly NAV writes and the heavy daily-returns reads must not slow sign-in and uploads. It also gives each its own 10 GB cap and its own Time Travel restore, and lets the market DB use read replicas. |
 | D18 | Compress, then encrypt 🧪 | Every user blob in R2 (statements, snapshots, cached daily series) is **gzip-compressed before encryption**. Parked PDFs are already compressed, so they are only encrypted. | Measured 12× smaller for statements and 6× for snapshots (§3.3). Compressing after encryption does nothing. |
 | D19 | No PAN input on upload 🔒🧪 (owner, 2026-11-25) | **Uploading asks only for the PDF and its password, if it has one.** No PAN field and no member picker. The Worker tries the household's known passwords first (each member's PAN, pending KFintech passwords), so most uploads need no typing at all. It reads the holder's PAN from the statement and files it under the matching member, or creates a new one. A PAN is typed only where it's really needed: the KFintech request helper for someone not yet in the household (D9), because KFintech's form asks for it. | Less to type and fewer mistakes (no "wrong member" uploads), and we collect only what's needed (DPDP data minimisation). Tested: the labelled PAN on pages 1–3 was the holder's in 4 of 4 statements, and the parsed PAN confirms it (§10.1 A5). |
+| D20 | Disposable emails 🔒 (owner, 2026-11-27) | **New accounts can't use a disposable address.** A bundled open-source domain list is checked at email sign-in; existing users still sign in; Google isn't checked (§21.7, M22). | Less abuse of the free tier and the email quota. Turnstile is already on the form (M5) and stays as it is. |
+| D21 | Premium design refresh 🔒 (owner, 2026-11-27) | **Design system v2**, with a gold accent and a glass-like premium feel, replaces the `089634a` system everywhere, including a redesigned dashboard and a new two-part wordmark ("Pocket" plain, "folio" on a gold glass block) (§21.1, M24). | Owner: the current look reads as "vibe coded". One system for the app and the public pages. |
+| D22 | Public growth pages before launch 🔒 (owner, 2026-11-27) | **Competitor research, a landing page, SEO, a blog, a public FIRE calculator and a social playbook all ship before launch** (M23–M27, M30). Public pages are prerendered HTML (§21.2). | Search and AI-search indexing takes weeks, so the pages should be live on day one, and M16 hardens them too. |
+| D23 | Benchmark score 🔒 (owner, 2026-11-27) | **0–100 score per fund and stock against its category's index**, from rolling 1/3/5-year returns and consistency, with a plain-language line (§21.4, M28). | Owner request. A single number is easy to scan; the line explains it. |
+| D24 | Gold and silver 🔒 (owner, 2026-11-27) | **Physical gold/silver (grams, purity) and Sovereign Gold Bonds**, entered by hand and valued at a daily per-gram rate. Not digital gold. Gold ETFs and funds already come in through statements (§21.5, M29). | Owner choice. |
+| D25 | Corporate actions 🔒 (owner, 2026-11-27) | **Hybrid:** splits and bonuses after the statement date are applied automatically; mergers, demergers and MF scheme mergers ask for a newer statement (§21.6, M21). | Splits and bonuses are mechanical and common. Mergers have many edge cases, and a new statement has the right answer. |
+| D26 | AI portfolio analysis 🔒 (owner, 2026-11-27) | **The model is decided after the cost study (M31).** It ships after launch (M32), with identities never sent to the model (§21.8). | Owner: decide from the cost per user. |
+| D27 | Admin panel 🔒 (owner, 2026-11-27) | **Email allowlist only** (`ADMIN_EMAILS`). Health, aggregate usage, support actions with counts only, limits and feature flags. **No financial data, ever.** Built last, after launch (§21.9, M33). | Owner choice. |
 
 ---
 
@@ -613,7 +622,9 @@ export function createAuth(env: Env) {
       // sendLoginEmail: one email per sign-in request holding BOTH the link and the code. ✅ M5: the login form calls
       // POST /api/login/email, which runs both plugin endpoints server-side and captures the token and the code, then
       // queues ONE email. The plugins' own send endpoints are not routed (see "As built" below).
-      deviceAuthorization({ verificationUri: "/link", expiresIn: "5m", interval: "3s" }), // §7.4; ⚠️ VERIFY option names
+      // ✅ M13 (1.7.28): options verificationUri, expiresIn, interval (time strings) and validateClient exist as named.
+      // Built with an absolute `${APP_URL}/link`, "300s", "5s" (the plugin's default interval) and validateClient = "web-qr".
+      deviceAuthorization({ verificationUri: "/link", expiresIn: "5m", interval: "5s" }), // §7.4
     ],
     databaseHooks: { user: { create: { after: async (u) => createHousehold(env, u.id) } } },
   });
@@ -745,23 +756,44 @@ Implementation notes:
   `BarcodeDetector` where it exists (Chrome and Android), falling back to `qr-scanner` (jsQR-based). Most people will
   just use the phone's camera app, since the QR is a URL.
 - **Security** (these are required by the Better Auth docs and the IETF cross-device BCP):
-  - The approval page shows the requesting device's browser, OS and approximate location. Store `cf-ipcountry`,
-    `cf-ipcity` and the parsed UA when the code is created (⚠️ VERIFY: whether the plugin exposes a hook for extra
-    fields; if not, keep a side table `device_code_meta(user_code, ua, city, country)` written in a
-    `/api/auth/device/code` before-hook).
+  - The approval page shows the requesting device's browser, OS and approximate location. Store the country, the
+    city and the parsed UA when the code is created (✅ M13, better-auth 1.7.28: extra fields exist only through the
+    plugin's internal `grant` option, which also changes its client-id rules, so the fallback is used: a side table
+    `device_code_meta(user_code, label, city, country, created_at)`. `POST /api/login/qr` writes it, and it stores
+    a short label like "Chrome · macOS", not the raw UA. City and country come from `request.cf`, which a client
+    can't forge like a `cf-ipcity` header. Cleanup deletes rows after an hour).
   - It shows the user code to compare and needs an explicit **Approve**.
   - Warning text: "Only approve if you're signing in on a device in front of you right now."
   - The code lasts 5 minutes and is single use. Device-code creation is limited to 10 per hour per IP.
-- **Cookie bridge.** The device token endpoint returns a session token (⚠️ VERIFY: whether it already sets a cookie).
-  If it doesn't, `POST /api/session/adopt` does the following:
-  1. Validate the token with `auth.api.getSession({ headers: { Authorization: "Bearer …" } })` (requires the `bearer()` plugin).
-  2. Set the standard session cookie with Better Auth's cookie helper.
-  3. Accept only tokens issued by the device flow in the last 60 seconds.
+- **Cookie bridge.** The device token endpoint returns a session token (✅ M13, 1.7.28: it sets **no** cookie. It
+  only calls `setNewSession` and returns `access_token`). Built simpler and safer than the `/api/session/adopt`
+  sketch: the token never reaches the page.
+  - A tiny plugin (`pf-device-session-cookie` in `worker/src/auth.ts`) adds an after-hook on `/device/token` that
+    calls Better Auth's own `setSessionCookie`, so the cookie has the normal name, signature and cookie cache.
+  - `POST /api/login/qr/poll` calls the endpoint through `auth.api`, passes the `Set-Cookie` headers on, and drops
+    the token from the body.
+  - So there's no `bearer()` plugin, no adopt route and no 60-second window.
+- **Routes (M13).** Better Auth's `/device*` endpoints aren't routed. The app uses its own routes:
+  - `POST /api/login/qr` (10 an hour per IP) and `POST /api/login/qr/poll` (answers `pending`, `slow_down`,
+    `approved`, `denied` or `expired`);
+  - `GET /api/link?user_code=` (30 per 10 min per user). In 1.7.28 approval needs the code to be **claimed** first
+    by a signed-in `GET /device`, and this route does that claim. A code claimed by another account looks like a
+    wrong code;
+  - `POST /api/link/approve` and `POST /api/link/deny`;
+  - `GET /api/devices`, `DELETE /api/devices/:id` and `POST /api/devices/sign-out-others`. These replace Better
+    Auth's `list-sessions` and `revoke-*`, which are no longer routed, because `list-sessions` would hand every
+    session token to the page.
+  - The QR URL is `/link?user_code=ABCDEFGH` (the plugin's parameter name).
 - **Client ID.** Better Auth's device plugin expects one. Use the fixed value `web-qr` and validate it with
   `validateClient: id => id === "web-qr"`.
 - **Settings → Devices** lists sessions with UA, city and last active, with **Sign out this device** and **Sign out all
-  other devices** (`listSessions`, `revokeSession`, `revokeOtherSessions`). A device linked by QR in the last 7 days
-  shows a "New" badge.
+  other devices** (✅ M13: our `/api/devices` routes, see above). A device linked by QR in the last 7 days shows a
+  "New" badge.
+  - City and country are plain `session` columns, so they stay out of the cookie cache. They're written by a
+    `session.create` after-hook from `request.cf`, and by the poll route for QR sessions. `session.linkedAt`
+    marks a QR link.
+  - The one-time notice is a subquery inside `/api/me`'s single household read, so the D1 budget is unchanged.
+    `session.noticeAt` records that a device has shown it.
 
 ---
 
@@ -836,6 +868,7 @@ export async function assertMember(c, memberId: string) {
 | `GET /api/me` | ✅ | `{ user: {name, email, image}, household: {id, created_at}, consent_ok, limits, usage }` | ✅ M14: also `notice_version`; `consent_ok` comes from the session, else one D1 check. 401 when the household is gone (a deleted account's other devices hold a valid cookie cache for ≤ 5 min). `limits`/`usage` not built yet |
 | `POST /api/consent` | ✅ | record acceptance of `notice_version` | Blocks every `/api/*` data route until accepted (403 `consent_required`). ✅ M14: body `{ notice_version, adult: true }` (`409 notice_changed`, `400 adult_required`). Writes `consent`, stamps every session of the user and re-issues the cookie cache, so gating costs 0 D1 queries on a consented request. A session without the current version pays one query (`UPDATE session … WHERE EXISTS consent … RETURNING`), which also covers consent given on another device. `requireSession()` gates by default; `/me`, `/consent`, export and delete pass `consent: false` |
 | `GET /api/config` | – | `{ features: { cdsl_fetch: false, kfintech_auto: false, stocks: true }, kfintech_form_url, turnstile_site_key }` | replaces today's sandbox config |
+| `POST /api/metrics` | ✅ | `{ metric }` → 204 | ✅ M15: anonymous install / launch counters (§13A.6). Fixed list of names, 30 a day per account, no user ID stored |
 | `GET /api/members` | ✅ | list `{id, name, pan_masked, statements: [{id, kind, as_of, holdings_count}]}` | ✅ M6: returns `{ members: [...] }`; `name` is null until a statement or a rename sets it. One D1 batch |
 | `PATCH /api/members/:id` | ✅ | rename (display override) | ✅ M6: `{ name }`, 1–60 characters; replaces the sealed `display_name_enc` (a later statement doesn't overwrite it, M7) |
 | `DELETE /api/members/:id` | ✅ | delete member + their statements + blobs; enqueue rebuild | confirm in UI |
@@ -1559,6 +1592,9 @@ account was deleted", the inactivity notice) are in `src/lib/email.ts`. Breach p
 
 ## 13. Frontend changes (keep the current design)
 
+> **From M24 (D21), design system v2 replaces the rules below** (tokens, fonts, cards). M24 rewrites this section with
+> the v2 reference. The layout, mobile, states and accessibility rules stay.
+
 **Design consistency is required:**
 - **Tokens and theme.** Use the tokens in `web/src/index.css` only: `bg-surface`, `ring-border`, `text-muted-foreground`,
   gain/loss and the chart colours. No new colours or fonts. IBM Plex Sans, the existing radius scale, and dark-first
@@ -1641,8 +1677,8 @@ no app store at launch.
   "start_url": "/?source=pwa",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#0F1226",
-  "theme_color": "#0F1226",
+  "background_color": "#0A0C14",
+  "theme_color": "#0A0C14",
   "categories": ["finance"],
   "icons": [
     { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
@@ -1659,18 +1695,22 @@ no app store at launch.
   ]
 }
 ```
-  - The colours are the dark-theme `--background` from `web/src/index.css` (dark-first).
+  - The colours are the dark-theme `--background` from `web/src/index.css` (dark-first). ✅ M15: that is `#0A0C14`
+    (light `#F2F3F7`); the `#0F1226` / `#F5F6FA` first written here were never in the CSS. Shortcuts carry the 192 icon.
   - Screenshots must use **demo data**, never real portfolios. Chrome shows them in its richer install dialog.
 - **`web/index.html`:**
   - `<link rel="manifest" href="/manifest.webmanifest">`
-  - `<meta name="theme-color" content="#F5F6FA" media="(prefers-color-scheme: light)">` and the `#0F1226` dark
-    version. `ThemeToggle` also updates the meta at runtime.
+  - `<meta name="theme-color" content="#F2F3F7" media="(prefers-color-scheme: light)">` and the `#0A0C14` dark
+    version. ✅ M15: `ThemeColorSync` (in `components/pwa.tsx`) updates both metas whenever the theme changes, from the
+    toggle or from Settings. `apple-mobile-web-app-status-bar-style` stays `default`: `black-translucent` paints white
+    status-bar text, which is unreadable on the light theme.
   - `<link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png">`
   - `<meta name="apple-mobile-web-app-title" content="PocketFolio">`
   - `viewport-fit=cover`
 - **Safe areas.** In standalone mode, `BottomNav` and the header pad with `env(safe-area-inset-*)`.
 - **Icons.** Generate them from `web/public/favicon.svg` with `@vite-pwa/assets-generator`. Keep the maskable safe
-  zone at 80%.
+  zone at 80%. ✅ M15: `web/pwa-assets.config.ts`, `npm run icons`; the maskable and Apple icons sit on a full-bleed
+  square of the favicon's own `#3D4DB7`, so launcher masks never show a second shape. Output is committed.
 - **Service worker:** `vite-plugin-pwa` (Workbox `generateSW`) with `registerType: "prompt"`.
   - **Precache the app shell only:** HTML, JS, CSS, fonts and icons. `navigateFallback: "/index.html"`,
     `navigateFallbackDenylist: [/^\/api\//]`.
@@ -1681,10 +1721,15 @@ no app store at launch.
   - **Sign out** needs no cache purge, because no API data is cached. It clears in-memory state and returns to `/login`.
 - **Worker headers.**
   - `manifest.webmanifest` is served as `application/manifest+json`; `sw.js` with `Cache-Control: no-cache`.
-  - CSP gains `manifest-src 'self'; worker-src 'self'`.
+  - CSP gains `manifest-src 'self'; worker-src 'self'`. ✅ M15: the two headers come from `web/public/_headers`
+    (Workers Static Assets reads it; checked under `wrangler dev`). There is no CSP yet; it arrives in M16 with these
+    two directives already in its list (§17 Phase 6).
 - **Installability.** Chromium checks for HTTPS and a manifest with name, 192 and 512 icons, `start_url` and
-  `display`. Check it in DevTools → Application → Manifest and in Lighthouse. ⚠️ VERIFY the current Chromium criteria,
-  which have loosened the SW requirement over time. We ship an SW either way.
+  `display`. Check it in DevTools → Application → Manifest and in Lighthouse. ✅ M15 (Chrome blog "Revisiting Chrome's
+  installability criteria", read 2026-11-27): the fetch-handler requirement is gone for the menu's "Install app"
+  (Chrome 108 mobile, 112 desktop) but still applies to `beforeinstallprompt`; the Workbox SW has one. Lighthouse
+  dropped its PWA category, so the check is DevTools / CDP `Page.getInstallabilityErrors`: none in a normal profile
+  (only `in-incognito` in a private one), and Chrome for Testing fired a real `beforeinstallprompt` on `vite preview`.
 
 ### 13A.2 When to ask (standard practice: after value, never on arrival)
 Show the install prompt automatically only when **all** of these are true:
@@ -1700,9 +1745,17 @@ Show the install prompt automatically only when **all** of these are true:
 These conditions live in one pure function, `installEligibility(state)`, with unit tests. Its UI state is stored in
 `localStorage["pf.install"] = { dismissals, lastDismissedAt, installed }`, which holds no personal data.
 
+✅ M15: `installEligibility()` is in `web/src/lib/install.ts` (unit tests in `install.test.ts`, `npm test` in `web/`).
+"A later session" counts distinct local days with a signed-in dashboard visit (`localStorage["pf.visits"] =
+{ days, last }`). "The first upload just finished" means the household was empty earlier in this page load and now has
+a portfolio. Only a prompt that opened by itself counts a dismissal (Not now, close, Escape, or "Got it" on the iOS and
+Mac steps). "Busy" is any open dialog, the upload dialog, a rebuild in progress, or a hidden tab.
+
 **Entry points that are always available**, with no nagging:
 - Settings → **Install app**
 - the avatar menu → **Install PocketFolio** (shown only when installable)
+- ✅ M15: on Chromium these call the browser's own dialog straight away (the click is the user activation it needs);
+  elsewhere they open the sheet with the steps, or a short note for in-app browsers and Firefox
 - a small "Get the app" link in the login page footer, for returning users
 
 ### 13A.3 How, per platform
@@ -1710,7 +1763,7 @@ These conditions live in one pure function, `installEligibility(state)`, with un
 | Platform | Detection | Flow |
 |---|---|---|
 | Android Chrome, Edge, Samsung Internet; desktop Chrome and Edge | The `beforeinstallprompt` event fires | Call `e.preventDefault()` and keep the event. Show our sheet or card. On **Add to home screen**, call `deferred.prompt()`. It must run inside the click handler, or it fails without user activation. Await `userChoice`, then discard the event, which is single use. On `appinstalled`, set `installed` and show the toast. |
-| iPhone and iPad (Safari; Chrome, Edge and Firefox on iOS offer it in their Share menu) | iOS UA (`iPhone`/`iPad`/`iPod`, or iPadOS's `Macintosh` UA with touch), not standalone | There is no API (WebKit doesn't support `beforeinstallprompt`). Show the instruction sheet (§13A.4) with the iOS Share icon. The arrow points at the bottom toolbar on iPhone Safari and the top bar on iPad. ⚠️ VERIFY the current Safari Share-menu wording and placement on the latest iOS before finalising copy and illustrations. |
+| iPhone and iPad (Safari; Chrome, Edge and Firefox on iOS offer it in their Share menu) | iOS UA (`iPhone`/`iPad`/`iPod`, or iPadOS's `Macintosh` UA with touch), not standalone | There is no API (WebKit doesn't support `beforeinstallprompt`). Show the instruction sheet (§13A.4) with the iOS Share icon. The arrow points at the bottom toolbar on iPhone Safari and the top bar on iPad. ✅ M15 (iOS 26 guides, 2026-11-27): in Safari's default compact tab bar Share sits behind **⋯**; the Bottom and Top layouts show Share directly. Then **Add to Home Screen** (scroll down; if missing, Edit Actions) and **Add**; "Open as Web App" is on by default. The copy says "If you don't see it, tap ⋯ first". Recheck on a device in the owner's manual install test. |
 | macOS Safari 17+ | Safari UA on a Mac, not standalone | Instruction card: **File → Add to Dock** (or Share → Add to Dock) |
 | Firefox desktop; in-app browsers (WhatsApp, Instagram, Gmail webviews) | No `beforeinstallprompt`; webview UA | Don't auto-prompt. In webviews, show a small note: "Open in Chrome or Safari to add PocketFolio to your home screen." |
 
@@ -1738,7 +1791,8 @@ the PocketFolio icon, `Panel` surface and ring, `lucide-react` icons, and the pr
 **iPhone / iPad:**
 > **Add PocketFolio to your Home Screen**
 > Check your portfolio in one tap, right from your Home Screen.
-> 1. Tap **Share** ⬆︎ in Safari's toolbar
+> 1. Tap **Share** ⬆︎ in Safari's toolbar (at the bottom on iPhone, the top on iPad). If you don't see it, tap **⋯** first
+>    (✅ M15, iOS 26)
 > 2. Scroll down and tap **Add to Home Screen**
 > 3. Tap **Add**
 >
@@ -1753,7 +1807,8 @@ the PocketFolio icon, `Panel` surface and ring, `lucide-react` icons, and the pr
 
 ### 13A.5 Signing in inside the installed app (important)
 - **iOS keeps a home-screen web app's cookies separate from Safari.** Users have to sign in again inside the app
-  (⚠️ VERIFY on the current iOS).
+  (✅ M15: still so per WebKit bug 181849 and current PWA references; iOS copies cookies once, at install time, then
+  keeps them apart. The owner's iPhone install test confirms it end to end).
   - **Magic links open in Safari or Mail, not in the installed app**, so the session would land in the wrong place.
   - **Fix:** every sign-in email carries **both the link and a 6-digit code** (Better Auth `emailOTP` next to
     `magicLink`, §7.1).
@@ -1763,6 +1818,10 @@ the PocketFolio icon, `Panel` surface and ring, `lucide-react` icons, and the pr
   path covers the cases where it doesn't.
 
 ### 13A.6 Measure (no PII)
+- ✅ M15: `POST /api/metrics { metric }` (signed in and consented; anything else is 400 `unknown_metric`) adds 1 to
+  `metric_daily` (`migrations/app/0009_metric_daily.sql`: metric, IST date, count; no user or household column). One
+  D1 batch with a per-account cap of 30 a day (a `quota` row, deleted with the account), and always 204. The web app
+  sends each metric at most once per page load.
 - **Counters** go in a new D1 table `metric_daily(metric, date, count)` (or Cloudflare Web Analytics custom events):
   `install_prompt_shown`, `install_accepted`, `install_dismissed`, `app_installed`, `launch_standalone` (from
   `start_url ?source=pwa`), `launch_shortcut`.
@@ -2036,25 +2095,29 @@ until those features ship.
 
 ## 17. Implementation phases
 
-**The build order is [MILESTONES.md](MILESTONES.md).** It splits these phases into milestones M0–M21, one Claude Code
+**The build order is [MILESTONES.md](MILESTONES.md).** It splits these phases into milestones M0–M33, one Claude Code
 session each, with owner inputs and done-checks per milestone. Phase → milestones:
 
 | Phase | Milestones |
 |---|---|
 | 0 | M0–M4 |
 | 1 | M5 |
+| 1b | M22 |
 | 2 | M6–M8 |
 | 3 | M9–M11 |
 | 3b | M12 |
 | 4 | M13 |
 | 5 | M14 |
 | 5b | M15 |
-| 6 | M16–M17 |
+| 6 | M16, M31, M17 |
 | 7 | M18 |
-| 8 | M19–M21 |
+| 8 | M19–M21, M28, M29 |
+| 9 (design and growth) | M23–M27, M30 |
+| 10 (after launch) | M32, M33 |
 
-The build order isn't the phase order (owner, 2026-11-26): … M12 → M14 → M15 → **M13** → M18 → M19 → M20 → M21 →
-**M16** → **M17** (hardening and load tests, then production launch, last).
+The build order isn't the phase order (owner, 2026-11-26 and 2026-11-27): … M12 → M14 → M15 → M22 → M23 → M24 →
+**M13** → M25 → M26 → M27 → M30 → M18 → M19 → M29 → M20 → M28 → M21 → **M16** → M31 → **M17** (production launch)
+→ M32 → M33. Why: see MILESTONES.md "Order notes".
 
 The phase text below stays the reference for acceptance criteria. Each phase ends with its acceptance criteria met and
 a commit/PR.
@@ -2185,6 +2248,8 @@ get a nightly rebuild; parse ~1.5 vCPU-s on average; build ~0.5 vCPU-s.
 - **A 10,000-user burst costs ≈ $0.65–2 extra** (§3.5).
 - The container estimate is still the least certain. Measure it in the Phase 6 load test and the first month, with
   Cloudflare's usage dashboard.
+- **M31 replaces these estimates** with measured cost per user per year (1k / 10k / 100k users), after the M16 load
+  test, and adds the AI analysis cost (§21.8) and pricing options (`docs/research/COST_AND_PRICING.md`).
 
 ---
 
@@ -2206,6 +2271,8 @@ get a nightly rebuild; parse ~1.5 vCPU-s on average; build ~0.5 vCPU-s.
 - Exchange prices for ETFs and stocks held in CDSL, so they're included in daily returns. Scheduled as M20 (before launch).
 - Manually entered FD, PPF and EPF with approximate returns (M19), and stock gains from broker tradebooks or manual buy
   prices (M21). Owner request, 2026-11-26; see `docs/MILESTONES.md` Phase 8. Design to be written before each starts.
+- AI portfolio analysis (M32) and the admin panel (M33) are scheduled after launch (§21.8, §21.9).
+- Digital gold (app-bought grams) isn't tracked (D24). Mergers and demergers aren't computed (D25).
 - A Python Worker for the engine, if Pyodide memory limits and the `pillow`/`rapidfuzz` gaps change (re-run the §3.1 test).
 - **A per-household Durable Object** for live status over WebSocket (hibernating), instead of polling. It would also
   serialise that household's rebuilds natively. Worth it only if polling shows up in D1 load after launch.
@@ -2213,3 +2280,107 @@ get a nightly rebuild; parse ~1.5 vCPU-s on average; build ~0.5 vCPU-s.
   and a valuation part computed in the Worker from the NAV store. That would remove the nightly rebuilds, at the cost of
   porting valuation logic to TypeScript. Revisit if `EngineBatch` becomes a noticeable cost.
 - Autoscaling containers, if Cloudflare adds it. `EnginePool` would then shrink to a thin wrapper.
+
+---
+
+## 21. Design, growth and extra features (owner's todo, 2026-11-27)
+
+The owner's todo added these features, and the owner answered Claude's questions on each (D20–D27). The order is in
+[MILESTONES.md](MILESTONES.md). Where a milestone says "OK on the plan section", its first session expands the
+subsection here and gets the owner's OK before building. The §0 rules apply to all of it: privacy first, tenant guard,
+encryption, and demo data only in every screenshot, image and post.
+
+### 21.1 Premium design system v2 and logo (D21, M24)
+- **Why:** the owner finds the current look generic ("vibe coded") and wants a premium feel.
+- **Direction:** a gold accent on the existing dark-first base, with glass-like surfaces and refined type and spacing.
+  M23's research on competitors' dashboards feeds it. Gold must pass AA contrast in dark and light. Gain/loss colours
+  stay clearly distinct from the gold.
+- **Logo:** a two-part wordmark, "Pocket" in plain text and "folio" on a gold, glass-like rounded block. Made in SVG
+  by Claude, with light/dark versions, a square mark, the favicon, PWA icons and maskable icons.
+- **Scope:** every existing screen, plus a redesigned dashboard (same data, new hierarchy). The M15 icons and store
+  screenshots are regenerated. M24 rewrites §13 as the v2 reference and updates the `CLAUDE.md` hard rule.
+
+### 21.2 Public pages: landing, SEO, blog (D22, M25, M26)
+- **Prerendered:** public routes (`/`, `/blog/*`, `/fire`, legal pages) are built as real HTML at build time and served
+  by Workers Static Assets. App routes stay SPA and `noindex`. A signed-in visitor on `/` goes to the dashboard.
+- **Metadata:** title, description, canonical, Open Graph/Twitter images, structured data (`Organization`, `WebSite`,
+  `SoftwareApplication`, `FAQPage`, `Article`), `sitemap.xml`, `robots.txt`, `llms.txt` for AI search. Staging is
+  always `noindex`.
+- **SEO skill:** github.com/AgricIDaniel/claude-seo is third-party code. Claude reads it in full first and installs it
+  as a project skill only with the owner's OK (review in `docs/research/SEO.md`).
+- **Blog:** Markdown in the repo with a `draft` flag. Claude drafts 6–8 posts from M23's keyword research; **each goes
+  live only after the owner's OK**. Every post cites sources and says "not investment advice".
+- **Landing content:** from M23 (positioning, sections, FAQ). Its main point: one private place for the whole
+  family's investments, from the statements they already have.
+
+### 21.3 FIRE calculator (D22, M27)
+- **Public `/fire`:** runs entirely in the browser; the inputs are never sent or stored. An SEO page.
+- **Signed in:** reads the corpus, SIPs and allocation from the snapshot (and manual assets) for a personal gap
+  analysis, the required SIP, a projected FI date and scenarios. Saved goal inputs are sealed with the household DEK
+  (§8) and included in export and deletion (§12).
+- **References** (owner): velthian.com/fire.php, portfolio360.co.in/fire. M23 compares them with others and picks
+  the best inputs and outputs. India-specific: inflation, step-up SIPs, the tax on withdrawals, EPF/PPF.
+
+### 21.4 Benchmark score (D23, M28)
+- **0–100 per fund and stock**, against the category's index (map in M28). Combines rolling 1/3/5-year excess
+  return, how often it beat the index, and downside capture. Less than 1 year of history: no score.
+- **Index data:** TRI from niftyindices.com (⚠️ VERIFY access and terms). Fallback: a direct-plan index fund's NAV
+  from our NAV store, as `market.py` already does for Nifty 50.
+- **Market data, not user data:** computed nightly once per scheme in the market DB. Labelled "not investment advice".
+
+### 21.5 Gold and silver (D24, M29)
+- **Physical:** grams and purity (gold 24K/22K/18K, silver 999), optional buy price and date.
+- **SGB:** series, units (grams), issue price and date; 2.5% a year interest paid every six months; 8-year maturity;
+  valued at the gold rate (the redemption basis).
+- **Rate:** a daily public per-gram rate in the market DB (⚠️ VERIFY the source, e.g. IBJA). Fallback: the per-gram
+  price implied by gold/silver ETF NAVs in the NAV store.
+- Stored like M19's manual assets: sealed inputs, same member model, a "Gold & silver" allocation class.
+
+### 21.6 Corporate actions (D25, M21)
+- **Today:** not handled. CDSL holdings are as of the statement date, and nothing adjusts them afterwards.
+- **Automatic:** splits and bonuses with an ex-date after the statement date, from NSE's public corporate-action file
+  (⚠️ VERIFY), adjust units and cost. Dividends are shown as income.
+- **Ask for a statement:** mergers, demergers and MF scheme mergers show "X merged into Y. Upload a newer statement to
+  update it." No guessed units.
+
+### 21.7 Disposable emails (D20, M22)
+- An open-source disposable-domain list is bundled at build time. The check runs in `POST /api/login/email` before
+  Turnstile and before an email is queued: `400 disposable_email`. Existing users on a listed domain still sign in.
+  Logs carry the outcome code only, never the address or the domain.
+- ✅ M22 (2026-11-27): the list is npm `disposable-email-domains-js` (2.4.0, **CC0**, no dependencies, ~200 KB,
+  10,455 domains). It is a packaging of the main upstream list `disposable-email-domains/disposable-email-domains`
+  (CC0, ~5.8k stars, updated within the last day), released several times a month (2.0–2.4 in Nov 2026). Its
+  `isDisposableEmailDomain` is case-insensitive and checks every parent domain, so subdomains count. The older
+  `disposable-email-domains` package (ivolo, MIT) hasn't been published since 2022, so it wasn't used.
+- **As built** (`worker/src/lib/disposable.ts`): the check runs after the address format check and before Turnstile.
+  Only a listed domain costs a D1 read (`SELECT 1 FROM "user" WHERE email = ?`). A refusal doesn't count against the
+  per-address or per-IP limits, and the log line is `login_email_refused disposable_email`. Trade-off: because the
+  check runs before Turnstile, someone could find out without a token whether an account exists for a
+  *disposable* address (only those). That's accepted, since those accounts are the ones we don't want anyway.
+
+### 21.8 AI portfolio analysis (D26, M31, M32)
+- **Model:** chosen in M31 from the measured cost per analysis: Workers AI (stays inside Cloudflare, no new
+  processor), the Claude API (better quality, a new processor in the privacy notice), or none.
+- **Data minimisation:** holdings, weights, returns, categories and costs only. Never names, PANs, folios, emails or
+  statement text. Prompts and answers aren't logged.
+- **Legal:** ⚠️ VERIFY SEBI investment-adviser rules for automated suggestions. The wording stays educational, with no
+  buy/sell calls. A new processor means a privacy-notice update and a `consentVersion` bump (M14).
+- A per-user quota (§11) and one cached result per snapshot.
+
+### 21.9 Admin panel (D27, M33)
+- **Access:** signed-in users whose email is in the `ADMIN_EMAILS` secret. Everyone else gets 404.
+- **Shows:** system health (queues, DLQ, jobs, engine, NAV ingest, scraper, BharatStock budget, email); aggregate usage
+  (signups, active users, uploads, failure rate, retention); support lookup by email with counts only; suspend, reset
+  quotas, delete account; fair-use limits and feature flags (D1, cached).
+- **Never shows** names, PANs, amounts, holdings or folios. Every action writes an `audit_event`. More features will
+  be decided by the owner before M33.
+
+### 21.10 Competitor research (M23)
+- A public-sources-only study in `docs/research/COMPETITORS.md`: features, pricing, privacy stance, landing pages and
+  dashboards, and user complaints for the main Indian trackers. It covers PocketFolio's value, the landing content,
+  dashboard input for M24, FIRE calculator input for M27, and keywords and communities for M25, M26 and M30.
+
+### 21.11 Social marketing (M30)
+- `docs/marketing/SOCIAL_PLAYBOOK.md`: Reddit (subreddits, each one's self-promotion rules with links, comment-first,
+  cadence), LinkedIn and X (profiles, content pillars, cadence), and ready drafts. **The owner creates the accounts
+  and posts; Claude never does.** Images use demo data only.

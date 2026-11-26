@@ -1,6 +1,7 @@
 // Sign-in routes (plan §7.1, §7.3, §13A.5).
 import { Hono } from 'hono'
 import { createAuth, type LoginCapture } from '../auth'
+import { allowedForLogin } from '../lib/disposable'
 import { isSinkAddress, sinkEnabled, sinkKeyValid, takeSink, type EmailJob } from '../lib/email'
 import { consume } from '../lib/rate-limit'
 import { verifyTurnstile } from '../lib/turnstile'
@@ -10,7 +11,9 @@ export const authRoutes = new Hono<AppBindings>()
 
 // Better Auth endpoints the app uses. Everything else under /api/auth is a 404. In particular, the plugins' own email
 // endpoints (/sign-in/magic-link, /email-otp/send-verification-otp) aren't routed: every sign-in email goes through
-// /api/login/email below (Turnstile, per-address limit, one email holding both the link and the code).
+// /api/login/email below (Turnstile, per-address limit, one email holding both the link and the code). The device
+// plugin's endpoints are reached through /api/login/qr* and /api/link* (routes/devices.ts), and sessions are listed
+// and ended through /api/devices: Better Auth's list-sessions would hand every session token to the page (M13).
 const ALLOWED = new Set([
   'GET /get-session',
   'POST /sign-out',
@@ -18,9 +21,6 @@ const ALLOWED = new Set([
   'GET /callback/google',
   'GET /magic-link/verify',
   'POST /sign-in/email-otp',
-  'GET /list-sessions',
-  'POST /revoke-session',
-  'POST /revoke-other-sessions',
   'GET /error', // where Better Auth sends OAuth failures without an errorCallbackURL
 ])
 
@@ -42,6 +42,13 @@ authRoutes.post('/login/email', async (c) => {
   const body = await c.req.json<{ email?: unknown; turnstile_token?: unknown }>().catch(() => ({}) as Record<string, unknown>)
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
   if (!EMAIL_RE.test(email) || email.length > 254) return c.json({ ok: false, code: 'invalid_email' }, 400)
+
+  // Before Turnstile, so the user's token isn't spent and they can retry with another address at once (§21.7).
+  // Existing users on a listed domain still sign in. The log carries the outcome code only: no address, no domain.
+  if (!(await allowedForLogin(c.env.DB, email))) {
+    console.log('login_email_refused', 'disposable_email')
+    return c.json({ ok: false, code: 'disposable_email' }, 400)
+  }
 
   const ip = c.req.header('cf-connecting-ip') ?? null
   // Automated staging tests: a sink address with the sink key skips Turnstile. Production has no sink key.

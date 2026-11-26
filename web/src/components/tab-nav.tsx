@@ -62,7 +62,7 @@ export function BottomNav({ tab, onChange }: { tab: TabId; onChange: (t: TabId) 
   return (
     <nav
       aria-label="Sections"
-      className="fixed inset-x-0 bottom-0 z-30 border-t bg-background/90 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+      className="fixed inset-x-0 bottom-0 z-30 border-t bg-background/90 pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] backdrop-blur md:hidden"
     >
       <div className="mx-auto grid max-w-md grid-cols-5">
         {TABS.map(({ id, short, Icon }) => {

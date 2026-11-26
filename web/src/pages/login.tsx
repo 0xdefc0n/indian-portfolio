@@ -1,19 +1,21 @@
 // /login and /login/verify (plan §13 item 1, §13A.5). Google is the primary button: it sends no email (§7.3).
-import { ArrowLeftIcon, Loader2Icon, MailIcon } from "lucide-react"
+import { ArrowLeftIcon, Loader2Icon, MailIcon, QrCodeIcon, SmartphoneIcon } from "lucide-react"
 import { type FormEvent, useEffect, useState } from "react"
 
 import { Link } from "wouter"
 
 import { PublicShell } from "@/components/public-shell"
+import { QrLogin } from "@/components/qr-login"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { api, auth, safeNext } from "@/lib/api"
+import { isStandalone, returningUser } from "@/lib/install"
+import { installFromMenu, useInstall } from "@/lib/pwa"
 import { useTurnstile } from "@/lib/turnstile"
 
 /** Installed app (PWA). iOS keeps its cookies apart from Safari, so the emailed link would sign in the wrong place. */
-const standalone = () =>
-  window.matchMedia?.("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone === true
+const standalone = isStandalone
 
 const LINK_ERRORS: Record<string, string> = {
   google: "Google sign-in didn't finish. Try again.",
@@ -40,6 +42,7 @@ export function LoginPage() {
   const [sentTo, setSentTo] = useState<string | null>(null)
   const [busy, setBusy] = useState<"google" | "email" | "code" | null>(null)
   const [error, setError] = useState<string | null>(errorParam ? (LINK_ERRORS[errorParam] ?? DEFAULT_LINK_ERROR) : null)
+  const [qr, setQr] = useState(false)
   const turnstile = useTurnstile(siteKey)
 
   useEffect(() => {
@@ -93,6 +96,22 @@ export function LoginPage() {
       {error}
     </p>
   )
+
+  if (qr) {
+    return (
+      <Shell>
+        <h1 className="text-xl font-semibold tracking-tight">Log in with QR</h1>
+        <p className="mt-1.5 mb-6 text-sm text-muted-foreground">Use a phone where you're already signed in. No email or password needed.</p>
+        <QrLogin next={next} />
+        <button
+          className="mx-auto mt-5 flex min-h-11 items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+          onClick={() => setQr(false)}
+        >
+          <ArrowLeftIcon className="size-3.5" /> Use Google or email instead
+        </button>
+      </Shell>
+    )
+  }
 
   if (sentTo) {
     const app = standalone()
@@ -180,12 +199,31 @@ export function LoginPage() {
         </Button>
         <p className="text-xs text-muted-foreground">We'll email you a sign-in link and a 6-digit code. No password needed.</p>
       </form>
+      <Button variant="outline" size="lg" className="mt-3 h-11 w-full" onClick={() => setQr(true)} disabled={busy !== null}>
+        <QrCodeIcon /> Log in with QR
+      </Button>
       <p className="mt-6 text-xs text-muted-foreground">
         By continuing, you agree to the{" "}
         <Link href="/terms" className="text-primary underline-offset-4 hover:underline">Terms</Link> and the{" "}
         <Link href="/privacy" className="text-primary underline-offset-4 hover:underline">Privacy policy</Link>.
       </p>
+      <GetTheApp />
     </Shell>
+  )
+}
+
+/** "Get the app", for people who have used PocketFolio on this browser before and aren't in the app already. */
+function GetTheApp() {
+  const install = useInstall()
+  const [show] = useState(() => returningUser() && !isStandalone())
+  if (!show || install.action === "installed") return null
+  return (
+    <button
+      className="mt-2 -mb-2 flex min-h-11 items-center gap-1.5 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+      onClick={() => void installFromMenu(install.action)}
+    >
+      <SmartphoneIcon className="size-3.5" /> Get the app
+    </button>
   )
 }
 

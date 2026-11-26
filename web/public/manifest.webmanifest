@@ -1,0 +1,25 @@
+{
+  "id": "/",
+  "name": "PocketFolio",
+  "short_name": "PocketFolio",
+  "description": "Your family's mutual funds in one place. Check today's change in one tap.",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0A0C14",
+  "theme_color": "#0A0C14",
+  "categories": ["finance"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "screenshots": [
+    { "src": "/screens/mobile-today.png", "sizes": "1080x1920", "type": "image/png", "form_factor": "narrow", "label": "Today's change at a glance" },
+    { "src": "/screens/desktop-overview.png", "sizes": "1920x1080", "type": "image/png", "form_factor": "wide", "label": "Family overview" }
+  ],
+  "shortcuts": [
+    { "name": "Today's change", "url": "/?view=today&source=shortcut", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Add statement", "url": "/?action=add-statement&source=shortcut", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] }
+  ]
+}

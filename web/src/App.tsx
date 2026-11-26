@@ -1,5 +1,5 @@
 import { BuildingIcon, FileTextIcon, InfoIcon, Loader2Icon, SmartphoneIcon } from "lucide-react"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { AppHeader } from "@/components/app-header"
 import { LegalFooter } from "@/components/legal-footer"
@@ -11,6 +11,8 @@ import { BottomNav, type TabId, TabNav, useTab } from "@/components/tab-nav"
 import { TransactionsView } from "@/components/transactions-view"
 import { AllocationBreakdown, BenchmarkComparison, FundPerformance, FundReturns, MoneyFlow, UpsAndDowns } from "@/components/insights"
 import { PageTitle, Panel } from "@/components/panel"
+import { OfflinePanel } from "@/components/pwa"
+import { useAutoInstallPrompt, useReloadWhenOnline } from "@/lib/pwa"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -24,7 +26,9 @@ import {
 } from "@/components/overview"
 import { Segmented } from "@/components/ui/segmented"
 import { OpenFundContext } from "@/lib/fund-context"
-import { api, type Daily, type Holding, type MarketStatus, type Me, type Member, type Portfolio, SignedOut, waitForPortfolio } from "@/lib/api"
+import {
+  api, type Daily, type Holding, isOffline, type MarketStatus, type Me, type Member, type Portfolio, SignedOut, waitForPortfolio,
+} from "@/lib/api"
 import { DailyReturns, TodayTile } from "@/components/daily-returns"
 import { byFund } from "@/lib/daily"
 import { day, inr, monthly } from "@/lib/format"
@@ -173,11 +177,34 @@ export default function App({ me }: { me: Me }) {
   const [category, setCategory] = useState<string | null>(null)
   const [tab, setTab] = useTab()
   const [fund, setFund] = useState<Holding | null>(null)
+  const [offline, setOffline] = useState(false)
 
   const load = useCallback(() => {
-    api.portfolio().then(setData, (e: Error) => !(e instanceof SignedOut) && setError(e.message))
+    api.portfolio().then(
+      (d) => {
+        setOffline(false)
+        setError(null)
+        setData(d)
+      },
+      (e: Error) => {
+        if (e instanceof SignedOut) return
+        // Nothing from the API is kept offline (plan §13A.1), so without a network there's nothing to show.
+        if (isOffline(e)) setOffline(true)
+        else setError(e.message)
+      },
+    )
   }, [])
   useEffect(load, [load])
+  useReloadWhenOnline(load, offline)
+
+  // Home-screen shortcuts (manifest "shortcuts"): ?view=today and ?action=add-statement, read once.
+  const [shortcut] = useState(() => {
+    const q = new URLSearchParams(window.location.search)
+    const s = q.get("view") === "today" ? "today" : q.get("action") === "add-statement" ? "add" : null
+    if (q.has("source") || q.has("view") || q.has("action")) history.replaceState(null, "", window.location.pathname + window.location.hash)
+    return s
+  })
+  const [adding, setAdding] = useState(shortcut === "add")
 
   // Daily returns (plan §10.5.3): asked for after the snapshot, per member key; the overview never waits on it.
   // undefined = loading, null = unavailable.
@@ -289,10 +316,19 @@ export default function App({ me }: { me: Me }) {
   const activeSips = view?.sips.filter((x) => x.status === "active") ?? []
   const upcoming = upcomingSips(view?.sips ?? [])
   const oneDay = useMemo(() => byFund(daily), [daily])
-  const openDaily = () => {
+  const openDaily = useCallback(() => {
     setTab("insights")
     requestAnimationFrame(() => document.getElementById("daily-returns")?.scrollIntoView({ behavior: "smooth", block: "start" }))
-  }
+  }, [setTab])
+
+  const shortcutDone = useRef(false)
+  useEffect(() => {
+    if (shortcutDone.current || shortcut !== "today" || !data) return
+    shortcutDone.current = true
+    if (data.members.length > 0) openDaily()
+  }, [shortcut, data, openDaily])
+
+  useAutoInstallPrompt({ ready: !!ready, busy: updating || adding })
 
   const viewAll = (to: TabId, label: string) => (
     <button className="-my-2 py-2 text-primary underline-offset-4 hover:underline" onClick={() => setTab(to)}>
@@ -311,12 +347,13 @@ export default function App({ me }: { me: Me }) {
       />
 
       <main className="mx-auto max-w-[1240px] px-4 pb-4 sm:px-7 md:pb-12">
+        {offline && !data && <OfflinePanel />}
         {error && (
           <p className="mt-10 rounded-xl bg-surface p-4 text-sm text-loss ring-1 ring-border" role="alert">
             Couldn't load the portfolio: {error}. Reload to try again.
           </p>
         )}
-        {!data && !error && <div className="pt-8"><LoadingState /></div>}
+        {!data && !error && !offline && <div className="pt-8"><LoadingState /></div>}
         {data && data.members.length === 0 && (data.building ? <BuildingState /> : <Onboarding onAdded={load} />)}
 
         {ready && (
@@ -516,6 +553,8 @@ export default function App({ me }: { me: Me }) {
         )}
       </main>
       <LegalFooter className={ready ? "pb-28 md:pb-8" : undefined} />
+      {/* the "Add statement" shortcut; the header and onboarding have their own buttons */}
+      <AddStatementDialog onAdded={load} trigger={null} open={adding} onOpenChange={setAdding} />
       {ready && <BottomNav tab={tab} onChange={setTab} />}
       <FundDialog
         holding={fund}

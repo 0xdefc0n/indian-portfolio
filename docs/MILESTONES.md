@@ -11,7 +11,9 @@ Code session each. If the two disagree, this file wins for order and scope, and 
 ## Status
 
 Claude updates this table at the end of every milestone. **The rows are in build order; the numbers are IDs, not
-order** (owner, 2026-11-26: M13 moved after M15, and M16 and M17 moved to the end, after M21).
+order** (owner, 2026-11-26: M13 moved after M15, and M16 and M17 moved to the end, after M21. Owner, 2026-11-27:
+M22–M33 added from the owner's todo; Claude chose their order by ease and dependencies, see "Order notes". Owner,
+2026-11-27: M23–M27 and M30 moved after M21, before M16, so the research and the redesign cover every feature).
 
 | # | Milestone | Plan phase | Status | Date | Commit | Notes |
 |---|---|---|---|---|---|---|
@@ -29,14 +31,26 @@ order** (owner, 2026-11-26: M13 moved after M15, and M16 and M17 moved to the en
 | M11 | Stocks inside funds (BharatStock fallback job) | 3 | done (on staging 2026-11-26, PR #8) | 2026-11-26 | `1e2509a`…PR #8 | Owner confirmed cloud use (50 calls/day); the key was copied from the root `.env` into `worker/.dev.vars` without being printed. 21 new Worker tests (242 total, 241 pass + the opt-in live one) and 5 new engine tests (46 pass) pass. `test/stocks.test.ts` runs a synthetic BharatStock in the real response shape. **Equity funds in a test household get holdings:** build → the engine names its equity funds → `stock_match` → `stocks` job → `fund_portfolio` + R2 `market/holdings/{isin}/{month}.json` → the follow-up build has them, and no more follow-ups. **The budget stops at the limit** (limit 3 → exactly 3 calls; 3 parallel passes at limit 5 → 5), continues the next UTC day, and a 429 spends the rest of the day. Also covered: direct and regular plans share one fetch, paging at 100, refetch only on a newer coverage month (an empty newest month falls back to the one before), fund-of-funds look-through, unmatched retried after 30 days, 4xx skips the fund for a day, 5xx retries the message, single flight with one more pass on a request mid-run, lost-message resend, no key = off, and the stocks version in the inputs hash. **Live check** (`BHARATSTOCK_LIVE=1`; synthetic household, one real public fund, real EngineBatch container, real API): 5 paid calls, 2 job rounds, 145 holdings (100% of the fund), look-through 1, month 2026-10, nothing pending. M10 parity still 0 differing paths. ✅ VERIFY: the BharatStock API fields match the old app; `page_size` max 100 (422 above); coverage is free and keyless. **Changes:** the Worker doesn't classify funds: `/build` returns `X-Engine-Stocks-Want` ([isin, display name], equity plus one level of fund-of-funds), and matching uses that name, as the old app did. The budget counts UTC days (the provider's) via the new `QuotaSpec.utc`. The cron is daily `0 4 * * *` (09:30 IST) instead of `0 5 10-20 * *`, until M18 brings the monthly scrape back. New tables: `stock_match`, `stock_coverage`, `job_lock`, `stock_state`. SNAPSHOT_VERSION 2 (every snapshot rebuilds once after deploy). `BHARATSTOCK_API_KEY` is an optional secret (not in `secrets.required`). The parity expectation now has stocks enabled (tests have a test key). **Staging** (on the owner's instruction: Claude put the secret on staging from `.dev.vars` over stdin, then merged PR #8; CI deploy green): `market/0003` applied (job_lock row, `stock_state` 0), the `0 4 * * *` cron registered, `/api/health` ok. One `stocks` message sent through the Queues API ran on the deployed consumer: it claimed and released the lock and stored BharatStock's free coverage list (82 fund houses), with no wanted funds yet, so 0 paid calls. The first real upload on staging will exercise the paid path. Later: the Worker reads ~1 R2 blob per held equity fund per build, so an engine-side cache through `market.internal` if the nightly prebuild makes that costly (M16); delete `stock_match` rows unwanted for 90 days and their blobs and `fund_portfolio` rows in cleanup (M14); alert when the budget runs out on consecutive days (M16); M18 restores the monthly scrape cron and fetches from BharatStock only when no `amc` row exists after day 15; root `.env.example` still lists the old app's keys (owner's call) |
 | M12 | Daily returns | 3b | done (staging verified 2026-11-26, PRs #9 and #10) | 2026-11-26 | `529f5d5`, `db7f4fb`, PR #9 `02c10f9`, PR #10 `7955137` | Done-when items pass. **Golden tests:** `test/daily.test.ts` (19) works `dailySeries()` out by hand. Day change for a two-fund household: Tue +₹15 / +1.2%, Wed −₹2.50 / −0.1976%. A purchase or a redemption mid-window is not a gain or loss, and estimated SIP units count from the day after allotment. Weekends and holidays give no point, and a liquid fund's holiday NAV rolls into the next market day. Partial coverage shows "1 of 2". An IDCW payout is added back; an unexplained `nav_anomaly` move is left out and flagged. Also covered: the CDSL-only `units_exact=false` note, ETFs/shares excluded, the member filter. Endpoint: the hand calculation through the real pf-rebuild consumer, cache hit, a new NAV day uses a new key, the rebuild deletes the old inputs' entries, partial coverage fresh for 30 min only, member 404 across households, bad `days` → 400, sealed blob. **Measured** (vitest/workerd): cached p95 3 ms (50-fund household, ~19k NAV rows; uncached 57 ms). A cached call does no MARKET read. Totals after the follow-up: Worker 268 pass + 1 opt-in skipped (269); engine 68 pass (+4/4 private parse with the test password). The M10 parity on the private statements still has 0 differing paths (3 members, 14 holdings). Private engine build, counts only: 22 holdings, 22 coded, 14 exact timelines, 6 active SIPs, all with a next run date on or after today. **Owner additions (2026-11-26, in scope by request):** (1) returns from the last statement: holdings are valued at the latest NAV, and active SIPs are estimated after the statement date (mandate day, units at the run day's NAV after stamp duty) into units, invested, XIRR flows, activity and the month-end chart. A newer statement replaces them. The UI never asks for a new upload. (2) Broker-style run days and statuses. ✅ AMFI Annexure A2 (NACH: debit T, allot T) and KFintech's SIP TAT (NACH T+1/T+2): a due date on a weekend or holiday runs the next business day. An instalment is "In progress" from T until T+2 business days, then "Done". Shown as "Moved from 24 Nov (market holiday)" and "In progress · debited 25 Nov · units by 27 Nov" on the overview, SIP page, fund dialog and transactions. Engine `projection.py` and `holidays.py`. Snapshot fields: `statement`, `estimated`, `amfi_code`, `units_timeline`, `units_exact`, `payouts` per holding; `statement_total`, `value_date`, `estimated` per member; `sip_day`, `next_due`, `next_moved`, `latest` per SIP. SNAPSHOT_VERSION 3. ✗ Correction: a version bump alone did **not** rebuild existing snapshots. A snapshot rebuilt only on a new market day or a statement change, so the owner kept seeing the pre-M12 dashboard (no estimated 24 Nov SIP; next SIP "25 Dec" from the old last + 30 days). Fixed in PR #12: `snapshot.version` (`app/0007`) makes an older-version snapshot stale, so the first read after a deploy rebuilds it, and the consumer never calls it current. Web: the Today tile (4 bento tiles now), a sortable 1D column (under the value on mobile), the Daily returns panel (1M/3M/1Y, bars, calendar heatmap, best/worst/% up, honesty note), and the value date in the hero. Checked headless at 360 px and 1280 px, dark and light, on two synthetic households: 8 runs, 0 page errors. **Changes from the plan:** market days come from the household's funds (>½ of the funds alive have a NAV), since `market_day` only keeps recent dates; one `json_each` NAV query instead of ≤ 90-code chunks; the cache write is awaited, not `waitUntil`; `by_fund` covers only funds updated on the latest day; a cached hit skips the member check (its key can only exist after one). **Follow-up, same day (owner decisions):** (a) no time cap on estimates; instead, as at brokers, **skip the next instalment** (one per SIP, undoable) or **cancel a SIP** for good after a confirmation. Both are recorded for PocketFolio only, and the dialog says it doesn't cancel with the broker. Stored sealed in `sip_override` (`app/0006`), sent to `/build` as `overrides`, part of the inputs hash; a newer statement showing instalments after a cancel wins. (b) **Holiday job:** ✅ Upstox's public market-holidays API lists the 2026 NSE closures (16), matching the NAV store, except 31 Mar (year end: NAVs published, exchange closed). `refreshHolidays` rides the daily `0 4 * * *` cron and fetches weekly into `market_holiday` (`market/0004`); builds send the dates, and the engine falls back to its own 2026 list. Tests: `test/sips.test.ts` (8): the real 2026 answer parsed, weekly fetch, failure keeps dates and retries, a dropped holiday goes, skip/undo/one-per-SIP, cancel needs confirm, is final and blocks skips, 404 across households, bad dates/ISINs 400, sealed storage, build gets overrides and holidays, a change rebuilds, member delete cascades. Engine +7 (skip, past skip, cancel, statement beats cancel, Worker holidays, bad overrides, `/build` overrides). UI checked headless at 360 px and 1280 px: menu (44 px target), skip, cancel dialog, skipped and cancelled states, 0 page errors. Fixed in the check: a malformed `/daily` answer could crash the dashboard (now treated as unavailable). **Staging (PRs #9 and #10 merged by Claude on the owner's instruction; CI deploy green, `app/0006` and `market/0004` applied):** `node scripts/upload-smoke.ts https://staging.pocketfolio.in` with a private statement that has active SIPs passes 43/43. Results: 8 funds revalued to the latest NAV; 6 active SIPs with next runs from today, 3 of them moved for a weekend or holiday; 3 estimated instalments, all in progress (the 24 Nov holiday instalment); `/daily` miss then hit, 21 points, coverage 8/8; skip → rebuild → undo → rebuild → cancel (400 without confirm) → rebuild → cancelled; cleanup removes the statement, snapshot, daily cache and member. The holiday job ran against staging (deployed code, scratch Worker): Upstox answered, 16 rows stored, 25 Dec 2026 the one ahead. **Found on staging and fixed (PR #10):** a cached `/daily` call paid ~250 ms for the R2 read, so the sealed blob is now also in the edge cache. The endpoint's own work is now 4 ms p50, and `Server-Timing` reports the phases. The remaining ~220 ms is the D1 snapshot-row read every signed-in endpoint makes; this machine reaches Cloudflare through Marseille (MRS) while the staging D1 is in APAC. Also: a network timeout ended one smoke run before its cleanup, which stranded a statement on staging. It was deleted through the API, along with members left by earlier runs, and the script now retries network errors and cleans up if it crashes. **Owner check after PR #12:** three SIPs showed the next run on 21 Dec (moved from the 20th) instead of 24 Dec. Their mandate moved from the 20th to the 24th in June, and the "most common day over 12 instalments" rule still picked the 20th, so their 24 Nov instalments weren't estimated. Fixed in PR #13: the mandate day is the one the latest run of instalments agrees on (each instalment allows its own date or a weekend/holiday before it). SNAPSHOT_VERSION 4. Checked on the owner's statement (counts only): 6/6 SIPs on the 24th, next run 24 Dec, 6 November instalments estimated. Later: measure signed-in latency from India and consider app-DB read replicas or Smart Placement for the per-request D1 read (M16); `GET /api/portfolio` reads the snapshot from R2 on every call, so edge-cache it too (M16); delete `sip_override` skips older than the newest statement in cleanup (M14); alert when the holiday fetch fails for a week (M16); re-measure `/daily` on Cloudflare in the M16 load test; the tax figures (`tax`, harvest) stay as of the statement; "Invested via these SIPs" on the SIP page counts statement instalments only; a dashboard left open past `units_by` only flips "In progress" → "Done" on the next load |
 | M14 | Privacy and compliance | 5 | done (lawyer review deferred ~6 months, owner 2026-11-26) | 2026-11-26 | `2d00821`, `9638cfc` + docs | Done-when items pass. **A deleted account leaves no rows, no R2 objects and no DEK:** `test/privacy.test.ts` deletes a household with members, statements, a parked PDF (`tmp/`), a snapshot blob, a SIP change, a pending password, an export quota row, an unused sign-in code and link, the per-address rate-limit row and a second signed-in device, then scans **every table and column** of the app D1 for the user id, household id and email: only `audit_event` remains (ids, event, country, UA hash; kept 400 days for DPDP Rule 6/8(3), plus an `account_deleted` row). `h/` and `tmp/` are empty, the household row (DEK) is gone, the other household is untouched, cookies are cleared, the second device gets 401, the confirmation email is sent. The inactivity erasure passes the same scan. **Export contains all the user's data and nothing else:** members with decrypted names and PANs, every statement's parsed JSON, SIP changes, sessions (IP, UA), consents, sign-in methods, the security log; no other household's values, no `dek_wrapped`/`pan_hmac`/`blob_key`/`content_hash`/`sip_key`/token, 3 a day (429 `export_limit`). 12 new tests; Worker 283 total (282 pass + the opt-in live one skipped); engine 70 pass (6 private skipped, no engine change). Typecheck and lint clean. **Consent gating:** `requireSession()` gates by default (403 `consent_required`); `/me`, `/consent`, export and delete opt out. A consented request makes **0** consent queries (cookie cache, tested); consent from another device counts at once (one D1 check). The test sign-in helper accepts the notice. Web: consent screen (18+ box), `/privacy`, `/terms` ("Not investment advice"), `/security`, Settings → Download my data / Delete account (typed `DELETE`; past 10 min the dialog signs out and back in, then reopens), legal footer on every page incl. /login, "deleted" notice on /login, tax disclaimer in the fund dialog. Headless at 360 px and 1280 px, dark and light: 124 checks, 0 page errors (no overflow, 44 px targets, footer above the bottom nav). `docs/INCIDENT_RESPONSE.md` written; README Privacy rewritten. ✅ VERIFY (plan §12): the fixed 3-year inactivity period of Rule 8 + Third Schedule binds only large e-commerce, social media and gaming platforms; others erase when the purpose is no longer served, so any period ≥ the law's is a policy choice. **Owner, mid-milestone: inactivity is 3 years** (not 12 months); notice email, erasure ≥ 48 h later unless the user signs in or uses the app (the daily session refresh stamps `last_active_at`, tested). Source: DSCI FAQ and the MeitY/PIB summary; the gazette text wasn't readable, so the lawyer confirms. **Cleanup cron** (`0 21 * * *`) also does the earlier Later items: `rate_limit` (M5), `quota` (M6), finished `parse_job` after 7 days (M8), `nav_run` after 90 days (M9), `stock_match` unwanted 90 days with their holdings (M11), SIP skips older than the newest statement (M12), plus expired sessions/verifications, `tracked_scheme` unseen 90 days, `audit_event` > 400 days. Migration `app/0008_privacy.sql` (`household.inactivity_notice_at`, two indexes) reaches staging with the next merge. `scripts/auth-smoke.ts` and `upload-smoke.ts` now accept the notice (auth-smoke also checks the 403 before it). **Placeholders (owner):** legal entity name, grievance officer name and email, jurisdiction in `web/src/lib/legal.ts` (`placeholders: false` removes the draft banner), and the contacts in `docs/INCIDENT_RESPONSE.md`. Later: lawyer review of the pages, the notice and the incident plan (M17), incl. CERT-In's 180-day log retention; staging after the merge: `auth-smoke.ts` and `upload-smoke.ts`, and one export + delete by hand; a deleted account's other devices keep a valid cookie cache ≤ 5 min (data routes find nothing; `/me` answers 401); re-sign-in through the emailed link lands on `/`, not back in Settings (Google and the code keep `next`); `PAN_PEPPER` rotation needs a re-hash migration (INCIDENT_RESPONSE §4); `/api/me` `limits`/`usage` and Settings fair-use usage still unbuilt; the tax-harvest and health-check panels need the inline disclaimer when they're built |
-| M15 | Installable app (PWA) | 5b | todo | | | |
-| M13 | QR device login | 4 | todo | | | |
+| M15 | Installable app (PWA) | 5b | done (device checks wait for the owner after the next staging deploy) | 2026-11-27 | `fce43c9` + docs | Local Done-when items pass. **Installable:** CDP `Page.getInstallabilityErrors` empty in a normal profile, and Chrome for Testing fired a real `beforeinstallprompt` on the built app. Manifest parses with 0 errors. `wrangler dev` serves the manifest as `application/manifest+json` and `sw.js` with `no-cache` (`web/public/_headers`). **No API data cached:** after visiting every tab, Settings and Members, Cache Storage holds the 33-entry app shell, no `/api/` entry and no IndexedDB. **Prompt rules:** `web/src/lib/install.test.ts` has 26 unit tests. A headless run of the built app with its SW and a mock API passes 33/33 checks: not before sign-in, not on first arrival, not when launched from the app, not within 14 days of a dismissal, not after 3; shows on a later day; Install calls the browser prompt; appinstalled → toast; the iPhone sheet in both themes, the Android sheet and the desktop card; webview → no auto prompt; Settings → Install; offline → shell + offline panel, then reload when back; theme-color follows the toggle; launch and install counters reach `/api/metrics`. Worker 286 pass + 1 skipped (4 new metrics tests). Web build, lint (no new warnings) and typecheck pass. ✅ VERIFY: Chrome criteria, iOS 26 Share wording (⋯ → Share), iOS cookie split; see plan §13A. Changes: real theme colours `#0A0C14` / `#F2F3F7` (plan had others); status-bar style `default`; CSP lines wait for M16 (there is no CSP yet); pages code-split (login now loads 346 KB, not 918 KB; the dashboard chunk is 505 KB, mostly recharts). **Owner, after the next deploy to staging:** install on Android Chrome (+ both shortcuts), desktop Chrome and Edge, iPhone Safari (email-code sign-in inside the app; check safe areas and status bar in both themes) and macOS Safari; check DevTools → Application → Cache Storage. Later: split recharts out of the dashboard chunk (M16) |
+| M22 | Reject disposable email addresses | 1b | done (ships to staging with the next merge) | 2026-11-27 | `c9e607e` | 9 new tests (295 pass + 1 opt-in skipped). `test/disposable.test.ts` covers a listed domain, a listed subdomain, mixed case (all `400 disposable_email`, Turnstile not called, nothing queued, log has the code only), no rate-limit rows used on refusal, an existing user on a listed domain (still emailed), an unlisted domain, and the test sink. The list is `disposable-email-domains-js` 2.4.0 (CC0, 10,455 domains). `/login` copy checked headless at 360 px and 1280 px against local `wrangler dev`: the message shows, no overflow, 0 page errors. One run of the full suite had a timing flake in `tenant.test.ts` ("newest first"); it passed alone and on the next full run |
+| M13 | QR device login | 4 | done (phone-to-desktop check on staging waits for the next merge) | 2026-11-27 | `51be1d5` | 22 new worker tests (317 pass, 1 skipped) and 9 new web tests (35 pass). The QR auth tests in §16 pass: approve, deny, expired, reuse, approve while signed out, another account's claim; the new session has the approver's user and household, no user row, no email, and the notice shows once per other device. The plan's VERIFY items are resolved: no extra-field hook, so the side table is used, and the token endpoint sets no cookie, so a plugin after-hook sets the normal cookie and the token never reaches JS. `/api/devices` replaces Better Auth's `list-sessions` and `revoke-*`, which are no longer routed. Headless UI checked at 360/1280 px in dark and light. Later: `tenant.test.ts` 'lists … newest first' is an existing flaky test (two members created in the same ms sort by random id). The privacy notice's 'network address' wording covers the approximate city; owner to decide if it should say 'city' explicitly (needs a notice version bump). |
 | M18 | AMC disclosure scraper | 7 | todo | | | |
 | M19 | Manual assets: FD, PPF, EPF | 8 | todo | | | |
+| M29 | Gold and silver (physical, SGB) | 8 | todo | | | |
 | M20 | Stock and ETF prices | 8 | todo | | | |
+| M28 | Benchmark score for funds and stocks | 8 | todo | | | |
 | M21 | Stock gains: buy prices and corporate actions | 8 | todo | | | |
+| M23 | Competitor and market research | 9 | todo | | | |
+| M24 | Premium design refresh, logo and dashboard redesign | 9 | todo | | | |
+| M25 | Landing page and SEO foundation | 9 | todo | | | |
+| M26 | Blog | 9 | todo | | | |
+| M27 | FIRE calculator | 9 | todo | | | |
+| M30 | Social marketing playbook (Reddit, LinkedIn, X) | 9 | todo | | | |
 | M16 | Hardening and load tests | 6 | todo | | | |
+| M31 | Cost per user and pricing study | 6 | todo | | | |
 | M17 | Production launch | 6 | todo | | | |
+| M32 | AI portfolio analysis | 10 | todo | | | |
+| M33 | Admin panel | 10 | todo | | | |
 
 Status values: `todo` · `in progress` · `blocked (needs owner: …)` · `done`.
 
@@ -347,6 +361,63 @@ data and nothing else.
 **Build:** everything in §13A.1–§13A.6.
 **Done when:** everything in §13A.7 is true.
 
+## M22: Reject disposable email addresses
+**Goal:** new accounts can't be made with throwaway inboxes (mailinator etc.).
+**Read:** plan §21.7, §7.1, §7.3.
+**Needs from owner:** none.
+**Build:**
+- Bundle the open-source `disposable-email-domains` list at build time (✅ M22: npm `disposable-email-domains-js`, CC0,
+  ~200 KB, released several times a month; see plan §21.7). Subdomains of a listed domain count as listed. It's refreshed when dependencies are updated.
+- `POST /api/login/email` checks the domain before Turnstile's token is spent and before any email is queued:
+  `400 disposable_email`, with friendly copy on `/login`. **Only new accounts are blocked:** an address that already
+  has a user still signs in. Google sign-in isn't checked.
+- Log only the outcome code, never the address or the domain.
+
+**Done when:** tests cover a listed domain, a listed subdomain, mixed case, an existing user on a listed domain (still
+signs in), an unlisted domain, and no email queued on refusal. `/login` is checked headless at 360 px and desktop.
+
+## M23: Competitor and market research
+**Goal:** know who else serves Indian families, what they offer, and what PocketFolio does better, before the redesign
+and the public pages.
+**Read:** plan §21.1–§21.3, §21.10, `README.md`, the live staging app.
+**Needs from owner:** none. No code, no user data. Only public pages are read.
+**Build:** `docs/research/COMPETITORS.md`, with sources and the date read:
+- Competitors: at least INDmoney, Kuvera, ET Money, Groww, Zerodha Console/Coin, Value Research, MProfit, Wealthy,
+  Tickertape, Portfolio360, Velthian, and any family-portfolio tracker the search finds. For each: features (family
+  view, CAS import, stocks, gold, FD/PPF/EPF, FIRE, tax, AI), pricing, data/privacy stance, sign-in, landing page
+  structure and design, and what users complain about (Reddit, app-store reviews).
+- **Where PocketFolio adds value:** a feature matrix and a one-line positioning.
+- **Landing page:** recommended sections, headline options, proof points, FAQ, calls to action.
+- **Dashboard:** what the best dashboards show first, as input to M24.
+- **FIRE calculators:** compare velthian.com/fire.php, portfolio360.co.in/fire and the best others, and recommend the
+  inputs and outputs for M27.
+- **Keywords:** search terms and questions families ask (for M25/M26), plus the subreddits and communities for M30.
+
+**Done when:** the document exists, every claim has a source, and the owner has read the recommendations.
+
+## M24: Premium design refresh, logo and dashboard redesign
+**Goal:** PocketFolio looks premium, not "vibe coded": a gold-accented design system, a new logo, and a redesigned
+dashboard, applied to every existing screen.
+**Read:** plan §13, §21.1, `docs/research/COMPETITORS.md` (M23).
+**Needs from owner:** OK on the design direction (a written spec with 2–3 rendered options of the dashboard and the logo,
+in the first session), then OK on the final look.
+**Build:**
+- **Logo:** a two-part wordmark in SVG: "Pocket" in plain text, "folio" on a gold, glass-like rounded block. Light and
+  dark versions, a square mark, the favicon, the PWA icons and maskable icons (replacing the M15 ones), and the Google
+  consent-screen logo.
+- **Design system v2:** gold accent palette with contrast checked (WCAG AA) in dark and light, type scale, surfaces
+  (glass/elevation), components and motion, written into plan §13 as the new reference. Update the `CLAUDE.md` hard
+  rule to point at it.
+- **Dashboard redesign** from M23's findings, in the new system, with the same data and no feature changes. It covers
+  every asset type built by then (mutual funds, stocks, ETFs, FD/PPF/EPF, gold and silver), not only mutual funds.
+- Restyle every existing screen: login, consent, members, settings, legal pages, dialogs, toasts, install sheets,
+  and the screens added by M13 (link device), M19 (FD/PPF/EPF), M29 (gold/silver), M20 (stocks and ETFs), M28
+  (benchmark score) and M21 (stock gains, corporate actions).
+- Regenerate the M15 store screenshots from demo data.
+
+**Done when:** every screen is checked headless at 360 px and 1280 px, dark and light, with 0 page errors, no overflow
+and 44 px touch targets. Contrast passes AA. `web` build and lint pass. The owner OKs the result on staging.
+
 ## M13: QR device login
 **Read:** plan §7.4, D2, §13 items 1, 2 and 7.
 **Needs from owner:** none.
@@ -363,6 +434,76 @@ data and nothing else.
 bridge if needed, the Devices list, and the in-app "New device linked" notice.
 **Done when:** the QR auth tests in plan §16 pass (including: the new session belongs to the approver's user and
 household, no user row is created, and no email is queued), and phone-to-desktop linking works on staging.
+
+## M25: Landing page and SEO foundation
+**Goal:** a public landing page that converts, and pages that Google and AI search engines can read.
+**Read:** plan §21.2, §13 (v2 from M24), `docs/research/COMPETITORS.md`.
+**Needs from owner:** OK on the landing copy (drafted from M23). OK to install the SEO skill after Claude's review (below).
+A Google Search Console property for `pocketfolio.in` (owner verifies it by DNS), done any time before M17.
+**Build:**
+- **SEO tooling:** read the third-party code of github.com/AgricIDaniel/claude-seo (and what claudeseoskill.com
+  describes) in full. Check that it sends nothing anywhere and runs nothing unexpected. Write the review into
+  `docs/research/SEO.md`. Install it as a project skill only with the owner's OK. Then use it for an audit.
+- **Public pages are prerendered** at build time (real HTML, not only the SPA shell): `/` for signed-out visitors,
+  `/privacy`, `/terms`, `/security`, and the routes M26/M27 add. A signed-in visitor on `/` goes straight to the
+  dashboard (decide in the plan section how: cookie check in the Worker or a client redirect).
+- The landing page in design system v2: the sections recommended in M23, product visuals from demo data only, and calls
+  to action to `/login`.
+- Per page: title, description, canonical, Open Graph and Twitter cards (generated images), structured data
+  (`Organization`, `WebSite`, `SoftwareApplication`, `FAQPage`), `sitemap.xml`, `robots.txt`, `llms.txt`.
+  `noindex` on app routes.
+- Core Web Vitals budget for the landing page (LCP, CLS, JS size), measured headless.
+
+**Done when:** the prerendered HTML contains the content and metadata (tested), structured data validates, Lighthouse
+SEO and accessibility scores are recorded in the plan, and the landing page is checked at 360 px and desktop, dark and
+light.
+
+## M26: Blog
+**Goal:** helpful articles that bring families to PocketFolio from Google and AI search.
+**Read:** plan §21.2, `docs/research/COMPETITORS.md` (keywords), `docs/research/SEO.md`.
+**Needs from owner:** a review of each draft. **A post goes live only after the owner's OK.**
+**Build:**
+- `/blog` and `/blog/<slug>`, prerendered from Markdown in the repo, with a `draft` flag that keeps a post out of the
+  build, the sitemap and the feed. RSS feed, `Article` structured data, author and dates, related posts, a call to
+  action.
+- 6–8 researched drafts, for example: how to track a family's mutual funds in one place; what a CAS statement is and
+  how to download it (CAMS, KFintech, CDSL); one dashboard for every family member's PAN; LTCG harvesting; how SIP
+  dates move on holidays; FIRE in India. Final topics come from M23's keyword list. Each cites its sources and carries
+  "not investment advice". Screenshots use demo data only.
+
+**Done when:** a draft never reaches the built output (tested); published posts validate as `Article`; the owner has
+OK'd each post that goes live.
+
+## M27: FIRE calculator
+**Goal:** a FIRE (financial independence, retire early) calculator anyone can use without signing in, with a detailed
+plan from the user's real portfolio after sign-in.
+**Read:** plan §21.3, `docs/research/COMPETITORS.md` (FIRE section).
+**Needs from owner:** OK on the plan section (inputs, formulas, outputs) written in the first session.
+**Build:**
+- **Public `/fire`** (prerendered, SEO page): age, retirement age, monthly expenses, current savings, monthly SIP,
+  expected returns, inflation, withdrawal rate. Out: FIRE number, years to FI, the SIP needed, a corpus chart, and Lean,
+  Regular and Fat variants. Computed in the browser; nothing is sent or stored.
+- **Signed-in analysis:** the current corpus, SIPs and allocation are read from the snapshot (plus manual assets when
+  M19/M29 exist). Shows the gap to the FIRE number, the required SIP, the projected FI date at today's pace, and
+  scenarios (returns, inflation, step-up SIP). Saved goal inputs are sealed with the household DEK.
+- A pure, unit-tested calculator module shared by both pages. "Approximate, not investment advice".
+
+**Done when:** golden tests for the formulas (inflation, step-up, withdrawal rate) pass; `/fire` sends no request with
+the inputs (tested headless); the signed-in view matches a hand calculation for a test household; the screens are
+checked at 360 px and desktop, dark and light.
+
+## M30: Social marketing playbook (Reddit, LinkedIn, X)
+**Goal:** a plan for reaching families on Reddit, LinkedIn and X, with the first posts ready.
+**Read:** plan §21.11, `docs/research/COMPETITORS.md` (communities), the published blog posts.
+**Needs from owner:** the owner creates the accounts and posts. **Claude never posts, comments or creates accounts.**
+**Build:** `docs/marketing/SOCIAL_PLAYBOOK.md`:
+- **Reddit:** which subreddits, each one's self-promotion rules (read and cited), a comment-first approach, cadence,
+  and what gets accounts banned.
+- **LinkedIn and X:** profile setup, content pillars and a posting cadence.
+- **Drafts:** the first 10 Reddit posts and comments, 5 LinkedIn articles, and 10 X posts.
+- Images come from demo data only. Never use a real portfolio.
+
+**Done when:** the playbook and drafts exist, and every subreddit rule cited has its link and the date it was read.
 
 ## M18: AMC disclosure scraper
 **Read:** plan §10.3.1 (all), D10.
@@ -399,6 +540,24 @@ their funds.
 rate change mid-year); isolation tests (another household gets 404); no plaintext amounts in D1; the screens are checked
 at 360 px and desktop, dark and light.
 
+## M29: Gold and silver (physical, SGB)
+**Goal:** families add physical gold and silver and Sovereign Gold Bonds, valued daily next to their funds.
+**Read:** plan §21.5, the M19 plan section, §10.4 (the ingest pattern).
+**Needs from owner:** OK on the plan section (rate source, inputs) written in the first session.
+**Build:**
+- New `manual_asset` types (M19's table, sealed inputs, the same member model):
+  - **Physical gold/silver:** grams, purity (24K/22K/18K for gold; 999 for silver), optional buy price and date.
+  - **SGB:** series, units (grams), issue price, issue date. Interest 2.5% a year, paid every six months, shown as
+    income. Maturity 8 years.
+- A daily public gold and silver rate per gram in `pocketfolio-market` (⚠️ VERIFY the source and its terms, e.g.
+  IBJA). Fallback: the per-gram price implied by gold/silver ETF NAVs already in the NAV store.
+- Value = grams × rate × purity. SGB is valued at the gold rate (the redemption basis). Allocation gets a "Gold &
+  silver" class. Export and deletion include them.
+
+**Done when:** golden tests (purity, an SGB interest schedule, a missing rate day falling back), the rate ingest parses
+saved public fixtures, re-runs insert 0 rows, isolation tests pass, and the screens are checked at 360 px and desktop,
+dark and light.
+
 ## M20: Stock and ETF prices
 **Goal:** stocks and ETFs already in CDSL statements are valued at the latest exchange price and are included in daily
 returns.
@@ -415,6 +574,26 @@ returns.
 **Done when:** the ingest parses saved public files (committed fixtures), idempotent re-runs insert 0 rows, a CDSL
 statement's stocks are revalued in a snapshot test, and daily returns include them.
 
+## M28: Benchmark score for funds and stocks
+**Goal:** every fund and stock shows a 0–100 score for how it did against the right index.
+**Read:** plan §21.4, §10.4, the engine's `market.py`.
+**Needs from owner:** OK on the scoring method in the plan section written in the first session.
+**Build:**
+- **A category → index map** (large cap → Nifty 100, mid cap → Nifty Midcap 150, small cap → Nifty Smallcap 250,
+  flexi/multi cap → Nifty 500, ELSS → Nifty 500, sectoral → its sector index, debt categories → a CRISIL-style index or
+  left unscored). The fund category comes from the AMFI section headers (⚠️ VERIFY that the M9 parse keeps them).
+- **Index history:** TRI series from niftyindices.com (⚠️ VERIFY access and terms). Fallback: the NAVs of a direct-plan
+  index fund for each index from the NAV store, like the existing Nifty 50 benchmark (`market.py`).
+- **Score:** rolling 1/3/5-year excess returns, the share of rolling periods beaten, and downside capture, combined
+  into 0–100, plus a plain line like "Beat Nifty Midcap 150 in 7 of 10 rolling years". A fund with less than 1 year of
+  history isn't scored. Stocks are scored against Nifty 50 and their sector index, using M20 prices (history backfill
+  ⚠️ VERIFY).
+- Scores are market data (the same for everyone), computed nightly in the market DB, not per household. Shown in the
+  holdings list and the fund dialog, with "not investment advice".
+
+**Done when:** golden tests for the score on synthetic series, the category map covers every equity category in the
+current AMFI file, and the screens are checked at 360 px and desktop, dark and light.
+
 ## M21: Stock gains: buy prices and corporate actions
 **Goal:** gains, XIRR and capital-gains tax for stocks and ETFs, as for funds.
 **Read:** plan §10.2, the engine's `analysis.py` (FIFO, LTCG), and the M20 section.
@@ -422,11 +601,15 @@ statement's stocks are revalued in a snapshot test, and daily returns include th
 **Build:**
 - CDSL statements carry holdings but usually no buy prices. Add one or both: a broker tradebook / P&L import (one
   parser per broker, in the engine, same privacy rules as statements) and a manual average buy price per holding.
-- Corporate actions (splits, bonuses, dividends) adjusting units and cost.
+- Corporate actions, **hybrid** (owner, 2026-11-27, plan §21.6): splits and bonuses after the statement date are
+  applied automatically from NSE's public corporate-action file (⚠️ VERIFY the source), adjusting units and cost.
+  Dividends are shown as income. Mergers, demergers and MF scheme mergers aren't computed: they show a banner, "X merged
+  into Y. Upload a newer statement to update it.
 - Reuse the FIFO and LTCG/STCG logic for listed equity.
 
-**Done when:** golden tests for FIFO with a split and a bonus, a parser test per supported broker on synthetic files,
-and private tradebooks checked with counts only.
+**Done when:** golden tests for FIFO with a split and a bonus, a split after the statement date applied, a merger showing
+the banner (no change to units), a parser test per supported broker on synthetic files, and private tradebooks checked
+with counts only.
 
 ## M16: Hardening and load tests
 **Read:** plan §11, §16 (Load row), §3.5, §17 Phase 6.
@@ -438,9 +621,26 @@ and private tradebooks checked with counts only.
   `max_concurrency` from the results. Write the measured drain time and cost into plan §3.5 and §18.
 
 **Order:** after M21, just before launch (owner, 2026-11-26), so the load tests and hardening cover everything that
-ships, including the AMC scraper (M18), manual assets (M19), stock prices (M20) and stock gains (M21).
+ships, including the AMC scraper (M18), manual assets (M19), stock prices (M20) and stock gains (M21), and the M22–M30
+additions: the public pages (landing, blog, `/fire`) get CSP and caching checks, and the load test includes them.
 
 **Done when:** the whole §16 table is green on staging, and the load-test numbers are recorded.
+
+## M31: Cost per user and pricing study
+**Goal:** know what one user costs per year, to set future prices, and decide the AI analysis model.
+**Read:** plan §3.6, §18, §21.8, §21.9, the M16 load-test numbers.
+**Needs from owner:** read-only access to the Cloudflare usage dashboard numbers (Claude reads them through the API with
+the existing token). OK on the recommendation.
+**Order:** after M16 (owner, 2026-11-27), so it uses measured numbers, not estimates.
+**Build:** `docs/research/COST_AND_PRICING.md`:
+- Cost per user per year at 1k, 10k and 100k users, by line item (containers, D1, R2, queues, email, BharatStock,
+  domains), from the load tests and staging usage. Update plan §18.
+- **AI analysis cost:** Workers AI vs the Claude API vs none, measured on synthetic portfolios (tokens in/out, cost per
+  analysis, quality notes), with a recommendation. Plan §21.8 records the decision.
+- Pricing options (free tier limits, paid tiers, a family plan) compared with M23's competitor prices. D7 (free at
+  launch) stays unless the owner changes it.
+
+**Done when:** the document exists with sources for every price, §18 is updated, and the owner has decided on AI.
 
 ## M17: Production launch
 **Order:** last, after M21 (owner, 2026-11-26), so everything is built before go-live.
@@ -456,8 +656,50 @@ ships, including the AMC scraper (M18), manual assets (M19), stock prices (M20) 
 - Deploy through the manual production job.
 - Smoke test: sign-in, QR device link, upload, dashboard, export, delete with a test account.
 - Usage alerts on.
+- Public pages (M25–M27): the production sitemap is submitted in Search Console, and `robots.txt` allows indexing in
+  production only (staging stays `noindex`).
 
 **Done when:** the launch checklist in plan §17 Phase 6 is ticked, and the owner confirms go-live.
+
+## Phase 10: after launch
+These ship after go-live (owner, 2026-11-27). The admin panel is last.
+
+## M32: AI portfolio analysis
+**Goal:** a plain-language review of the family's portfolio (allocation, overlap, costs, risks, goals).
+**Read:** plan §21.8, `docs/research/COST_AND_PRICING.md` (M31).
+**Needs from owner:** the model decision from M31. If the owner wants it before launch, it moves before M17 and gets
+its own hardening checks (rate limits, CSP, load).
+**Build:**
+- Data minimisation: the model gets holdings, weights, returns, categories and costs only. Never names, PANs, folios,
+  emails or statement text. Prompt and answer aren't logged.
+- If the provider is a new processor (anything outside Cloudflare), update the privacy notice and bump
+  `consentVersion` (M14), and add the processor to the export/privacy pages.
+- ⚠️ VERIFY with the lawyer: SEBI investment-adviser rules for automated suggestions. Wording stays educational, "not
+  investment advice", with no buy/sell calls.
+- A per-user quota in `quota` (§11) and a cached result per snapshot.
+
+**Done when:** a test proves that no identity field reaches the model request, the quota holds, and the result is
+cached per snapshot.
+
+## M33: Admin panel
+**Goal:** the owner runs and supports the service without ever seeing anyone's financial data.
+**Read:** plan §21.9, §11, §12.
+**Needs from owner:** the admin email(s) in the `ADMIN_EMAILS` secret. The list of extra features, decided before the
+milestone starts.
+**Order:** last, after launch (owner, 2026-11-27).
+**Build:**
+- `/admin`, only for signed-in users whose email is in `ADMIN_EMAILS` (allowlist only, owner's choice). Everyone else
+  gets 404.
+- **System health:** queues and DLQ, stuck jobs, engine errors, NAV ingest, the AMC scraper, BharatStock budget, email
+  sends.
+- **Usage counts:** signups, active users, uploads per day, parse failure rate, retention. Aggregates only.
+- **Support actions:** look up a user by email and see counts only (members, statements, last active, quota use), then
+  suspend, reset quotas or delete the account (M14's flow).
+- **Limits and feature flags:** fair-use limits and feature switches, stored in D1 and read through a cached config.
+- Every admin action writes an `audit_event`.
+
+**Done when:** a test proves that no admin endpoint returns a name, PAN, amount, holding or folio; non-admins get 404;
+every action is audited.
 
 ---
 
@@ -469,9 +711,26 @@ ships, including the AMC scraper (M18), manual assets (M19), stock prices (M20) 
   - M13 (QR device login) comes after the installable app (M15), so it's built against the installed app too.
   - M18–M21 add the AMC scraper and the beyond-mutual-fund features.
   - Then M16 proves everything holds under load, and production launch (M17) is last (owner, 2026-11-26).
-- **What can move:** M9 can start any time after M7, M13 any time after M5, and M15 any time after M10. Keep the table
-  order unless the owner asks otherwise.
+  - **M22–M33 (owner's todo, 2026-11-27; order chosen by Claude for ease and dependencies):**
+    - M22 (disposable emails) is the smallest, so it goes right after M15.
+    - M23 (research) comes before M24 (redesign), because the redesign and the landing copy use its findings.
+    - **Owner, 2026-11-27:** M23–M27 and M30 come after M21 and before M16, so the research and the redesign see every
+      feature. M13 (QR login) and M18–M21 are built in the current design, and M24 restyles their screens along with
+      the rest. M15's icons and screenshots are still redone in M24.
+    - M25 (landing + SEO) builds the prerendered public pages that M26 (blog) and M27 (`/fire`) reuse. M30 (social)
+      follows them, so the posts can link to real pages. All of these come before launch (owner).
+    - M29 (gold/silver) reuses M19's manual-asset model. M28 (score) needs M20's stock prices, so it comes after M20.
+    - M31 (cost and pricing) needs M16's measured numbers (owner), and decides M32's AI model.
+    - M32 (AI) and M33 (admin) come after launch (owner: admin last).
+  - Dropped from the todo: a captcha on email sign-in. Turnstile is already there since M5 (invisible unless Cloudflare
+    suspects a bot), and the owner is fine with it (2026-11-27).
+- **What can move:** M9 can start any time after M7, M13 any time after M5, and M15 any time after M10. M22 and M23
+  can start any time. M30 any time after M26. M32 before M17 if the owner decides so in M31. Keep the table order
+  unless the owner asks otherwise.
 - **Owner inputs, by first milestone that needs them:** M0 branch OK · M4 Cloudflare Paid + token + domain · M5 Google
   clients + Email Sending domain (✅) + test emails · M10 R2 read-only token · M11 BharatStock OK · M14 legal details ·
-  M19/M21 OK on their plan sections (M21 also the brokers) · M16 load-test OK · M17 Google production, email quota
-  increase, go-live approval (legal review deferred ~6 months after launch, owner 2026-11-26).
+  M19/M21 OK on their plan sections (M21 also the brokers) · M24 OK on the design direction and the final look · M25 OK
+  on the landing copy and the SEO skill install, Search Console verified before M17 · M26 OK per blog post · M27/M28/M29
+  OK on their plan sections · M30 the owner creates the accounts and posts · M16 load-test OK · M31 AI decision · M17
+  Google production, email quota increase, go-live approval (legal review deferred ~6 months after launch, owner
+  2026-11-26) · M33 `ADMIN_EMAILS` and the extra admin features.

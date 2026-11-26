@@ -228,6 +228,7 @@ export const jobMessage = (code: string | null) => (code && MESSAGES[code]) || M
 
 const MESSAGES: Record<string, string> = {
   invalid_email: "Enter a valid email address.",
+  disposable_email: "That looks like a temporary email address. Use an inbox you'll keep, or continue with Google.",
   turnstile_failed: "We couldn't check that you're not a bot. Try again.",
   rate_limited: "Too many sign-in emails. Wait a bit, then try again.",
   INVALID_OTP: "That code didn't work. Check it and try again.",
@@ -270,6 +271,13 @@ const MESSAGES: Record<string, string> = {
   export_limit: "You've downloaded your data 3 times today. Try again tomorrow.",
   reauth_required: "For your safety, sign in again to delete your account.",
   consent_required: "Accept the privacy notice to continue.",
+  // QR device login (M13)
+  qr_limit: "Too many QR codes from this network. Wait a bit, or sign in with Google or email.",
+  link_limit: "Too many tries. Wait a few minutes, then scan the code again.",
+  invalid_code: "That code isn't valid. Check it against the other screen, or show a new QR code there.",
+  code_expired: "That code has expired. Show a new QR code on the other device.",
+  already_used: "That code has already been used. Show a new QR code on the other device.",
+  current_device: "That's this device. Use Sign out instead.",
 }
 
 /** A refused API call: `code` is the Worker's stable error code, `data` the rest of its JSON body. */
@@ -348,6 +356,31 @@ export type Me = {
   consent_ok: boolean
   /** The privacy notice version the server wants accepted (M14). */
   notice_version?: string
+  /** Devices linked by QR since this one last asked: shown once as a toast (plan §7.4, M13). */
+  new_devices?: DevicePlace[]
+}
+
+/** "Chrome · macOS", plus Cloudflare's approximate city and country. */
+export type DevicePlace = { label: string; city: string | null; country: string | null }
+
+/** "Chrome · macOS · Mumbai" */
+export const deviceLine = (d: DevicePlace) => [d.label, d.city ?? d.country].filter(Boolean).join(" · ")
+
+/** A signed-out device's QR login request (plan §7.4). `user_code` is "ABCD-EFGH". */
+export type QrCode = { device_code: string; user_code: string; verification_uri_complete: string; expires_in: number; interval: number }
+export type QrStatus = "pending" | "slow_down" | "approved" | "denied" | "expired"
+
+/** GET /api/link: the device asking to sign in, for the approval page. */
+export type LinkRequest = { user_code: string; device: DevicePlace; expires_at: number | null }
+
+/** Settings → Devices: one signed-in session of this account. */
+export type Device = DevicePlace & {
+  id: string
+  signed_in_at: number | null
+  last_active_at: number | null
+  current: boolean
+  /** Linked by QR in the last 7 days. */
+  new: boolean
 }
 
 /** GET /api/members (plan §9.2). Names are null until a statement or a rename gives one. */
@@ -372,6 +405,9 @@ export const auth = {
   google: (next: string) =>
     call<{ url: string }>("/api/auth/sign-in/social", json({ provider: "google", callbackURL: next, errorCallbackURL: "/login?error=google" })),
   signOut: () => call<unknown>("/api/auth/sign-out", json({})),
+  /** QR login on this (signed-out) device; poll until another device approves it. */
+  qrStart: () => call<QrCode>("/api/login/qr", json({})),
+  qrPoll: (device_code: string) => call<{ status: QrStatus }>("/api/login/qr/poll", json({ device_code })),
 }
 
 /** Fetch with the global 401 handler, returning the raw response (for headers). */
@@ -407,6 +443,14 @@ export async function waitForPortfolio(opts: { maxMs?: number; signal?: AbortSig
   }
   return null
 }
+
+export type Metric =
+  | "install_prompt_shown" | "install_accepted" | "install_dismissed" | "app_installed" | "launch_standalone" | "launch_shortcut"
+const sentMetrics = new Set<Metric>()
+
+/** No network, as opposed to an HTTP error answer: fetch() rejects with a TypeError whose message differs by browser. */
+export const isOffline = (e: unknown) =>
+  !navigator.onLine || (e instanceof TypeError && /fetch|network|load failed/i.test(e.message))
 
 export const api = {
   /** The snapshot JSON (sent gzip as stored) plus the stale/building flags from its headers. */
@@ -448,6 +492,22 @@ export const api = {
   /** Delete the account and everything in it (crypto-shred). Needs a sign-in from the last 10 minutes. */
   deleteAccount: () => call<{ ok: true }>("/api/account", { ...json({ confirm: "DELETE" }), method: "DELETE" }),
   config: () => call<AppConfig>("/api/config"),
+  /** The approval page (/link): looking a code up also claims it for this account. */
+  linkRequest: (userCode: string) => call<LinkRequest>(`/api/link?user_code=${encodeURIComponent(userCode)}`),
+  approveLink: (user_code: string) => call<{ ok: true }>("/api/link/approve", json({ user_code })),
+  denyLink: (user_code: string) => call<{ ok: true }>("/api/link/deny", json({ user_code })),
+  devices: () => call<{ devices: Device[] }>("/api/devices").then((r) => r.devices),
+  signOutDevice: (id: string) => call<{ ok: true }>(`/api/devices/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  signOutOtherDevices: () => call<{ ok: true; signed_out: number }>("/api/devices/sign-out-others", json({})),
+  /**
+   * An anonymous product counter (plan §13A.6). Fire and forget: never an error on screen and never a redirect to
+   * /login (signed out, the Worker answers 401 and nothing is counted). Each metric is sent once per page load.
+   */
+  metric: (name: Metric) => {
+    if (sentMetrics.has(name)) return
+    sentMetrics.add(name)
+    fetch("/api/metrics", { ...json({ metric: name }), keepalive: true }).catch(() => undefined)
+  },
   requestStatement: (body: { pan: string; email: string; from_date: string; to_date: string; password: string }) =>
     call<StatementRequestResult>("/api/kfintech/request", json(body)),
   /**

@@ -55,6 +55,7 @@ export async function deleteAccount(
       )
       .bind(email.toLowerCase()),
     db.prepare('DELETE FROM rate_limit WHERE key = ?1').bind(addrLimit),
+    db.prepare('DELETE FROM "deviceCode" WHERE "userId" = ?1').bind(userId), // QR codes claimed by this user (M13)
     db.prepare('DELETE FROM user WHERE id = ?1').bind(userId), // cascades session, account, consent
     db
       .prepare('INSERT INTO audit_event (user_id, household_id, event, ip_country, ua_hash, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)')
@@ -101,7 +102,7 @@ export async function exportAccount(
     db.prepare('SELECT id, name, email, "emailVerified" AS email_verified, image, "createdAt" AS created_at FROM user WHERE id = ?1').bind(userId),
     db.prepare('SELECT "providerId" AS provider, "createdAt" AS created_at FROM account WHERE "userId" = ?1 ORDER BY "createdAt"').bind(userId),
     db
-      .prepare('SELECT id, "createdAt" AS created_at, "updatedAt" AS updated_at, "expiresAt" AS expires_at, "ipAddress" AS ip_address, "userAgent" AS user_agent FROM session WHERE "userId" = ?1 ORDER BY "createdAt"')
+      .prepare('SELECT id, "createdAt" AS created_at, "updatedAt" AS updated_at, "expiresAt" AS expires_at, "ipAddress" AS ip_address, "userAgent" AS user_agent, city, country, "linkedAt" AS linked_at FROM session WHERE "userId" = ?1 ORDER BY "createdAt"')
       .bind(userId),
     db.prepare('SELECT notice_version, accepted_at, withdrawn_at FROM consent WHERE user_id = ?1 ORDER BY accepted_at').bind(userId),
     db.prepare('SELECT id, created_at, last_active_at, dek_wrapped, kek_version FROM household WHERE id = ?1 AND owner_user_id = ?2').bind(householdId, userId),
@@ -153,6 +154,9 @@ export async function exportAccount(
       expires_at: iso(s.expires_at as string),
       ip_address: s.ip_address ?? null,
       user_agent: s.user_agent ?? null,
+      city: s.city ?? null,
+      country: s.country ?? null,
+      linked_by_qr_at: iso((s.linked_at as number | null) ?? null),
     })),
     consents: (consents?.results ?? []).map((c) => ({ notice_version: c.notice_version, accepted_at: iso(c.accepted_at as number), withdrawn_at: iso(c.withdrawn_at as number | null) })),
     household: { id: h.id, created_at: iso(h.created_at), last_active_at: iso(h.last_active_at) },

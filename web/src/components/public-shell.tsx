@@ -16,7 +16,7 @@ export function Wordmark() {
 /** footer: false for a screen that fits the viewport (the consent screen links the policies itself). */
 export function PublicShell({ children, home = true, footer = true }: { children: React.ReactNode; home?: boolean; footer?: boolean }) {
   return (
-    <div className="flex min-h-svh flex-col">
+    <div className="flex min-h-svh flex-col pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)]">
       <header className="mx-auto flex h-[68px] w-full max-w-[1240px] items-center justify-between px-4 sm:px-7">
         {home ? (
           <Link href="/" aria-label="PocketFolio, go to your portfolio" className="flex min-h-11 items-center">

@@ -1,19 +1,22 @@
-// /settings (plan §13 item 7). Devices arrive with QR login (M13). Download my data and Delete account are the
-// DPDP access and erasure rights (plan §12, M14).
-import { ChevronRightIcon, DownloadIcon, Loader2Icon, LogOutIcon, Trash2Icon } from "lucide-react"
+// /settings (plan §13 item 7). Devices: every signed-in session of this account, with QR-linked ones marked "New"
+// (M13). Download my data and Delete account are the DPDP access and erasure rights (plan §12, M14).
+import { ChevronRightIcon, DownloadIcon, Loader2Icon, LogOutIcon, QrCodeIcon, SmartphoneIcon, Trash2Icon } from "lucide-react"
 import { useTheme } from "next-themes"
-import { type FormEvent, useState } from "react"
+import { type FormEvent, useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
 import { Link } from "wouter"
 
 import { PageShell } from "@/components/app-header"
 import { PageTitle, Panel } from "@/components/panel"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Segmented } from "@/components/ui/segmented"
-import { api, ApiFailure, auth, type Me, SignedOut } from "@/lib/api"
+import { Skeleton } from "@/components/ui/skeleton"
+import { api, ApiFailure, auth, type Device, type Me, SignedOut } from "@/lib/api"
+import { installFromMenu, useInstall } from "@/lib/pwa"
 
 const CONFIRM_WORD = "DELETE"
 
@@ -108,6 +111,100 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   )
 }
 
+const when = (ms: number | null) => {
+  if (ms === null) return "unknown"
+  const mins = Math.round((Date.now() - ms) / 60_000)
+  if (mins < 2) return "just now"
+  if (mins < 60) return `${mins} min ago`
+  if (mins < 48 * 60) return `${Math.round(mins / 60)} h ago`
+  return new Date(ms).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+}
+
+/** Settings → Devices (plan §7.4): sign out one device or all others, and link a new one by QR. */
+function DevicesPanel() {
+  const [devices, setDevices] = useState<Device[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState<string | null>(null) // a device id, or "others"
+
+  const load = useCallback(() => {
+    api.devices().then(setDevices, (e: Error) => !(e instanceof SignedOut) && setError(e.message))
+  }, [])
+  useEffect(load, [load])
+  // From the "New device linked" toast: /settings#devices
+  useEffect(() => {
+    if (devices && window.location.hash === "#devices") document.getElementById("devices")?.scrollIntoView({ block: "start" })
+  }, [devices])
+
+  async function run(key: string, action: () => Promise<unknown>, done: string) {
+    setBusy(key)
+    try {
+      await action()
+      toast.success(done)
+      load()
+    } catch (e) {
+      if (!(e instanceof SignedOut)) toast.error((e as Error).message)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const others = devices?.filter((d) => !d.current).length ?? 0
+  return (
+    <Panel title={<span id="devices">Devices</span>}>
+      <p className="text-sm text-muted-foreground">Where your account is signed in. Signing a device out takes effect within 5 minutes.</p>
+      {error ? (
+        <p className="mt-4 text-sm text-loss" role="alert">Couldn't load your devices: {error}</p>
+      ) : !devices ? (
+        <div className="mt-4 grid gap-2"><Skeleton className="h-14 rounded-xl" /><Skeleton className="h-14 rounded-xl" /></div>
+      ) : (
+        <ul className="mt-2 divide-y divide-border">
+          {devices.map((d) => (
+            <li key={d.id} className="flex items-center justify-between gap-3 py-3">
+              <div className="min-w-0">
+                <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                  <span className="truncate">{d.label}</span>
+                  {d.current && <Badge variant="secondary">This device</Badge>}
+                  {d.new && <Badge>New</Badge>}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  {[d.city ?? d.country, d.current ? "active now" : `active ${when(d.last_active_at)}`].filter(Boolean).join(" · ")}
+                </p>
+              </div>
+              {!d.current && (
+                <Button
+                  variant="outline"
+                  className="h-11 shrink-0"
+                  disabled={busy !== null}
+                  onClick={() => run(d.id, () => api.signOutDevice(d.id), `${d.label} was signed out.`)}
+                >
+                  {busy === d.id && <Loader2Icon className="animate-spin" />}
+                  Sign out
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+        <Button variant="outline" className="h-11" asChild>
+          <Link href="/link"><QrCodeIcon /> Link a device</Link>
+        </Button>
+        {others > 0 && (
+          <Button
+            variant="outline"
+            className="h-11"
+            disabled={busy !== null}
+            onClick={() => run("others", api.signOutOtherDevices, "Every other device was signed out.")}
+          >
+            {busy === "others" ? <Loader2Icon className="animate-spin" /> : <LogOutIcon />}
+            Sign out all other devices
+          </Button>
+        )}
+      </div>
+    </Panel>
+  )
+}
+
 type ThemeChoice = "dark" | "light" | "system"
 
 export function SettingsPage({ me }: { me: Me }) {
@@ -115,6 +212,7 @@ export function SettingsPage({ me }: { me: Me }) {
   // ?delete=1: back from the re-sign-in the delete dialog asked for
   const [deleting, setDeleting] = useState(() => new URLSearchParams(window.location.search).get("delete") === "1")
   const [exporting, setExporting] = useState(false)
+  const install = useInstall()
 
   async function downloadData() {
     setExporting(true)
@@ -147,6 +245,21 @@ export function SettingsPage({ me }: { me: Me }) {
             <Row label="Email">{me.user.email}</Row>
           </dl>
           <Button variant="outline" className="mt-4 h-11" onClick={signOut}><LogOutIcon /> Sign out</Button>
+        </Panel>
+
+        <DevicesPanel />
+
+        <Panel title="Install app">
+          {install.action === "installed" ? (
+            <p className="text-sm text-muted-foreground">PocketFolio is installed on this device. Open it from your home screen, Dock or Start menu.</p>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground">Quick access from your home screen or desktop.</p>
+              <Button variant="outline" className="mt-4 h-11" onClick={() => void installFromMenu(install.action)}>
+                <SmartphoneIcon /> Install app
+              </Button>
+            </>
+          )}
         </Panel>
 
         <Panel title="Family members">
