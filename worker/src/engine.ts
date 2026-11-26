@@ -2,6 +2,7 @@
 // Uses the runtime's ctx.container API directly: the @cloudflare/containers Container class is now the legacy path
 // (verified M2). Never addressed directly by routes: callers get a slot name from EnginePool first.
 import { DurableObject } from 'cloudflare:workers'
+import { MARKET_HOST, NAV_STORE_URL } from './market-gateway'
 
 const ENGINE_PORT = 8080
 /** Container stops after 60 s without requests (§3.6: keeps idle memory low). */
@@ -18,6 +19,11 @@ export class EngineStartError extends Error {
 
 abstract class EngineContainer extends DurableObject<Env> {
   protected abstract readonly instance: InstanceType
+  /** Extra container env, and outbound routes registered on every start (intercepts end with the container). */
+  protected containerEnv(): Record<string, string> {
+    return {}
+  }
+  protected async routeOutbound(_container: Container): Promise<void> {}
   private starting: Promise<void> | null = null
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -62,9 +68,12 @@ abstract class EngineContainer extends DurableObject<Env> {
     container.start({
       image,
       instance: this.instance,
-      enableInternet: false, // the engine never calls out (engine/README.md); M18 scraping will allow-list hosts
-      env: { ENGINE_SHARED_SECRET: this.env.ENGINE_SHARED_SECRET },
+      // No internet (engine/README.md). Only hosts routed in routeOutbound() reach anything; M18 scraping will add
+      // allow-listed hosts the same way.
+      enableInternet: false,
+      env: { ENGINE_SHARED_SECRET: this.env.ENGINE_SHARED_SECRET, ...this.containerEnv() },
     })
+    await this.routeOutbound(container)
     await container.setInactivityTimeout(INACTIVITY_MS)
     await waitUntilReady(container)
   }
@@ -92,7 +101,16 @@ export class EngineFast extends EngineContainer {
   protected readonly instance = 'standard-2'
 }
 
-/** Rebuilds and scrapes: cheapest memory per job, nobody waits on them. */
+/**
+ * Rebuilds and scrapes: cheapest memory per job, nobody waits on them. /build reads NAV series from
+ * http://market.internal/nav/, which is routed to MarketGateway (public market data from R2, read-only).
+ */
 export class EngineBatch extends EngineContainer {
   protected readonly instance = 'basic'
+  protected override containerEnv() {
+    return { NAV_STORE_URL }
+  }
+  protected override async routeOutbound(container: Container) {
+    await container.interceptOutboundHttp(MARKET_HOST, this.ctx.exports.MarketGateway({ props: {} }))
+  }
 }

@@ -21,6 +21,8 @@ declare module 'vitest' {
   export interface ProvidedContext {
     privatePdfs: PrivatePdf[]
     privatePdfsSkipReason: string | null
+    /** test/helpers/portfolio_expect.py's JSON (expected snapshots + NAV data), or null. Never printed. */
+    privatePortfolio: string | null
   }
 }
 
@@ -47,6 +49,19 @@ export default function setup(project: TestProject) {
       skip = `engine expectations unavailable (${(e as Error).name})` // e.g. uv not installed
     }
   }
+  let portfolio: string | null = null
+  if (!skip) {
+    try {
+      portfolio = execFileSync('uv', ['run', '--directory', join(ROOT_DIR, 'engine'), 'python', join(WORKER_DIR, 'test/helpers/portfolio_expect.py'), ...paths], {
+        env: { ...process.env, TEST_PDF_PASSWORD: devVar('TEST_PDF_PASSWORD') ?? '' },
+        stdio: ['ignore', 'pipe', 'ignore'],
+        maxBuffer: 256 << 20,
+      }).toString()
+    } catch {
+      portfolio = null // the parity test skips and says why
+    }
+  }
+  project.provide('privatePortfolio', portfolio)
   project.provide('privatePdfs', pdfs)
   project.provide('privatePdfsSkipReason', skip)
 }

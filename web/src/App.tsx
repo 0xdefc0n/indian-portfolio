@@ -1,4 +1,4 @@
-import { FileTextIcon, InfoIcon } from "lucide-react"
+import { BuildingIcon, FileTextIcon, InfoIcon, Loader2Icon, SmartphoneIcon } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 
 import { AppHeader } from "@/components/app-header"
@@ -10,6 +10,7 @@ import { BottomNav, type TabId, TabNav, useTab } from "@/components/tab-nav"
 import { TransactionsView } from "@/components/transactions-view"
 import { AllocationBreakdown, BenchmarkComparison, FundPerformance, FundReturns, MoneyFlow, UpsAndDowns } from "@/components/insights"
 import { PageTitle, Panel } from "@/components/panel"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -22,7 +23,7 @@ import {
 } from "@/components/overview"
 import { Segmented } from "@/components/ui/segmented"
 import { OpenFundContext } from "@/lib/fund-context"
-import { api, type Holding, type Me, type Member, type Portfolio, SignedOut } from "@/lib/api"
+import { api, type Holding, type MarketStatus, type Me, type Member, type Portfolio, SignedOut, waitForPortfolio } from "@/lib/api"
 import { day, inr, monthly } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { upcomingSips } from "@/lib/sips"
@@ -67,20 +68,85 @@ function MemberSwitch({ members, value, onChange }: { members: Member[]; value: 
   return <Segmented kind="radio" label="Show portfolio for" size="sm" value={value} onChange={onChange} options={options} />
 }
 
-function EmptyState({ onAdded }: { onAdded: () => void }) {
+/** Onboarding for an empty household (plan §13 item 4): what to upload, and how to get it. */
+function Onboarding({ onAdded }: { onAdded: () => void }) {
   return (
-    <div className="mx-auto mt-24 max-w-md text-center">
-      <div className="mx-auto mb-6 grid size-14 place-items-center rounded-2xl bg-surface ring-1 ring-border">
-        <FileTextIcon className="size-6 text-primary" />
-      </div>
-      <h1 className="text-2xl font-semibold tracking-tight">Add your first statement</h1>
-      <p className="mt-3 text-muted-foreground">
-        Upload a family member's CDSL or CAMS/KFintech statement. We'll file it under the right person. Add one per member to see everyone together.
-      </p>
-      <div className="mt-8">
-        <AddStatementDialog onAdded={onAdded} trigger={<Button size="lg">Add statement</Button>} />
-      </div>
+    <div className="grid grid-cols-1 gap-4 pt-3 sm:pt-4 md:grid-cols-6 lg:grid-cols-12">
+      <Cell className="dot-texture flex flex-col sm:p-7 md:col-span-6 lg:col-span-12" lift={false} label="Welcome">
+        <span className="eyebrow">Welcome to PocketFolio</span>
+        <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">Your family's mutual funds, in one place.</h1>
+        <p className="mt-3 max-w-xl text-muted-foreground">
+          Add a consolidated statement for each family member. We'll file it under the right person automatically and
+          keep the dashboard on the latest NAVs.
+        </p>
+        <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
+          <AddStatementDialog onAdded={onAdded} trigger={<Button size="lg" className="h-11">Add statement</Button>} />
+          <AddStatementDialog
+            onAdded={onAdded}
+            defaultTab="request"
+            trigger={<button className="min-h-11 text-left text-sm text-primary underline-offset-4 hover:underline">Don't have one? Get your CAMS/KFintech statement</button>}
+          />
+        </div>
+        <div className="mt-6 flex min-h-11 items-center gap-2 text-sm text-muted-foreground" aria-disabled="true">
+          <SmartphoneIcon className="size-4" />
+          Fetch from CDSL with OTP
+          <Badge variant="secondary">Coming soon</Badge>
+        </div>
+      </Cell>
+      <Cell className="md:col-span-3 lg:col-span-6" delay={80} label="CDSL eCAS">
+        <div className="mb-4 grid size-10 place-items-center rounded-xl bg-background ring-1 ring-border">
+          <BuildingIcon className="size-5 text-primary" />
+        </div>
+        <h2 className="text-[15px] font-semibold tracking-tight">CDSL eCAS</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Everything held in demat (funds and shares), with month-end values. The password is usually the PAN in capital
+          letters.
+        </p>
+      </Cell>
+      <Cell className="md:col-span-3 lg:col-span-6" delay={140} label="CAMS / KFintech CAS">
+        <div className="mb-4 grid size-10 place-items-center rounded-xl bg-background ring-1 ring-border">
+          <FileTextIcon className="size-5 text-primary" />
+        </div>
+        <h2 className="text-[15px] font-semibold tracking-tight">CAMS / KFintech CAS</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Every mutual fund folio with its full transaction history, so you see what you invested, your returns and XIRR,
+          SIPs and capital gains. Choose “Detailed” with the earliest start date.
+        </p>
+      </Cell>
     </div>
+  )
+}
+
+/** Statements are in, the first build hasn't finished yet. */
+function BuildingState() {
+  return (
+    <div className="mx-auto mt-24 max-w-md text-center" role="status">
+      <div className="mx-auto mb-6 grid size-14 place-items-center rounded-2xl bg-surface ring-1 ring-border">
+        <Loader2Icon className="size-6 animate-spin text-primary" />
+      </div>
+      <h1 className="text-2xl font-semibold tracking-tight">Building your dashboard…</h1>
+      <p className="mt-3 text-muted-foreground">This usually takes a few seconds. It'll appear here by itself.</p>
+    </div>
+  )
+}
+
+/** The latest NAV day is still filling in (nav-ingest runs a few times a night): say so, quietly. */
+function NavsUpdatingHint({ market }: { market: MarketStatus }) {
+  return (
+    <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+      <InfoIcon className="size-3.5" />
+      Some funds' NAVs for {day(market.latest_nav_date)} are still coming in. Values update by themselves.
+    </p>
+  )
+}
+
+/** "Updating to today's NAV…" while a rebuild is due (plan §13 item 8). */
+function UpdatingBanner({ stale }: { stale: boolean }) {
+  return (
+    <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+      <Loader2Icon className="size-3.5 animate-spin" />
+      {stale ? "Updating to today's NAV…" : "Updating your dashboard…"}
+    </p>
   )
 }
 
@@ -109,6 +175,23 @@ export default function App({ me }: { me: Me }) {
     api.portfolio().then(setData, (e: Error) => !(e instanceof SignedOut) && setError(e.message))
   }, [])
   useEffect(load, [load])
+
+  const [market, setMarket] = useState<MarketStatus | null>(null)
+  useEffect(() => {
+    api.marketStatus().then(setMarket, () => undefined) // a hint only
+  }, [])
+
+  // While a rebuild is due, wait for it (status polling with backoff and Retry-After), then reload once.
+  const updating = !!data && (data.stale || data.building)
+  useEffect(() => {
+    if (!updating) return
+    const ctl = new AbortController()
+    waitForPortfolio({ maxMs: 5 * 60_000, signal: ctl.signal }).then(
+      (s) => !ctl.signal.aborted && s && load(),
+      () => undefined,
+    )
+    return () => ctl.abort()
+  }, [updating, load])
 
   const view = useMemo(() => {
     if (!data) return null
@@ -203,10 +286,15 @@ export default function App({ me }: { me: Me }) {
           </p>
         )}
         {!data && !error && <div className="pt-8"><LoadingState /></div>}
-        {data && data.members.length === 0 && <EmptyState onAdded={load} />}
+        {data && data.members.length === 0 && (data.building ? <BuildingState /> : <Onboarding onAdded={load} />)}
 
         {ready && (
           <div className="space-y-8 pt-3 sm:pt-4">
+            {updating ? (
+              <UpdatingBanner stale={data.stale} />
+            ) : (
+              market?.latest_nav_date && !market.final && <NavsUpdatingHint market={market} />
+            )}
             {multi && tab !== "overview" && <MemberSwitch members={data.members} value={who} onChange={switchMember} />}
 
             {tab === "overview" && (

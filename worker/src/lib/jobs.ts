@@ -19,6 +19,7 @@ import { LIMITS, uploadQuota } from './limits'
 import { fieldKey } from './members'
 import { isQuotaRefusal, quotaStatement, refusal } from './quota'
 import { type AddedStatement, engineFailure, finishParsed, type PasswordSource, type StatementKind } from './statements'
+import { requestRebuild } from './snapshot'
 import { Tenant } from './tenant'
 
 /** A parked PDF is never kept longer than this (§0.5). */
@@ -284,7 +285,7 @@ export async function runParseJob(env: Env, jobId: string, now = Date.now()): Pr
       ],
     })
     await endJob(env, job, { status: 'done', statementId: added.statement.id, ms: Date.now() - started })
-    // M10: enqueue the debounced rebuild here.
+    await requestRebuild(env, job.household_id)
     return { outcome: 'done' }
   } catch (err) {
     if (holding) await engineApi.release(env, slot).catch(() => undefined)

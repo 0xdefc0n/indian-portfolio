@@ -14,6 +14,7 @@ import { ApiError, notFound } from './errors'
 import { failQuota, LIMITS, uploadQuota } from './limits'
 import { cleanName, fieldKey, maskPan, memberInsert, normalizePan, panHmac } from './members'
 import { precheckPdf } from './pdfcheck'
+import { requestRebuild } from './snapshot'
 import { isQuotaRefusal, quotaStatement, quotaWindow, refusal, secondsLeft, takeQuota } from './quota'
 import type { Tenant } from './tenant'
 
@@ -177,7 +178,8 @@ export async function uploadStatement(
     if (err instanceof ApiError) log('upload_refused', err.code, started)
     throw err
   })
-  // C8: the rebuild (§10.2) is enqueued here from M10.
+  // C8: the debounced rebuild (§10.2).
+  await requestRebuild(env, t.householdId)
   console.log('upload_ok', { kind: result.statement.kind, pages: pre.pages, slot: slot.name, ms: Date.now() - started, source: used?.source ?? 'none' })
   return { added: result }
 }
@@ -471,6 +473,6 @@ export async function deleteStatement(t: Tenant, statementId: string, audit: D1P
   const keys = (del?.results ?? []).map((r) => r.blob_key)
   if (!keys.length) return false
   await deleteBlobs(t.env, t.householdId, keys).catch((e) => console.error('blob_delete_failed', (e as Error).name, keys.length))
-  // M10: enqueue a rebuild of the household's snapshot here.
+  await requestRebuild(t.env, t.householdId)
   return true
 }

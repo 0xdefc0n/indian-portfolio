@@ -21,9 +21,7 @@ PAN_PEPPER=
 # Worker -> engine (M2)
 ENGINE_SHARED_SECRET=
 
-# Market data (M10, M11)
-R2_MARKET_READONLY_ACCESS_KEY_ID=      # owner, unless the Cloudflare token can create it
-R2_MARKET_READONLY_SECRET_ACCESS_KEY=
+# Market data (M11). The engine reads NAVs through MarketGateway (M10), so it needs no R2 keys.
 BHARATSTOCK_API_KEY=                   # owner
 
 # Deploy (M4), also stored as GitHub Actions secrets

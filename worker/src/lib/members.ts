@@ -3,6 +3,7 @@
 // (it is the default PDF password) and a masked copy for display. Names are sealed.
 import { deleteBlobs } from './blob'
 import { hmacHex, type Vault } from './crypto'
+import { requestRebuild } from './snapshot'
 import type { Tenant } from './tenant'
 
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/
@@ -122,7 +123,9 @@ export async function renameMember(t: Tenant, memberId: string, name: string, au
     t.env.DB.prepare('UPDATE member SET display_name_enc = ?1 WHERE id = ?2 AND household_id = ?3').bind(sealed, memberId, t.householdId),
     audit,
   ])
-  return (res?.meta.changes ?? 0) > 0
+  const renamed = (res?.meta.changes ?? 0) > 0
+  if (renamed) await requestRebuild(t.env, t.householdId) // the dashboard shows the name
+  return renamed
 }
 
 /**
@@ -146,6 +149,6 @@ export async function deleteMember(t: Tenant, memberId: string, audit: D1Prepare
   } catch (err) {
     console.error('blob_delete_failed', (err as Error).name, keys.length)
   }
-  // M10: enqueue a rebuild of the household's snapshot here (pf-rebuild has no consumer until then).
+  await requestRebuild(t.env, t.householdId)
   return true
 }

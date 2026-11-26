@@ -833,7 +833,7 @@ export async function assertMember(c, memberId: string) {
 | `DELETE /api/jobs/:id` | ✅ | cancel: delete the parked PDF and the job | ✅ M8: also dismisses a finished job; `409 job_running` while it's being parsed |
 | `DELETE /api/statements/:id` | ✅ | delete one statement; enqueue rebuild | ✅ M7: row (`RETURNING blob_key`) + audit in one batch, then the blob; 404 for other households. The rebuild is enqueued from M10 |
 | `GET /api/portfolio` | ✅ | snapshot JSON (same shape as today's `Portfolio` type, with stable member IDs) + `{ stale, building }` | §10.2 |
-| `GET /api/portfolio/status` | ✅ | `{ status, built_at, market_date }` for polling after upload | one indexed D1 read; polled with backoff (1 → 10 s), `Retry-After` set |
+| `GET /api/portfolio/status` | ✅ | `{ status, built_at, market_date }` for polling after upload. ✅ M10: also `building`, `pending` (`snapshot.requested_at > checked_at`: a rebuild is due) and `stale`; `status` is `empty`/`pending`/`building`/`failed`/`ready` | one indexed D1 read; polled with backoff (2 → 15 s), `Retry-After: 3` while due |
 | `GET /api/portfolio/daily?days=30&member=all` | ✅ | daily returns (§10.5): `{ as_of, coverage, today, series }` | `days` ≤ 366; `member` is `all` or a member ID, checked with `assertMember` |
 | `GET /api/market/status` | – | `{ latest_nav_date, coverage_pct, final }` for the "NAVs updating" hint | public, cacheable for 5 min |
 | `POST /api/kfintech/guide` | ✅ | `{ member_id or pan, password? }` → stores a pending password, returns `{ password, form_url }` | the manual path only (D9); same validation as `kfintech.password_problem`. **The one place a PAN may be typed:** KFintech's own form needs it, and a new person isn't a member yet. Picking an existing member needs no PAN |
@@ -1046,8 +1046,16 @@ Engine `/parse` timeout: 60 s. On timeout return `parse_timeout`, and count it i
   - `_latest_by_member` logic stays, but works on the list instead of a directory glob.
 - **Market data.** D1 is the source of truth for NAVs (§10.4). After each ingest, the full NAV series of every
   *tracked* scheme that changed is written to R2 as `market/nav/{amfi_code}.json` (`{dates:[], navs:[]}`). To avoid
-  large payloads, the engine reads these from R2 itself through the S3 API with a **read-only R2 token scoped to
-  `market/*`** (container env secret). It keeps an in-process LRU cache keyed by `(code, market_date)`. The Worker
+  large payloads, the engine reads these from R2 itself. ✅ Changed in M10: instead of the S3 API with a read-only R2
+  token, the EngineBatch container (still `enableInternet: false`) has one outbound route,
+  `ctx.container.interceptOutboundHttp("market.internal", ctx.exports.MarketGateway)`. The engine fetches
+  `http://market.internal/nav/{code}.json` (`NAV_STORE_URL`), and `MarketGateway` (`worker/src/market-gateway.ts`)
+  serves only `market/nav/*` from the R2 binding, read-only. No R2 credentials enter the container, and a container
+  holding decrypted statements has no route to the internet. Verified with a real container in vitest
+  (`test/market-gateway.container.test.ts`); the `R2_MARKET_READONLY_*` secrets aren't used. It keeps an in-process LRU cache keyed by `(code, market_date)`. ✅ M10: keyed by `(code, nav_key)`, where
+  `nav_key` = market date | final | tracked coverage, so it changes as the night's rows land. Missing series aren't
+  cached, and codes whose backfill is still pending (`refresh`) are always read fresh; the consumer builds again every
+  2 min (at most 10 times) while they are. The Worker
   sends only the statements plus `market_date`. ISIN → AMFI code lookups come from the D1 `scheme` table, passed in
   the `/build` request.
 - **New snapshot fields for daily returns (§10.5).** For each holding: `amfi_code` and `units_timeline`
@@ -1064,7 +1072,12 @@ Engine `/parse` timeout: 60 s. On timeout return `parse_timeout`, and count it i
      If no row changed, another consumer is building the same inputs, so stop. The `snapshot` row is created
      (`status='ready'`, `blob_key=NULL`) together with the household, so it always exists.
   4. Get an `EngineBatch` lease (`wait: true`; retry the message with a delay if there's none), and call `/build`.
+     ✅ M10: the lease is taken *before* the claim (steps 3 and 4 swapped). A message waiting for a slot then never
+     holds the claim, and a wait costs no D1 writes, which matters in the nightly burst.
   5. Compress, encrypt, and put the result at **`h/{household_id}/snapshot/{inputs_hash}.bin`**, a new key every time.
+     ✅ M10: the key is `{inputs_hash}-{8 random hex}.bin`. A forced rebuild of the same inputs (backfill follow-up)
+     would otherwise write the current pointer's key, and a superseded build would delete the live blob. The engine
+     returns the gzip snapshot itself (`format: "gzip"`), so the Worker seals those bytes and never parses them.
      That avoids R2's 1-write-per-second-per-key limit and partial overwrites.
   6. **Compare-and-set** the pointer:
      `UPDATE snapshot SET blob_key=?, inputs_hash=?, market_date=?, status='ready', building_hash=NULL, built_at=? WHERE household_id=? AND building_hash=?`.
@@ -1079,8 +1092,10 @@ Engine `/parse` timeout: 60 s. On timeout return `parse_timeout`, and count it i
   - **Stream, don't parse.** Decrypt, then pipe through `DecompressionStream`, or send the gzip body as is with
     `Content-Encoding: gzip`. The `stale`/`building` flags go in response headers (`X-Snapshot-Stale`,
     `X-Snapshot-Building`) and the SPA merges them in. That keeps Worker CPU and memory flat, whatever the portfolio size.
-    ⚠️ VERIFY that Workers pass a pre-encoded gzip body through untouched (`encodeBody: "manual"`). Fallback: decompress
-    in the Worker and let Cloudflare re-compress.
+    ✅ VERIFY (M10, `wrangler dev` + curl): with `encodeBody: "manual"` the bytes on the wire are identical to what the
+    Worker sent (same SHA-256), and one gunzip gives the JSON. Without it, workerd gzips the body a second time. A client
+    without `Accept-Encoding: gzip` gets the body through `DecompressionStream` (still not parsed). Staging re-check
+    after the M10 merge.
 
 ### 10.3 Market data and stocks (cron + queues)
 
@@ -1823,7 +1838,7 @@ integration accept. Switch only if a later wrangler requires `exports`.
 | `PAN_PEPPER` | HMAC key for PANs and file hashes (§8) |
 | `ENGINE_SHARED_SECRET` | Worker → engine header (§14) |
 | `BHARATSTOCK_API_KEY` | stocks fallback (§10.3.1) |
-| `R2_MARKET_READONLY_ACCESS_KEY_ID`, `…_SECRET` | engine reads `market/*` (§10.2) |
+| ~~`R2_MARKET_READONLY_ACCESS_KEY_ID`, `…_SECRET`~~ | not used (M10): the engine reads `market/nav/*` through `MarketGateway` (§10.2) |
 
 Plain vars: `APP_URL`, `BHARATSTOCK_DAILY_LIMIT=50`, `TURNSTILE_SITE_KEY`. Email needs no secret: it uses the
 `send_email` binding (D5).

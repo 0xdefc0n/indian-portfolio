@@ -126,4 +126,69 @@ async function callParse(engine: Fetcher, req: ParseRequest): Promise<EnginePars
  * The engine calls the upload route and the parse consumer make. A plain object so tests can swap in a fake engine
  * (vi.spyOn), or a pool with no free slot.
  */
-export const engineApi = { acquire: acquireEngine, parse: parseOnLease, release: releaseLease }
+export const engineApi: {
+  acquire: typeof acquireEngine
+  parse: typeof parseOnLease
+  release: typeof releaseLease
+  build: (env: Env, lease: EngineLease, body: string) => Promise<EngineBuild>
+} = { acquire: acquireEngine, parse: parseOnLease, release: releaseLease, build: (...a) => buildOnLease(...a) }
+
+// ─── /build (plan §10.2, M10) ───────────────────────────────────────────────────────────────────────────────────
+
+/** Engine /build timeout: inside the 120 s batch lease and the snapshot claim. */
+export const BUILD_TIMEOUT_MS = 100_000
+
+export type EngineBuild = { ok: true; gzip: Uint8Array<ArrayBuffer>; peakRssMb: number | null; navHits: number; navMisses: number } | { ok: false; code: string }
+
+/**
+ * Build a snapshot on a held EngineBatch slot. `body` is the /build JSON with format "gzip", so the answer is the
+ * compressed snapshot bytes, which the caller seals as they are. The lease is always released, also when this throws.
+ */
+export async function buildOnLease(env: Env, lease: EngineLease, body: string): Promise<EngineBuild> {
+  let ok = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const engine = engineNamespace(env, 'batch').getByName(lease.name)
+    const timeout = new Promise<EngineBuild>((done) => {
+      timer = setTimeout(() => done({ ok: false, code: 'build_timeout' }), BUILD_TIMEOUT_MS)
+    })
+    const res = await Promise.race([callBuild(engine, body), timeout])
+    ok = res.ok
+    return res
+  } finally {
+    clearTimeout(timer)
+    await releaseLease(env, lease, ok)
+  }
+}
+
+async function callBuild(engine: Fetcher, body: string): Promise<EngineBuild> {
+  for (let attempt = 0; ; attempt++) {
+    let res: Response
+    try {
+      res = await engine.fetch('http://engine/build', { method: 'POST', headers: { 'content-type': 'application/json' }, body })
+    } catch (err) {
+      if (attempt >= CONNECT_RETRIES || (err as Error).name === 'EngineStartError') throw err
+      await scheduler.wait(CONNECT_RETRY_MS)
+      continue
+    }
+    if (res.status === 503 && attempt < CONNECT_RETRIES) {
+      await res.body?.cancel()
+      await scheduler.wait(CONNECT_RETRY_MS)
+      continue
+    }
+    if (res.ok && res.headers.get('content-type') === 'application/x-snapshot+gzip') {
+      const num = (h: string) => Number(res.headers.get(h) ?? Number.NaN)
+      const rss = num('x-engine-peak-rss-mb')
+      return {
+        ok: true,
+        gzip: new Uint8Array(await res.arrayBuffer()),
+        peakRssMb: Number.isFinite(rss) ? rss : null,
+        navHits: num('x-engine-nav-hits') || 0,
+        navMisses: num('x-engine-nav-misses') || 0,
+      }
+    }
+    const err = await res.json<Record<string, unknown>>().catch(() => null)
+    return { ok: false, code: typeof err?.code === 'string' ? err.code : 'build_error' }
+  }
+}
+
