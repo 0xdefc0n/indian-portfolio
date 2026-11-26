@@ -5,7 +5,9 @@ POST /parse   body: the raw PDF bytes (application/pdf)
               → parse_pdf()'s result plus the engine `version`
               The body is read into memory. Multipart is deliberately not used: Starlette spools uploads over 1 MB
               to a temporary file on disk, and PDFs must never touch disk.
-POST /build   JSON {statements, market, today, format?} → the portfolio snapshot
+POST /build   JSON {statements, market, today, format?, overrides?} → the portfolio snapshot
+              overrides: the user's SIP skips and cancels, [{member_id, isin, folio, kind: skip|cancel, due}] (M12);
+              market.holidays: exchange holiday dates for SIP run days (M12)
               market.market_date set and no market.navs: the NAV series come from the NAV store (navstore.py),
               cached by market.nav_key (default: the market date); market.refresh lists codes to always read fresh.
               format "gzip": the body is the gzip-compressed snapshot JSON itself (application/x-snapshot+gzip, no
@@ -126,10 +128,13 @@ async def build(request: Request):
             market_date = market.get("market_date")
             if market_date is not None:
                 date.fromisoformat(market_date)
+            overrides = req.get("overrides") or []  # the user's SIP skips and cancels (M12)
+            if not isinstance(overrides, list):
+                raise TypeError("overrides")
         except (ValueError, KeyError, TypeError):
-            return _error(400, "bad_request", "Expected JSON {statements, market?, today?}")
+            return _error(400, "bad_request", "Expected JSON {statements, market?, today?, overrides?}")
         try:
-            result, want = await asyncio.to_thread(_build, statements, market, today, req.get("format") == "gzip")
+            result, want = await asyncio.to_thread(_build, statements, market, today, req.get("format") == "gzip", overrides)
         except navstore.NavStoreError as e:
             log.warning("nav store failed: %s", e)
             return _error(502, "nav_store_error", "Could not read NAVs")
@@ -142,13 +147,14 @@ async def build(request: Request):
         return JSONResponse({"ok": True, "snapshot": result, "metrics": {**_metrics(), "stocks_want": want}})
 
 
-def _build(statements: list, market: dict, today: date | None, gz: bool) -> tuple[dict | bytes, list[list[str]]]:
+def _build(statements: list, market: dict, today: date | None, gz: bool,
+           overrides: list | None = None) -> tuple[dict | bytes, list[list[str]]]:
     """The CPU part of /build (a thread). NAVs come from the NAV store unless the request carries them."""
     if market.get("market_date") and market.get("navs") is None and navstore.store_url():
         need = market_requirements(statements, market.get("isin_to_code") or {})
         refresh = {str(c) for c in market.get("refresh") or []}
         market["navs"] = navstore.load(need["codes"], str(market.get("nav_key") or market["market_date"]), refresh=refresh)
-    snapshot = build_portfolio(statements, market, today)
+    snapshot = build_portfolio(statements, market, today, overrides)
     want = stocks.wanted(snapshot["holdings"], market.get("stocks"))
     if not gz:
         return snapshot, want

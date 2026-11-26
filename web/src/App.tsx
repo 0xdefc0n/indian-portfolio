@@ -23,10 +23,12 @@ import {
 } from "@/components/overview"
 import { Segmented } from "@/components/ui/segmented"
 import { OpenFundContext } from "@/lib/fund-context"
-import { api, type Holding, type MarketStatus, type Me, type Member, type Portfolio, SignedOut, waitForPortfolio } from "@/lib/api"
+import { api, type Daily, type Holding, type MarketStatus, type Me, type Member, type Portfolio, SignedOut, waitForPortfolio } from "@/lib/api"
+import { DailyReturns, TodayTile } from "@/components/daily-returns"
+import { byFund } from "@/lib/daily"
 import { day, inr, monthly } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { upcomingSips } from "@/lib/sips"
+import { nextRun, upcomingSips } from "@/lib/sips"
 import { holdingFlows, xirr } from "@/lib/xirr"
 
 const EVERYONE = "all"
@@ -176,6 +178,19 @@ export default function App({ me }: { me: Me }) {
   }, [])
   useEffect(load, [load])
 
+  // Daily returns (plan §10.5.3): asked for after the snapshot, per member key; the overview never waits on it.
+  // undefined = loading, null = unavailable.
+  const [dailyGot, setDailyGot] = useState<{ data: Portfolio; who: string; d: Daily | null } | null>(null)
+  const hasMembers = (data?.members.length ?? 0) > 0
+  useEffect(() => {
+    if (!hasMembers || !data) return
+    let live = true
+    api.daily(who).then((d) => live && setDailyGot({ data, who, d }), () => live && setDailyGot({ data, who, d: null }))
+    return () => { live = false }
+  }, [data, who, hasMembers])
+  // undefined while the answer for this snapshot and member is on its way
+  const daily = dailyGot && dailyGot.data === data && dailyGot.who === who ? dailyGot.d : undefined
+
   const [market, setMarket] = useState<MarketStatus | null>(null)
   useEffect(() => {
     api.marketStatus().then(setMarket, () => undefined) // a hint only
@@ -243,9 +258,19 @@ export default function App({ me }: { me: Me }) {
         }
       : null
     const asOf = members.map((m) => m.as_of).filter(Boolean).sort().at(-1) ?? null
+    // M12: values are at the latest NAV; the statement date stays for the notes
+    const valueDate = members.map((m) => m.value_date ?? m.as_of).filter(Boolean).sort().at(-1) ?? null
+    const est = members.reduce(
+      (t, m) => ({
+        n: t.n + (m.estimated?.instalments ?? 0) + (m.estimated?.pending ?? 0),
+        amount: t.amount + (m.estimated?.amount ?? 0) + (m.estimated?.pending_amount ?? 0),
+        running: t.running + (m.estimated?.in_progress ?? 0),
+      }),
+      { n: 0, amount: 0, running: 0 },
+    )
 
     return {
-      members, total, slices, history, flowsKnown, prev, change, asOf, historyPartial,
+      members, total, slices, history, flowsKnown, prev, change, asOf, valueDate, est, historyPartial,
       returns,
       holdings: category ? holdings.filter((h) => h.category === category) : holdings,
       allHoldings: holdings,
@@ -262,6 +287,11 @@ export default function App({ me }: { me: Me }) {
   const ready = view && data && data.members.length > 0
   const activeSips = view?.sips.filter((x) => x.status === "active") ?? []
   const upcoming = upcomingSips(view?.sips ?? [])
+  const oneDay = useMemo(() => byFund(daily), [daily])
+  const openDaily = () => {
+    setTab("insights")
+    requestAnimationFrame(() => document.getElementById("daily-returns")?.scrollIntoView({ behavior: "smooth", block: "start" }))
+  }
 
   const viewAll = (to: TabId, label: string) => (
     <button className="-my-2 py-2 text-primary underline-offset-4 hover:underline" onClick={() => setTab(to)}>
@@ -304,10 +334,17 @@ export default function App({ me }: { me: Me }) {
                     {multi ? <MemberSwitch members={data.members} value={who} onChange={switchMember} /> : <span />}
                     <span className="eyebrow">
                       {who === EVERYONE ? (multi ? `${data.members.length} members` : "") : view.members[0]?.name.split(" ")[0]}
-                      {view.asOf && <>{who === EVERYONE && !multi ? "" : " · "}{day(view.asOf)}</>}
+                      {view.valueDate && <>{who === EVERYONE && !multi ? "" : " · "}{day(view.valueDate)}</>}
                     </span>
                   </div>
                   <HeroFigures total={view.total} change={view.change} prev={view.prev} />
+                  {view.est.n > 0 && (
+                    <p className="mt-3 max-w-xl text-[13px] text-muted-foreground">
+                      At the latest NAV, with {view.est.n} SIP instalment{view.est.n === 1 ? "" : "s"} ({inr(view.est.amount)}) estimated since
+                      your statement of {day(view.asOf)}
+                      {view.est.running > 0 && <>, {view.est.running} still in progress</>}. A newer statement replaces the estimates.
+                    </p>
+                  )}
                   <div className="mt-6">
                     {view.returns?.complete ? (
                       <ReturnBoxes returns={view.returns} />
@@ -343,13 +380,16 @@ export default function App({ me }: { me: Me }) {
                   />
                 </Cell>
 
-                <Cell className="min-h-[172px] md:col-span-2 lg:col-span-4" delay={140}>
+                <Cell className="min-h-[172px] md:col-span-3 lg:col-span-3" delay={120} label="Today">
+                  <TodayTile daily={daily} onOpen={openDaily} />
+                </Cell>
+                <Cell className="min-h-[172px] md:col-span-3 lg:col-span-3" delay={160}>
                   <SipTile sips={activeSips} missing={view.sipsMissing.length > 0} />
                 </Cell>
-                <Cell className="min-h-[172px] md:col-span-2 lg:col-span-4" delay={190}>
+                <Cell className="min-h-[172px] md:col-span-3 lg:col-span-3" delay={200}>
                   <LargestTile holding={view.allHoldings[0]} total={view.total} />
                 </Cell>
-                <Cell className="min-h-[172px] md:col-span-2 lg:col-span-4" delay={240}>
+                <Cell className="min-h-[172px] md:col-span-3 lg:col-span-3" delay={240}>
                   <FundsTile holdings={view.allHoldings} />
                 </Cell>
 
@@ -391,7 +431,7 @@ export default function App({ me }: { me: Me }) {
                   title={category ?? "All funds"}
                   aside={category ? <button className="-my-2 py-2 text-primary hover:underline" onClick={() => setCategory(null)}>Show all funds</button> : undefined}
                 >
-                  <HoldingsTable holdings={view.holdings} total={view.total} members={memberMap} showMember={showMember} highlight={category ? null : hovered} />
+                  <HoldingsTable holdings={view.holdings} total={view.total} members={memberMap} showMember={showMember} highlight={category ? null : hovered} oneDay={oneDay} />
                 </Panel>
               </>
             )}
@@ -405,12 +445,12 @@ export default function App({ me }: { me: Me }) {
                     <Stat label="Active SIPs">{activeSips.length}</Stat>
                     <Stat label="Invested via these SIPs">{inr(activeSips.reduce((s, x) => s + x.invested, 0))}</Stat>
                     <Stat label="Next instalment">
-                      {day(activeSips.map((x) => x.next_date).filter(Boolean).sort()[0] ?? null)}
+                      {day(activeSips.map((x) => nextRun(x)?.date).filter(Boolean).sort()[0] ?? null)}
                     </Stat>
                   </dl>
                 )}
                 <Panel title="All SIPs">
-                  <SipTable sips={view.sips} members={memberMap} showMember={showMember} missing={view.sipsMissing} />
+                  <SipTable sips={view.sips} members={memberMap} showMember={showMember} missing={view.sipsMissing} onChanged={load} />
                 </Panel>
               </>
             )}
@@ -418,6 +458,12 @@ export default function App({ me }: { me: Me }) {
             {tab === "insights" && (
               <>
                 <PageTitle title="Insights" detail="Worked out from the uploaded statements." />
+
+                <div id="daily-returns" className="scroll-mt-24">
+                  <Panel title="Daily returns">
+                    <DailyReturns daily={daily} />
+                  </Panel>
+                </div>
 
                 <Panel title="Allocation">
                   <AllocationBreakdown holdings={view.allHoldings} total={view.total} />

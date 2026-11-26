@@ -19,18 +19,24 @@
 //
 // Privacy (§0.1): logs carry the household id's outcome, counts and durations only.
 import { marketStatus, type MarketStatus } from '../routes/market'
-import { istToday, ymdToIso } from '../market/amfi'
+import { addDays, istToday, ymdToIso } from '../market/amfi'
+import { HOLIDAY_LOOKBACK_DAYS, holidayDates } from '../market/holidays'
 import { BENCHMARK_CODE } from '../market/store'
 import { apiKey, budgetLeft, recordWants, requestStocks, stockData, stocksVersion } from '../market/stocks'
 import { blobKeys, deleteBlobs, getJsonBlob, isUuid } from './blob'
 import { FLAG_GZIP, hmacHex, toBytes, type Vault } from './crypto'
+import { deleteDailyCache } from './daily-cache'
 import { engineApi } from './engine-client'
 import { waitDelay } from './jobs'
 import { cleanName, fieldKey } from './members'
+import { sipFieldKey } from './sip-overrides'
 import { Tenant } from './tenant'
 
-/** Bump to rebuild every snapshot (a change in what the Worker sends to /build). 2: stock data (M11). */
-export const SNAPSHOT_VERSION = 2
+/**
+ * Bump to rebuild every snapshot (a change in what the Worker sends to /build, or in what the engine builds).
+ * 2: stock data (M11). 3: units timelines, estimated SIPs and values at the latest NAV (M12).
+ */
+export const SNAPSHOT_VERSION = 3
 /** Debounce: every trigger's message arrives this much later (§10.2). */
 export const REBUILD_DELAY_S = 10
 /** A claim outlives the engine call (100 s) and matches the batch lease (120 s). */
@@ -123,8 +129,14 @@ export function usedStatements(rows: StatementRow[]): StatementRow[] {
   return [...out, ...rta.values()].sort((a, b) => a.member_id.localeCompare(b.member_id) || a.as_of.localeCompare(b.as_of) || a.id.localeCompare(b.id))
 }
 
-/** `stocks`: stock_state.version, so a build after the stocks job stored something isn't skipped as current. */
-export type MarketInputs = { marketDate: string; navKey: string; stocks?: number }
+/**
+ * `stocks`: stock_state.version, so a build after the stocks job stored something isn't skipped as current.
+ * `holidays`: exchange holidays for SIP run days (M12); a new one rebuilds.
+ */
+export type MarketInputs = { marketDate: string; navKey: string; stocks?: number; holidays?: string[] }
+
+/** The user's SIP skips and cancels (M12): `sip_enc` is sealed {isin, folio}. */
+export type OverrideRow = { id: string; member_id: string; kind: 'skip' | 'cancel'; due: string; sip_enc: number[] }
 
 /** The market day a build uses, and the key the engine caches NAV series by (it changes as the night's rows land). */
 export function marketInputs(status: MarketStatus, now = Date.now()): MarketInputs {
@@ -138,11 +150,13 @@ const hex = (b: ArrayLike<number> | null) => (b ? Array.from(toBytes(b), (x) => 
  * What the snapshot depends on, as an opaque 32-hex HMAC: the statements used, each member's (sealed) name, the market
  * day, the stock data version and SNAPSHOT_VERSION. Keyed with PAN_PEPPER, so it reveals nothing.
  */
-export async function inputsHash(env: { PAN_PEPPER: string }, market: MarketInputs, statements: StatementRow[], members: MemberRow[]): Promise<string> {
+export async function inputsHash(env: { PAN_PEPPER: string }, market: MarketInputs, statements: StatementRow[], members: MemberRow[], overrides: { id: string }[] = []): Promise<string> {
   const doc = JSON.stringify({
     v: SNAPSHOT_VERSION,
     nav: market.navKey,
     st: market.stocks ?? 0,
+    hol: market.holidays ?? [],
+    o: overrides.map((o) => o.id).sort(),
     s: statements.map((s) => s.id).sort(),
     m: members.map((m) => [m.id, hex(m.display_name_enc)]).sort(),
   })
@@ -179,22 +193,24 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
   const started = Date.now()
 
   // 1. Inputs and their hash.
-  const [hRes, sRes, mRes, snapRes] = await db.batch([
+  const [hRes, sRes, mRes, snapRes, oRes] = await db.batch([
     db.prepare('SELECT dek_wrapped, kek_version, owner_user_id FROM household WHERE id = ?1').bind(hid),
     db.prepare('SELECT id, member_id, kind, as_of, created_at, blob_key FROM statement WHERE household_id = ?1').bind(hid),
     db.prepare('SELECT id, display_name_enc FROM member WHERE household_id = ?1').bind(hid),
     db.prepare(`SELECT ${SNAPSHOT_COLUMNS} FROM snapshot WHERE household_id = ?1`).bind(hid),
+    db.prepare('SELECT id, member_id, kind, due, sip_enc FROM sip_override WHERE household_id = ?1').bind(hid),
   ])
   const household = hRes!.results[0] as { dek_wrapped: number[]; kek_version: number; owner_user_id: string } | undefined
   const snap = snapRes!.results[0] as SnapshotRow | undefined
   if (!household || !snap) return done(env, msg, 'gone')
   const loadedAt = now
   // Fresh, not the 5-minute edge copy: right after a day turns final, prebuild messages must see the new nav_key.
-  const [status, stocks] = await Promise.all([marketStatus(env), stocksVersion(env)])
-  const market = { ...marketInputs(status, now), stocks }
+  const [status, stocks, holidays] = await Promise.all([marketStatus(env), stocksVersion(env), holidayDates(env, addDays(istToday(now), -HOLIDAY_LOOKBACK_DAYS))])
+  const market = { ...marketInputs(status, now), stocks, holidays }
   const used = usedStatements(sRes!.results as StatementRow[])
   const members = mRes!.results as MemberRow[]
-  const hash = await inputsHash(env, market, used, members)
+  const overrides = oRes!.results as OverrideRow[]
+  const hash = await inputsHash(env, market, used, members, overrides)
 
   if (!used.length) return clearSnapshot(env, msg, snap, hash, market, loadedAt)
 
@@ -229,7 +245,7 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
     // 4. Decrypt, build, seal.
     const t = new Tenant(env, hid, household.owner_user_id)
     const vault = await t.vaultFromRow(household)
-    const request = await buildRequest(env, vault, used, members, market, now)
+    const request = await buildRequest(env, vault, used, members, market, now, overrides)
     holding = false
     const built = await engineApi.build(env, slot, request.body)
     if (!built.ok) throw new BuildError(built.code)
@@ -237,8 +253,8 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
     await env.BUCKET.put(newKey, await vault.seal(newKey, built.gzip, FLAG_GZIP), { httpMetadata: { contentType: 'application/octet-stream' } })
 
     // 5. Compare-and-set the pointer; read the previous blob and any newer request in the same transaction.
-    const [prevRes, cas] = await db.batch<{ blob_key: string | null; requested_at: number | null }>([
-      db.prepare('SELECT blob_key, requested_at FROM snapshot WHERE household_id = ?1').bind(hid),
+    const [prevRes, cas] = await db.batch<{ blob_key: string | null; requested_at: number | null; inputs_hash: string | null }>([
+      db.prepare('SELECT blob_key, requested_at, inputs_hash FROM snapshot WHERE household_id = ?1').bind(hid),
       db
         .prepare(
           `UPDATE snapshot SET blob_key = ?1, inputs_hash = ?2, market_date = ?3, status = 'ready', building_hash = NULL,
@@ -253,10 +269,11 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
       return done(env, msg, 'superseded')
     }
     const prev = prevRes!.results[0]
-    // 6. The previous blob goes (M12 also drops its daily/ cache entries here).
+    // 6. The previous blob goes, and the daily series cached for its inputs (§10.2 step 7, M12).
     if (prev?.blob_key && prev.blob_key !== newKey) {
       await deleteBlobs(env, hid, [prev.blob_key]).catch((e) => console.error('blob_delete_failed', (e as Error).name, 1))
     }
+    if (prev?.inputs_hash && prev.inputs_hash !== hash) await deleteDailyCache(env, hid, prev.inputs_hash)
     console.log('rebuild_ok', {
       statements: used.length,
       members: members.length,
@@ -343,6 +360,7 @@ async function clearSnapshot(env: Env, msg: RebuildMessage, snap: SnapshotRow, h
   if (!(upd!.meta.changes ?? 0)) return done(env, msg, 'taken') // a build is running; its recheck asks again
   const prev = prevRes!.results[0]?.blob_key
   if (prev) await deleteBlobs(env, hid, [prev]).catch((e) => console.error('blob_delete_failed', (e as Error).name, 1))
+  await deleteDailyCache(env, hid)
   return done(env, msg, 'emptied')
 }
 
@@ -354,7 +372,7 @@ type BuildItem = { member_id: string; name: string | null; data: Record<string, 
  * whose NAV history is still being backfilled (`refresh`: the engine reads them fresh, and we build again later), and
  * the stored stock data for the held funds (M11).
  */
-async function buildRequest(env: Env, vault: Vault, used: StatementRow[], members: MemberRow[], market: MarketInputs, now: number) {
+async function buildRequest(env: Env, vault: Vault, used: StatementRow[], members: MemberRow[], market: MarketInputs, now: number, overrideRows: OverrideRow[] = []) {
   const names = new Map<string, string | null>()
   for (const m of members) names.set(m.id, m.display_name_enc ? await vault.openText(fieldKey.name(m.id), m.display_name_enc) : null)
   const items: BuildItem[] = []
@@ -393,11 +411,24 @@ async function buildRequest(env: Env, vault: Vault, used: StatementRow[], member
     if (r.status === 'pending') refresh.add(String(r.amfi_code))
   }
   const stocks = await stockData(env, [...isins], now)
+  const overrides = []
+  for (const o of overrideRows) {
+    const sip = JSON.parse(await vault.openText(sipFieldKey(o.id), o.sip_enc)) as { isin: string; folio: string | null }
+    overrides.push({ member_id: o.member_id, isin: sip.isin, folio: sip.folio, kind: o.kind, due: o.due })
+  }
   const body = JSON.stringify({
     statements: items,
-    market: { market_date: market.marketDate, nav_key: market.navKey, isin_to_code: isinToCode, refresh: [...refresh], stocks: stocks.data },
+    market: {
+      market_date: market.marketDate,
+      nav_key: market.navKey,
+      isin_to_code: isinToCode,
+      refresh: [...refresh],
+      stocks: stocks.data,
+      holidays: market.holidays ?? [],
+    },
     today: ymdToIso(istToday(now)),
     format: 'gzip',
+    overrides,
   })
   return { body, refresh: [...refresh], stocksWaiting: stocks.waiting }
 }

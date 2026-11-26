@@ -1,8 +1,9 @@
-import { RepeatIcon } from "lucide-react"
+import { ArrowDownIcon, RepeatIcon } from "lucide-react"
+import { useState } from "react"
 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import type { Holding, Member } from "@/lib/api"
+import type { DayChange, Holding, Member } from "@/lib/api"
 import { categoryColor, inr, nav, pct, per, signed, units } from "@/lib/format"
 import { useOpenFund } from "@/lib/fund-context"
 import { cn } from "@/lib/utils"
@@ -14,10 +15,25 @@ type Props = {
   members: Map<string, Member>
   showMember: boolean
   highlight: string | null
+  /** Today's change per `${member_id}|${isin}` (plan §10.5.4 "1D"), from /api/portfolio/daily. */
+  oneDay?: Map<string, DayChange & { nav_date: string }>
 }
 
-export function HoldingsTable({ holdings, total, members, showMember, highlight }: Props) {
+function OneDay({ d, className }: { d: (DayChange & { nav_date: string }) | undefined; className?: string }) {
+  if (!d) return <span className={cn("text-muted-foreground", className)}>—</span>
+  return (
+    <span className={cn(d.change >= 0 ? "text-gain" : "text-loss", className)}>
+      {signed(d.change, inr)}
+      {d.pct != null && <span className="ml-1 text-xs">{signed(d.pct * 100, (n) => pct(n, 2))}</span>}
+    </span>
+  )
+}
+
+export function HoldingsTable({ holdings, total, members, showMember, highlight, oneDay }: Props) {
   const openFund = useOpenFund()
+  const [by1d, setBy1d] = useState(false)
+  const key = (h: Holding) => `${h.member_id}|${h.isin}`
+  const rows = by1d ? [...holdings].sort((a, b) => (oneDay?.get(key(b))?.change ?? -Infinity) - (oneDay?.get(key(a))?.change ?? -Infinity)) : holdings
   return (
     <Table>
       <TableHeader>
@@ -26,11 +42,24 @@ export function HoldingsTable({ holdings, total, members, showMember, highlight 
           <TableHead className="hidden px-4 text-right md:table-cell">Units</TableHead>
           <TableHead className="hidden px-4 text-right md:table-cell">NAV</TableHead>
           <TableHead className="px-4 text-right">Value</TableHead>
+          {oneDay && (
+            <TableHead className="hidden px-4 text-right lg:table-cell" aria-sort={by1d ? "descending" : "none"}>
+              <button
+                type="button"
+                onClick={() => setBy1d((v) => !v)}
+                className="-my-2 inline-flex items-center gap-1 py-2 hover:text-foreground"
+                title={by1d ? "Sort by value" : "Sort by today's change"}
+              >
+                1D
+                <ArrowDownIcon className={cn("size-3 transition-opacity", by1d ? "opacity-100" : "opacity-30")} />
+              </button>
+            </TableHead>
+          )}
           <TableHead className="hidden pr-0 text-right sm:table-cell">Share</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {holdings.map((h) => {
+        {rows.map((h) => {
           const share = total ? (h.value / total) * 100 : 0
           const dim = highlight && highlight !== h.category
           return (
@@ -60,6 +89,7 @@ export function HoldingsTable({ holdings, total, members, showMember, highlight 
               <TableCell className="hidden px-4 text-right text-muted-foreground md:table-cell">{nav(h.nav)}</TableCell>
               <TableCell className="px-4 text-right">
                 <div className="font-medium">{inr(h.value)}</div>
+                {oneDay && <div className="text-xs lg:hidden"><OneDay d={oneDay.get(key(h))} /></div>}
                 {h.invested ? (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -77,6 +107,11 @@ export function HoldingsTable({ holdings, total, members, showMember, highlight 
                   </Tooltip>
                 ) : null}
               </TableCell>
+              {oneDay && (
+                <TableCell className="hidden px-4 text-right whitespace-nowrap lg:table-cell">
+                  <OneDay d={oneDay.get(key(h))} />
+                </TableCell>
+              )}
               <TableCell className="hidden pr-0 sm:table-cell">
                 <div className="flex items-center justify-end gap-3">
                   <div className="h-1.5 w-20 overflow-hidden rounded-full bg-muted">

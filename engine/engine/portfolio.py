@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import calendar
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
-from . import market, stocks
+from . import holidays, market, projection, stocks
 from .analysis import asset_class, category_from_sebi, member_analysis, scheme_info
 from .market import NavSeries
 
@@ -286,13 +286,33 @@ def market_requirements(statements: list[dict], isin_to_code: dict[str, str] | N
     }
 
 
-def build_portfolio(statements: list[dict], market_data: dict | None = None, today: date | None = None) -> dict:
+def _overrides_by_member(overrides: list[dict] | None) -> dict[str, dict]:
+    """[{member_id, isin, folio, kind: skip|cancel, due}] → {member_id: {(folio, isin): {"skip": set, "cancel": date}}}.
+    The earliest cancel wins."""
+    out: dict[str, dict] = {}
+    for o in overrides or []:
+        try:
+            key = (o.get("folio"), o["isin"])
+            slot = out.setdefault(o["member_id"], {}).setdefault(key, {"skip": set(), "cancel": None})
+            due = str(o["due"])[:10]
+        except (KeyError, TypeError, AttributeError):
+            continue
+        if o.get("kind") == "skip":
+            slot["skip"].add(due)
+        elif o.get("kind") == "cancel" and (slot["cancel"] is None or due < slot["cancel"]):
+            slot["cancel"] = due
+    return out
+
+
+def build_portfolio(statements: list[dict], market_data: dict | None = None, today: date | None = None,
+                    overrides: list[dict] | None = None) -> dict:
     """Newest CDSL + newest CAMS/KFintech statement per member, merged into one family view.
 
     statements:  [{"member_id", "pan", "name"?, "data"}]: decrypted parsed statements of one household.
     market_data: {"navs": {amfi_code: [[iso_date, nav], ...]}, "isin_to_code": {isin: amfi_code},
                   "stocks": stock data (see stocks.py) or None}. Missing pieces degrade gracefully.
     today:       the build date (the caller's clock), so builds are reproducible.
+    overrides:   the user's SIP changes the statements can't show yet: skip one instalment, or cancel (M12).
     """
     market_data = market_data or {}
     today = today or date.today()
@@ -308,6 +328,8 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
     codes = _fund_codes(staged, market_data.get("isin_to_code") or {})
     navs = market.series_map(market_data.get("navs"))
     bench = navs.get(market.BENCHMARK_CODE)
+    hols = holidays.calendar(market_data.get("holidays"))
+    user_overrides = _overrides_by_member(overrides)
 
     for mid, cdsl, rta, merged, total, full_hist in sorted(staged, key=lambda s: -s[4]):
         pan = by_member[mid]["pan"]
@@ -339,6 +361,11 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
             h["sebi_category"] = scheme_info(h["isin"])[0]
         analysis = member_analysis(rta, cdsl, merged, today)
         members[-1]["analysis"] = {k: v for k, v in analysis.items() if k != "unrealised"}
+        member_sips: dict[str, list[dict]] = {}
+        for s in (rta or {}).get("sips", []):
+            member_sips.setdefault(s["isin"], []).append(s)
+        estimates: dict[str, dict] = {}
+        first = len(holdings)
         for h in merged:
             sebi = h["sebi_category"]
             holdings.append({
@@ -351,18 +378,60 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
                 "invested": h["invested"], "as_of": h["as_of"], "cashflows": h["cashflows"],
                 "tax": analysis["unrealised"].get(h["isin"]),  # long/short-term split, when lots are known
                 "returns": market.trailing_returns(navs.get(codes.get(h["isin"], ""))),
-                # what the same rupees on the same days would be worth in a Nifty 50 index fund
-                "benchmark_value": market.replay(h["cashflows"], bench, h["as_of"]),
             })
+            code = codes.get(h["isin"])
+            est = _carry_forward(holdings[-1], h, code, navs.get(code or ""), member_sips.get(h["isin"], []), rta,
+                                 by_member[mid].get("CDSL_ALL", []), today, hols, user_overrides.get(mid))
+            # what the same rupees on the same days would be worth in a Nifty 50 index fund
+            holdings[-1]["benchmark_value"] = market.replay(holdings[-1]["cashflows"], bench, holdings[-1]["as_of"])
+            if est:
+                estimates[h["isin"]] = est
+
+        mine = holdings[first:]
+        m = members[-1]
+        m["statement_total"] = m["total"]
+        m["total"] = round(sum(h["value"] for h in mine), 2)
+        m["value_date"] = max((h["as_of"] for h in mine), default=None)
+        inst = [i for e in estimates.values() for i in e["instalments"]]
+        running = [i for e in estimates.values() for i in e["instalments"] + e["pending"] if i["status"] == "in_progress"]
+        m["estimated"] = {"instalments": len(inst), "amount": round(sum(i["amount"] for i in inst), 2),
+                          "pending": sum(len(e["pending"]) for e in estimates.values()),
+                          "pending_amount": round(sum(i["amount"] for e in estimates.values() for i in e["pending"]), 2),
+                          "in_progress": len(running), "in_progress_amount": round(sum(i["amount"] for i in running), 2)}
+        m["history"] = _extend_history(m, mine, navs, estimates)
 
         activity.extend(_member_activity(mid, cdsl, rta))
+        for isin, e in estimates.items():
+            name = next(h["name"] for h in mine if h["isin"] == isin)
+            for i in e["instalments"] + e["pending"]:
+                activity.append({"member_id": mid, "isin": isin, "name": name, "date": i["date"], "units": i["units"] or 0.0,
+                                 "amount": i["amount"], "sip": True, "kind": "sip", "source": "Estimate", "estimated": True,
+                                 "status": i["status"], "due": i["due"], "moved": i["moved"], "units_by": i["units_by"]})
 
         # SIPs only come from CAMS/KFintech (CDSL doesn't say which purchases are SIPs)
         cats = {h["isin"]: categorize(h["raw_name"], h["asset_type"], h["isin"]) for h in merged}
         for s in (rta or {}).get("sips", []):
-            sips.append({**s, "member_id": mid, "name": display_name(s["name"]),
-                         "category": cats.get(s["isin"], categorize(s["name"], "mutual_fund", s["isin"]))})
-        members[-1]["sips_known"] = rta is not None
+            day = projection.sip_day(rta.get("transactions", []), s.get("folio"), s["isin"])
+            series = navs.get(codes.get(s["isin"], ""))
+            o = projection.override_for(user_overrides.get(mid), s)
+            status = "cancelled" if s["status"] == "active" and o["cancel"] else s["status"]
+            # the next run date, moved past weekends and holidays as the broker would (owner request, M12)
+            nxt = projection.next_run(s, day, today, series, hols, o["skip"]) if status == "active" else None
+            e = estimates.get(s["isin"], {})
+            done = [i for i in e.get("instalments", []) if i["folio"] == s.get("folio")]
+            ran = sorted(done + [i for i in e.get("pending", []) if i["folio"] == s.get("folio")], key=lambda i: i["date"])
+            latest = ran[-1] if ran else None
+            sips.append({**s, "status": status, "member_id": mid, "name": display_name(s["name"]),
+                         "category": cats.get(s["isin"], categorize(s["name"], "mutual_fund", s["isin"])),
+                         "sip_day": day, "next_date": nxt["date"] if nxt else None,
+                         "next_due": nxt["due"] if nxt else None, "next_moved": nxt["moved"] if nxt else None,
+                         "latest": ({k: latest[k] for k in ("due", "date", "moved", "amount", "status", "units_by")}
+                                    if latest else None),
+                         "estimated": {"instalments": len(done), "amount": round(sum(i["amount"] for i in done), 2)},
+                         # the user's own changes: an upcoming instalment they skipped, the day they cancelled
+                         "skipped": sorted(d for d in o["skip"] if d >= (today - timedelta(days=10)).isoformat()),
+                         "cancelled_on": o["cancel"]})
+        m["sips_known"] = rta is not None
 
     # Label each holding with its active SIP(s): same member and fund (a fund can have SIPs in two folios)
     active: dict[tuple, list[dict]] = {}
@@ -384,6 +453,95 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
 
     return {"members": members, "holdings": holdings, "activity": activity, "sips": sips, "benchmark": benchmark,
             "stocks": stock_data}
+
+
+def _carry_forward(out: dict, h: dict, code: str | None, series: NavSeries | None, sips: list[dict], rta: dict | None,
+                   cdsl_all: list[dict], today: date, hols: frozenset[str] = holidays.FALLBACK_HOLIDAYS,
+                   overrides: dict | None = None) -> dict | None:
+    """Units over time, estimated SIP instalments since the statement, and the value at the latest NAV (§10.5.1).
+
+    `out` is the snapshot holding (changed in place); `h` the merged statement row. The statement's own figures stay
+    in `out["statement"]`. Returns the estimate ({"instalments", "pending"}) or None when there's nothing to estimate.
+    """
+    as_of = h["as_of"]
+    out["statement"] = {"units": h["units"], "nav": h["nav"], "value": h["value"], "as_of": as_of}
+    out["amfi_code"] = code
+    out["units_timeline"], out["units_exact"], out["payouts"], out["estimated"] = None, False, [], None
+    if h["asset_type"] != "mutual_fund" or not code:
+        return None  # ETFs and shares have no AMFI NAV: shown as on the statement, left out of daily returns
+    rta_for = rta if any(s.get("isin") == h["isin"] for s in (rta or {}).get("schemes", [])) else None
+    timeline, exact = projection.units_timeline(h["isin"], rta_for, cdsl_all, as_of, h["units"])
+    est = (projection.estimate_sips(sips, (rta or {}).get("transactions", []), as_of, series, today, hols, overrides)
+           if sips else {"instalments": [], "pending": []})
+    inst = est["instalments"]
+    out["units_timeline"] = projection.extend_timeline(timeline, inst)
+    out["units_exact"] = exact
+    if rta_for:
+        paid: dict[str, float] = {}
+        for t in rta_for.get("transactions", []):
+            if t.get("isin") == h["isin"] and t.get("type") == "DIVIDEND_PAYOUT" and t.get("amount"):
+                paid[t["date"][:10]] = paid.get(t["date"][:10], 0.0) + abs(t["amount"])
+        out["payouts"] = [[d, round(a, 2)] for d, a in sorted(paid.items())]
+
+    extra = sum(i["units"] for i in inst)
+    amount = sum(i["amount"] for i in inst)
+    if series and series.dates and series.dates[-1] > as_of[:10]:
+        units = round((h["units"] or 0) + extra, 4)
+        price = series.navs[-1]
+        out.update(units=units, nav=price, value=round(units * price, 2), as_of=series.dates[-1])
+    if inst:
+        if out["invested"] is not None:
+            out["invested"] = round(out["invested"] + amount, 2)
+        if out["cashflows"] is not None:
+            flows = {d: a for d, a in out["cashflows"]}
+            for i in inst:
+                flows[i["date"]] = round(flows.get(i["date"], 0.0) - i["amount"], 2)
+            out["cashflows"] = [[d, a] for d, a in sorted(flows.items()) if a]
+    if not inst and not est["pending"]:
+        return None
+    running = [i for i in inst + est["pending"] if i["status"] == "in_progress"]
+    out["estimated"] = {"since": as_of, "instalments": len(inst), "amount": round(amount, 2), "units": round(extra, 4),
+                        "pending": len(est["pending"]), "in_progress": len(running),
+                        "in_progress_amount": round(sum(i["amount"] for i in running), 2)}
+    return est
+
+
+def _extend_history(m: dict, holdings: list[dict], navs: dict[str, NavSeries], estimates: dict[str, dict]) -> list[dict]:
+    """Month-end values after the newest statement, up to the latest NAV, from the units timelines (estimated SIPs
+    included). Only when the history already covers every fund and every fund has NAVs; otherwise unchanged."""
+    hist = m["history"]
+    since, value_date = m.get("as_of"), m.get("value_date")
+    if not hist or not m["history_covers_all"] or not holdings or not since or not value_date or value_date <= since:
+        return hist
+    pairs = [(h, navs.get(h.get("amfi_code") or "")) for h in holdings]
+    if any(s is None or not h.get("units_timeline") for h, s in pairs):
+        return hist
+    flows = m["history_source"] == "transactions"
+    est_by_month: dict[str, float] = {}
+    for e in estimates.values():
+        for i in e["instalments"]:
+            est_by_month[i["date"][:7]] = est_by_month.get(i["date"][:7], 0.0) + i["amount"]
+    out = {p["month"]: dict(p) for p in hist}
+    y, mo = int(since[:4]), int(since[5:7])
+    while f"{y}-{mo:02d}" <= value_date[:7]:
+        key, end = f"{y}-{mo:02d}", projection.month_end(y, mo)
+        if end > since:
+            day = min(end, value_date)
+            total = 0.0
+            for h, s in pairs:
+                units = projection.units_on(h["units_timeline"], day)
+                if units < 1e-6:
+                    continue
+                price = s.on(day)
+                if price is None:
+                    return [out[k] for k in sorted(out)]
+                total += units * price
+            point = {"month": key, "value": round(total, 2)}
+            if flows:
+                point["flow"] = round(out.get(key, {}).get("flow", 0.0) + est_by_month.get(key, 0.0), 2)
+            out[key] = point
+        y, mo = (y + 1, 1) if mo == 12 else (y, mo + 1)
+    return [out[k] for k in sorted(out)]
 
 
 DEDUPE_WINDOW_DAYS = 7

@@ -5,6 +5,8 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import type { Activity, Holding, Member, Returns, Sip, StockData } from "@/lib/api"
 import { categoryColor, day, inr, inrExact, month, nav, pct, per, signed, units } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import { estimateNote, isBuy, unitsText } from "@/lib/activity"
+import { inProgress, movedNote, nextRun } from "@/lib/sips"
 import { STOCK_TYPES } from "@/components/stock-exposure"
 import { holdingFlows, xirr } from "@/lib/xirr"
 
@@ -104,6 +106,12 @@ function Body({ h, member, showMember, activity, sips, benchmark, stocks, allTxn
             </span>
           )}
         </div>
+        {h.estimated && h.estimated.instalments + h.estimated.pending > 0 && (
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            Includes {h.estimated.instalments + h.estimated.pending} estimated SIP instalment{h.estimated.instalments + h.estimated.pending === 1 ? "" : "s"} since
+            your statement of {day(h.estimated.since)}. A newer statement replaces the estimate.
+          </p>
+        )}
         {h.sip && (
           <div className="mt-2 flex flex-wrap gap-2 text-xs">
             <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary">
@@ -139,7 +147,18 @@ function Body({ h, member, showMember, activity, sips, benchmark, stocks, allTxn
           />
         ) : null}
         {h.folio && <Fact label="Folio" value={h.folio} />}
-        {fundSips[0] && <Fact label="Next SIP" value={day(fundSips[0].next_date)} detail={`${fundSips.reduce((s, x) => s + x.instalments, 0)} instalments so far`} />}
+        {fundSips[0] && (() => {
+          const run = nextRun(fundSips[0])
+          const running = inProgress(fundSips[0])
+          const moved = run ? movedNote(run.moved, run.due, day) : null
+          return (
+            <Fact
+              label={running ? "SIP status" : "Next SIP"}
+              value={running ? "In progress" : day(run?.date ?? null)}
+              detail={running ? `Debited ${day(running.date)}, units by ${day(running.units_by)}` : moved ?? `${fundSips.reduce((s, x) => s + x.instalments, 0)} instalments so far`}
+            />
+          )
+        })()}
       </dl>
 
       {vsNifty != null && (
@@ -205,13 +224,14 @@ function Body({ h, member, showMember, activity, sips, benchmark, stocks, allTxn
             {shownTxns.map((a, i) => (
               <li key={`${a.date}-${i}`} className="flex items-baseline justify-between gap-4 py-2.5">
                 <div>
-                  <div>{KIND_LABEL[a.kind] ?? (a.units > 0 ? "Bought" : "Sold")}</div>
+                  <div>{KIND_LABEL[a.kind] ?? (isBuy(a) ? "Bought" : "Sold")}</div>
                   <div className="text-xs text-muted-foreground">{day(a.date)}</div>
+                  {estimateNote(a) && <div className="text-xs text-muted-foreground">{estimateNote(a)}</div>}
                 </div>
                 <div className="text-right">
-                  <div className={a.units < 0 ? "text-loss" : ""}>{a.amount != null ? inr(Math.abs(a.amount)) : "—"}</div>
+                  <div className={!isBuy(a) ? "text-loss" : ""}>{a.amount != null ? inr(Math.abs(a.amount)) : "—"}</div>
                   <div className="text-xs text-muted-foreground">
-                    {a.units > 0 ? "+" : "−"}{units(Math.abs(a.units))} units
+                    {a.estimated && !a.units ? unitsText(a) : <>{isBuy(a) ? "+" : "−"}{units(Math.abs(a.units))} units</>}
                     {a.amount && a.units ? <> at ₹{nav(Math.abs(a.amount / a.units))}</> : null}
                   </div>
                 </div>

@@ -4,7 +4,7 @@ import type { Context } from 'hono'
 import type { AppBindings } from '../types'
 import { hmacHex } from './crypto'
 
-export type AuditEvent = 'member_renamed' | 'member_deleted' | 'statement_added' | 'statement_deleted'
+export type AuditEvent = 'member_renamed' | 'member_deleted' | 'statement_added' | 'statement_deleted' | 'sip_skipped' | 'sip_skip_undone' | 'sip_cancelled'
 
 /**
  * INSERT for one audit row. With `onlyIfChanged`, the row is written only when the previous statement in the same

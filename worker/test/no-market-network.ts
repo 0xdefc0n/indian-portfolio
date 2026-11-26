@@ -5,7 +5,7 @@
 // Builds also ask for the stocks job (M11): those sends are recorded instead (test/stocks.test.ts reads them).
 import { stocksQueue } from '../src/market/stocks'
 
-const MARKET_HOSTS = /(^|\.)(amfiindia\.com|mfapi\.in|bharatstockapi\.com)$/
+const MARKET_HOSTS = /(^|\.)(amfiindia\.com|mfapi\.in|bharatstockapi\.com|upstox\.com)$/
 const realFetch = globalThis.fetch
 ;(globalThis as { pfRealFetch?: typeof fetch }).pfRealFetch = realFetch // test/stocks.live.test.ts only
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
