@@ -2,6 +2,7 @@
 import { Link } from "wouter"
 
 import { AccountMenu } from "@/components/account-menu"
+import { LegalFooter } from "@/components/legal-footer"
 import { ThemeToggle } from "@/components/theme-toggle"
 import type { Me } from "@/lib/api"
 
@@ -40,7 +41,8 @@ export function PageShell({ me, children }: { me: Me; children: React.ReactNode 
   return (
     <div className="min-h-svh">
       <AppHeader me={me} />
-      <main className="mx-auto max-w-[1240px] space-y-8 px-4 pt-3 pb-20 sm:px-7 sm:pt-4">{children}</main>
+      <main className="mx-auto max-w-[1240px] space-y-8 px-4 pt-3 pb-12 sm:px-7 sm:pt-4">{children}</main>
+      <LegalFooter />
     </div>
   )
 }

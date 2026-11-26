@@ -2,7 +2,9 @@
 import { ArrowLeftIcon, Loader2Icon, MailIcon } from "lucide-react"
 import { type FormEvent, useEffect, useState } from "react"
 
-import { ThemeToggle } from "@/components/theme-toggle"
+import { Link } from "wouter"
+
+import { PublicShell } from "@/components/public-shell"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -18,26 +20,13 @@ const LINK_ERRORS: Record<string, string> = {
 }
 const DEFAULT_LINK_ERROR = "That sign-in link has expired or was already used. Send yourself a new one."
 
-function Wordmark() {
-  return (
-    <div className="flex items-center gap-2.5">
-      <span className="grid size-[30px] place-items-center rounded-[9px] bg-foreground text-sm font-bold text-background">₹</span>
-      <span className="font-semibold tracking-tight">PocketFolio</span>
-    </div>
-  )
-}
-
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex min-h-svh flex-col">
-      <header className="mx-auto flex h-[68px] w-full max-w-[1240px] items-center justify-between px-4 sm:px-7">
-        <Wordmark />
-        <ThemeToggle />
-      </header>
-      <main className="flex flex-1 items-start justify-center px-4 pt-10 pb-16 sm:pt-20">
+    <PublicShell home={false}>
+      <main className="flex items-start justify-center px-4 pt-10 pb-16 sm:pt-20">
         <section className="w-full max-w-[400px] rounded-[22px] bg-surface p-5 ring-1 ring-border sm:p-7">{children}</section>
       </main>
-    </div>
+    </PublicShell>
   )
 }
 
@@ -45,6 +34,7 @@ export function LoginPage() {
   const params = new URLSearchParams(window.location.search)
   const next = safeNext(params.get("next"))
   const errorParam = params.get("error")
+  const deleted = params.get("deleted") === "1"
   const [siteKey, setSiteKey] = useState<string | null>(null)
   const [email, setEmail] = useState("")
   const [sentTo, setSentTo] = useState<string | null>(null)
@@ -153,6 +143,11 @@ export function LoginPage() {
     <Shell>
       <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
       <p className="mt-1.5 text-muted-foreground">Your family's mutual funds, in one place.</p>
+      {deleted && (
+        <p className="mt-4 rounded-xl bg-surface-2 p-3 text-sm ring-1 ring-border" role="status">
+          Your account and all its data were deleted. We've emailed you a confirmation.
+        </p>
+      )}
 
       <Button size="lg" className="mt-7 h-11 w-full" onClick={google} disabled={busy !== null}>
         {busy === "google" && <Loader2Icon className="animate-spin" />}
@@ -185,6 +180,11 @@ export function LoginPage() {
         </Button>
         <p className="text-xs text-muted-foreground">We'll email you a sign-in link and a 6-digit code. No password needed.</p>
       </form>
+      <p className="mt-6 text-xs text-muted-foreground">
+        By continuing, you agree to the{" "}
+        <Link href="/terms" className="text-primary underline-offset-4 hover:underline">Terms</Link> and the{" "}
+        <Link href="/privacy" className="text-primary underline-offset-4 hover:underline">Privacy policy</Link>.
+      </p>
     </Shell>
   )
 }

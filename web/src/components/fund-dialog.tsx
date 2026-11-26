@@ -160,6 +160,9 @@ function Body({ h, member, showMember, activity, sips, benchmark, stocks, allTxn
           )
         })()}
       </dl>
+      {h.tax && (
+        <p className="-mt-2 text-xs text-muted-foreground">Long-term and short-term splits are for information only, not tax or investment advice.</p>
+      )}
 
       {vsNifty != null && (
         <Section title="Versus the Nifty 50">

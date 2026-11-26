@@ -264,6 +264,12 @@ const MESSAGES: Record<string, string> = {
   sip_cancelled: "This SIP is cancelled in PocketFolio.",
   too_many_changes: "Too many SIP changes saved. Add a newer statement to clear the old ones.",
   confirm_required: "Confirm the cancellation to continue.",
+  // Privacy (M14)
+  adult_required: "Confirm that you're 18 or older to continue.",
+  notice_changed: "The privacy notice has just changed. Reload to read the new one.",
+  export_limit: "You've downloaded your data 3 times today. Try again tomorrow.",
+  reauth_required: "For your safety, sign in again to delete your account.",
+  consent_required: "Accept the privacy notice to continue.",
 }
 
 /** A refused API call: `code` is the Worker's stable error code, `data` the rest of its JSON body. */
@@ -306,6 +312,18 @@ export class SignedOut extends Error {
   name = "SignedOut"
 }
 
+/**
+ * 403 consent_required (M14): the notice changed while the app was open. Reloading shows the consent screen, since
+ * /api/me then says consent_ok: false. Throws SignedOut so callers stay quiet, as for a 401.
+ */
+async function consentGate(r: Response): Promise<void> {
+  if (r.status !== 403) return
+  const body = await r.clone().json().catch(() => null)
+  if (body?.code !== "consent_required") return
+  window.location.reload()
+  throw new SignedOut("Consent required")
+}
+
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init)
   // Global 401 handler (plan §13 item 8): the session ended, so go to /login and come back here afterwards.
@@ -313,6 +331,7 @@ async function call<T>(url: string, init?: RequestInit): Promise<T> {
     goToLogin()
     throw new SignedOut("Signed out")
   }
+  await consentGate(r)
   if (!r.ok) throw await readError(r)
   return r.json()
 }
@@ -327,6 +346,8 @@ export type Me = {
   user: { name: string; email: string; image: string | null }
   household: { id: string; created_at: number }
   consent_ok: boolean
+  /** The privacy notice version the server wants accepted (M14). */
+  notice_version?: string
 }
 
 /** GET /api/members (plan §9.2). Names are null until a statement or a rename gives one. */
@@ -360,6 +381,7 @@ async function raw(url: string): Promise<Response> {
     goToLogin()
     throw new SignedOut("Signed out")
   }
+  await consentGate(r)
   if (!r.ok) throw await readError(r)
   return r
 }
@@ -407,6 +429,24 @@ export const api = {
     call<{ member: { id: string; name: string } }>(`/api/members/${encodeURIComponent(id)}`, { ...json({ name }), method: "PATCH" }),
   deleteMember: (id: string) => call<{ ok: true }>(`/api/members/${encodeURIComponent(id)}`, { method: "DELETE" }),
   me: () => call<Me>("/api/me"),
+  /** Accept the privacy notice (plan §12): the 18+ box is part of it. */
+  consent: (notice_version: string) => call<{ ok: true }>("/api/consent", json({ notice_version, adult: true })),
+  /** Everything PocketFolio holds about the user, decrypted (DPDP access right), saved as a JSON file. */
+  downloadMyData: async () => {
+    const r = await raw("/api/account/export")
+    const blob = await r.blob()
+    const name = /filename="([^"]+)"/.exec(r.headers.get("Content-Disposition") ?? "")?.[1] ?? "pocketfolio-export.json"
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = name
+    document.body.append(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  },
+  /** Delete the account and everything in it (crypto-shred). Needs a sign-in from the last 10 minutes. */
+  deleteAccount: () => call<{ ok: true }>("/api/account", { ...json({ confirm: "DELETE" }), method: "DELETE" }),
   config: () => call<AppConfig>("/api/config"),
   requestStatement: (body: { pan: string; email: string; from_date: string; to_date: string; password: string }) =>
     call<StatementRequestResult>("/api/kfintech/request", json(body)),
