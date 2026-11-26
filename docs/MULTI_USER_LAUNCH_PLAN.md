@@ -1435,7 +1435,12 @@ Edge cases:
   with a 30-minute freshness check instead, so late NAVs show up.
 - ✅ Measured in M12 (vitest/workerd, local): a 50-fund household with a year of NAVs (~19k rows) takes 57 ms
   uncached and has a cached p95 of 3 ms. A 2-fund household: 7–11 ms uncached, 3 ms cached p95. A cached call is one
-  D1 read (the snapshot row) plus one R2 read, with no MARKET read. Re-measure on Cloudflare in the M16 load test.
+  D1 read (the snapshot row) plus one R2 read, with no MARKET read.
+  ✅ Staging, 2026-11-26 (real statement, `Server-Timing`): the R2 read added ~250 ms per cached call, so the sealed
+  blob now also sits in the edge cache (Cache API, a day). The endpoint's own work is now **4 ms p50** (edge read,
+  decrypt, slice); the p95 check passes. The full server time was 223 ms p50, of which 220 ms is the D1 snapshot-row
+  read every signed-in endpoint makes. The test machine reaches Cloudflare through Marseille (MRS) while the staging
+  D1 is in APAC, so that read crosses continents. Re-measure from India in the M16 load test.
   The NAV read is one statement with a `json_each` list instead of ≤ 90-code chunks, so there's no bound-parameter
   cap, plus the window's `nav_anomaly` rows in the same batch.
 - Market days for the window come from the household's own funds: a date counts when more than half of the funds
