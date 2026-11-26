@@ -33,7 +33,9 @@ export function nextRun(s: Sip, today = todayIso()): { date: string; due: string
   const stepDays = s.frequency === "weekly" ? 7 : s.frequency === "fortnightly" ? 14 : 0
   if (!months && !stepDays) return null
   const due = new Date(`${s.next_due ?? s.next_date}T00:00:00`)
-  const day = s.sip_day ?? due.getDate()
+  // Snapshots from before M12 have no sip_day and a drifted next_date (last + 30 days): the last instalment's day of
+  // the month is the better guess until the rebuild brings the real one.
+  const day = s.sip_day ?? new Date(`${s.last_date}T00:00:00`).getDate()
   for (let i = 0; i < 400; i++) {
     if (months) {
       const y = due.getFullYear()
