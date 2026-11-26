@@ -4,10 +4,13 @@
 //    for that member key, sealed and gzip-compressed (D18); `days` is sliced from it. New statements change
 //    inputs_hash and new NAVs change latest_nav_date, so an old entry is never read; the rebuild deletes them. While
 //    coverage is partial (some funds haven't published yet), an entry is fresh for 30 minutes only.
+//    The sealed blob is also kept in the data centre's edge cache (Cache API, a day): on staging an R2 read from the
+//    Worker added ~250 ms to every cached call, the edge cache a few ms. It's the same sealed bytes (household key), so
+//    the edge holds nothing readable, and crypto-shredding the household makes it useless too.
 // 1. Otherwise: open the snapshot (units timelines, AMFI codes), read the window's NAVs and flagged NAV moves in one
 //    batch on a MARKET read replica (D17), run dailySeries(), and store the result.
 import type { MarketStatus } from '../routes/market'
-import { blobKeys, deletePrefix, getJsonBlob, ownsKey, putJsonBlob } from './blob'
+import { blobKeys, deletePrefix, getJsonBlob, openJson, ownsKey, sealJson } from './blob'
 import { addDaysIso, type DailyHolding, type DailyResult, dailySeries, LEAD_DAYS, type NavSeries, sliceDays } from './daily'
 import type { Vault } from './crypto'
 
@@ -46,14 +49,42 @@ export type DailyRequest = {
   waitUntil?: (p: Promise<unknown>) => void
 }
 
-export type DailyAnswer = { result: DailyResult; cache: 'hit' | 'miss' }
+/** `source`: where a hit came from (the edge cache or R2); a miss was computed. */
+export type DailyAnswer = { result: DailyResult; cache: 'hit' | 'miss'; source: 'edge' | 'r2' | 'computed' }
+
+/** How long the edge keeps a sealed daily blob. Its key changes with new statements and NAVs, so it's never stale. */
+export const DAILY_EDGE_TTL_S = 86_400
+const edgeRequest = (env: { APP_URL: string }, key: string) => new Request(new URL(`/__daily-cache/${key}`, env.APP_URL).toString())
+
+async function edgePut(env: { APP_URL: string }, key: string, sealed: ArrayBuffer | Uint8Array<ArrayBuffer>) {
+  if (typeof caches === 'undefined') return
+  // The Cache API skips `private` / `no-store` responses. This entry is never served to a browser (the route builds
+  // its own response) and holds sealed bytes only, so a plain max-age is right.
+  const res = new Response(sealed, { headers: { 'content-type': 'application/octet-stream', 'cache-control': `max-age=${DAILY_EDGE_TTL_S}` } })
+  await caches.default.put(edgeRequest(env, key), res).catch(() => undefined)
+}
+
+/** The sealed blob, from the edge cache first, then R2 (and then into the edge cache). */
+async function readSealed(env: Env, key: string, waitUntil?: (p: Promise<unknown>) => void): Promise<{ bytes: ArrayBuffer; from: 'edge' | 'r2' } | null> {
+  const hit = typeof caches === 'undefined' ? undefined : await caches.default.match(edgeRequest(env, key)).catch(() => undefined)
+  if (hit) return { bytes: await hit.arrayBuffer(), from: 'edge' }
+  const obj = await env.BUCKET.get(key)
+  if (!obj) return null
+  const bytes = await obj.arrayBuffer()
+  const put = edgePut(env, key, bytes.slice(0))
+  if (waitUntil) waitUntil(put)
+  else await put
+  return { bytes, from: 'r2' }
+}
 
 export async function dailyFor(env: Env, req: DailyRequest): Promise<DailyAnswer> {
   const now = req.now ?? Date.now()
   const key = blobKeys.daily(req.householdId, req.inputsHash, req.market.latest_nav_date ?? 'none', req.member)
-  const cached = await getJsonBlob<CacheBlob>(env, req.vault, key).catch(() => null)
-  if (cached?.format === CACHE_FORMAT && (!cached.partial || now - cached.computed_at < DAILY_PARTIAL_FRESH_MS)) {
-    return { result: sliceDays(cached.result, req.days), cache: 'hit' }
+  if (!ownsKey(req.householdId, key)) throw new Error('daily key outside the household')
+  const sealed = await readSealed(env, key, req.waitUntil).catch(() => null)
+  const cached = sealed ? await openJson<CacheBlob>(req.vault, key, sealed.bytes).catch(() => null) : null
+  if (sealed && cached?.format === CACHE_FORMAT && (!cached.partial || now - cached.computed_at < DAILY_PARTIAL_FRESH_MS)) {
+    return { result: sliceDays(cached.result, req.days), cache: 'hit', source: sealed.from }
   }
   if (req.member !== 'all') await req.checkMember?.()
 
@@ -67,10 +98,13 @@ export async function dailyFor(env: Env, req: DailyRequest): Promise<DailyAnswer
 
   const result = dailySeries({ holdings, navs, anomalies, latest, days: DAILY_FULL_DAYS })
   const blob: CacheBlob = { format: CACHE_FORMAT, computed_at: now, partial: result.coverage.updated < result.coverage.total, result }
-  const put = putJsonBlob(env, req.vault, key, blob).catch((e) => console.error('daily_cache_put_failed', (e as Error).name))
-  if (req.waitUntil) req.waitUntil(put)
-  else await put
-  return { result: sliceDays(result, req.days), cache: 'miss' }
+  const bytes = await sealJson(req.vault, key, blob)
+  // R2 is awaited (the next call anywhere is sure to hit); the edge copy can follow
+  await env.BUCKET.put(key, bytes, { httpMetadata: { contentType: 'application/octet-stream' } }).catch((e) => console.error('daily_cache_put_failed', (e as Error).name))
+  const edge = edgePut(env, key, bytes.slice(0))
+  if (req.waitUntil) req.waitUntil(edge)
+  else await edge
+  return { result: sliceDays(result, req.days), cache: 'miss', source: 'computed' }
 }
 
 /**

@@ -8,6 +8,9 @@
 // GET /api/portfolio raw (gzip bytes with Content-Encoding: gzip, decoded once), checks the NAV-derived figures are
 // there (the EngineBatch container read the R2 series through market.internal), and after the delete that the
 // snapshot empties and its blob goes.
+// M12: values at the latest NAV, units timelines and AMFI codes, SIP run dates and statuses, GET /api/portfolio/daily
+// (miss then hit, timings through the internet), and, on the first active SIP, skip → undo → cancel, each followed by
+// the rebuild. The cleanup also deletes the member, which takes its SIP changes with it.
 // Needs STAGING_EMAIL_SINK_KEY, CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in .dev.vars.
 // Privacy (§0.1): prints ok/FAIL lines, status codes, error codes, counts and timings only. Never the PAN, the
 // password, the file name or anything from the statement.
@@ -45,7 +48,17 @@ async function api(path: string, init: { method?: string; body?: unknown; form?:
     headers['content-type'] = 'application/json'
     body = JSON.stringify(init.body)
   }
-  const r = await fetch(base + path, { method: init.method ?? (body ? 'POST' : 'GET'), headers, body, redirect: 'manual' })
+  // A network blip from this machine (ETIMEDOUT) must not end the run before its cleanup: retry a few times.
+  let r: Response | null = null
+  for (let attempt = 1; !r; attempt++) {
+    try {
+      r = await fetch(base + path, { method: init.method ?? (body ? 'POST' : 'GET'), headers, body, redirect: 'manual' })
+    } catch (err) {
+      if (attempt >= 4 || !(err instanceof TypeError)) throw err
+      console.log(`     network error (${(err.cause as { code?: string } | undefined)?.code ?? err.name}), retrying`)
+      await new Promise((ok) => setTimeout(ok, 2000 * attempt))
+    }
+  }
   for (const line of r.headers.getSetCookie()) {
     const [pair] = line.split(';')
     const i = pair!.indexOf('=')
@@ -90,7 +103,7 @@ if (!check('GET /api/me has a household', !!hid)) process.exit(1)
 
 // 2. Upload: no password first (D19), then each candidate as the typed password.
 const bytes = readFileSync(pdfPath)
-type Added = { code?: string; typed?: boolean; statement?: { id: string; kind: string; holdings_count: number }; member?: { created: boolean } }
+type Added = { code?: string; typed?: boolean; statement?: { id: string; kind: string; holdings_count: number }; member?: { id: string; created: boolean } }
 async function upload(password: string | null) {
   const form = new FormData()
   form.append('file', new Blob([bytes], { type: 'application/pdf' }), 'statement.pdf')
@@ -108,6 +121,17 @@ for (const [i, pw] of candidatePasswords(pdfPath).entries()) {
 }
 if (!check('statement stored (201)', res.status === 201, `${res.status} ${res.body.code ?? ''}`)) process.exit(1)
 const st = res.body.statement!
+// From here on real data is on staging: if anything crashes, delete it before exiting (unless --keep).
+process.on('uncaughtException', async (err) => {
+  console.log(`FAIL crashed (${err.name}); cleaning up`)
+  if (!keep) {
+    const del = await api(`/api/statements/${st.id}`, { method: 'DELETE' }).catch(() => null)
+    const mid = res.body.member?.id
+    const delMember = mid ? await api(`/api/members/${mid}`, { method: 'DELETE' }).catch(() => null) : null
+    console.log(`     cleanup: statement ${del?.status ?? 'failed'}, member ${delMember?.status ?? 'n/a'}${del?.status === 200 ? '' : ' (check staging by hand)'}`)
+  }
+  process.exit(1)
+})
 console.log(`     ${st.kind}, ${st.holdings_count} holdings, new member: ${res.body.member?.created}`)
 
 // 3. R2: one sealed statement blob, nothing in tmp/, no plaintext.
@@ -190,6 +214,97 @@ try {
 }
 check('without gzip: plain JSON', plainOk)
 
+// 3c. M12: everything after the statement date, daily returns, and the user's SIP changes.
+type M12Holding = { isin: string; amfi_code?: string | null; units_timeline?: unknown[] | null; as_of: string; statement?: { as_of: string } }
+type M12Sip = { member_id: string; isin: string; folio: string | null; status: string; next_date?: string | null; next_due?: string | null; next_moved?: string | null; skipped?: string[]; latest?: { status: string } | null }
+type M12Snap = { members: { value_date?: string | null; estimated?: { instalments: number; pending: number; in_progress: number } }[]; holdings: M12Holding[]; sips: M12Sip[] }
+const todayIst = new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10)
+async function portfolioJson(): Promise<M12Snap> {
+  return (await (await api('/api/portfolio')).json()) as M12Snap
+}
+async function rebuilt(what: string) {
+  const r = await waitStatus((x) => x.status === 'ready' && !x.pending && !x.building, 180_000)
+  check(`rebuilt after ${what}`, r.s?.status === 'ready' && !r.s.pending, r.s?.status ?? 'no answer')
+  return r.ms
+}
+if (snap) {
+  const m12 = snap as unknown as M12Snap
+  const funds = m12.holdings.filter((h) => h.isin.startsWith('INF'))
+  check('every fund has an AMFI code and a units timeline', funds.every((h) => h.amfi_code && h.units_timeline?.length), `${funds.filter((h) => !h.amfi_code || !h.units_timeline?.length).length} without`)
+  check('values at the latest NAV (never before the statement date)', m12.holdings.every((h) => !h.statement || h.as_of >= h.statement.as_of))
+  check('members carry value_date and estimated totals', m12.members.every((m) => m.value_date !== undefined && m.estimated))
+  const active = m12.sips.filter((x) => x.status === 'active')
+  check('active SIPs have a next run date from today on', active.every((x) => !x.next_date || x.next_date >= todayIst), `${active.length} active`)
+  const est = m12.members.reduce((t, m) => ({ n: t.n + (m.estimated?.instalments ?? 0), p: t.p + (m.estimated?.pending ?? 0), r: t.r + (m.estimated?.in_progress ?? 0) }), { n: 0, p: 0, r: 0 })
+  console.log(`     ${funds.length} funds revalued to ${m12.holdings.filter((h) => h.statement && h.as_of > h.statement.as_of).length} later NAV dates; ${active.length} active SIPs, ${active.filter((x) => x.next_moved).length} next runs moved for a weekend/holiday; ${est.n} estimated instalments, ${est.p} pending NAV, ${est.r} in progress`)
+
+  // Daily returns
+  const times: number[] = []
+  const caches: string[] = []
+  type DailyAnswer = { as_of: string | null; coverage: { updated: number; total: number }; series: unknown[]; today: unknown }
+  let daily = null as DailyAnswer | null
+  for (let i = 0; i < 11; i++) {
+    const t0 = Date.now()
+    const r = await api('/api/portfolio/daily?days=30&member=all')
+    const body = await r.json()
+    times.push(Date.now() - t0)
+    caches.push(r.headers.get('x-daily-cache') ?? '?')
+    if (i === 0) {
+      check('GET /api/portfolio/daily 200', r.status === 200, String(r.status))
+      daily = body as DailyAnswer
+    }
+  }
+  check('daily: first a miss, then cached', caches[0] === 'miss' && caches.slice(1).every((c) => c === 'hit'), caches.join(','))
+  check('daily: an as-of date, a series and today', !!daily?.as_of && (daily?.series.length ?? 0) > 0 && !!daily?.today, `${daily?.series.length ?? 0} points`)
+  const hits = times.slice(1).sort((a, b) => a - b)
+  console.log(`     daily: miss ${times[0]} ms, hits p50 ${hits[5]} ms / max ${hits.at(-1)} ms (round trip from this machine), ${daily?.series.length} points, coverage ${daily?.coverage.updated}/${daily?.coverage.total}`)
+  // The round trip from here dwarfs the server's share. /api/portfolio/status does the same session check and one D1
+  // read without R2, so interleaved pairs show what a cached daily call adds on top.
+  const pairs: { daily: number; status: number }[] = []
+  const server: { total: number; source: string }[] = []
+  for (let i = 0; i < 15; i++) {
+    let t0 = Date.now()
+    const dr = await api('/api/portfolio/daily?days=30&member=all')
+    await dr.arrayBuffer()
+    const d = Date.now() - t0
+    const timing = dr.headers.get('server-timing') ?? ''
+    server.push({ total: Number(/total;dur=(\d+)/.exec(timing)?.[1] ?? NaN), source: /desc="(\w+)"/.exec(timing)?.[1] ?? '?' })
+    t0 = Date.now()
+    await (await api('/api/portfolio/status')).arrayBuffer()
+    pairs.push({ daily: d, status: Date.now() - t0 })
+  }
+  const med = (xs: number[]) => xs.sort((a, b) => a - b)[Math.floor(xs.length / 2)]!
+  const extra = pairs.map((p) => p.daily - p.status)
+  console.log(`     daily cached vs status, 15 interleaved pairs: daily p50 ${med(pairs.map((p) => p.daily))} ms, status p50 ${med(pairs.map((p) => p.status))} ms, daily adds p50 ${med(extra)} ms`)
+  const totals = server.map((x) => x.total).filter(Number.isFinite).sort((a, b) => a - b)
+  const p95 = totals[Math.min(totals.length - 1, Math.ceil(totals.length * 0.95) - 1)]
+  console.log(`     daily cached, server side (Server-Timing): p50 ${med([...totals])} ms, p95 ${p95} ms; sources ${[...new Set(server.map((x) => x.source))].join('/')}`)
+  check('daily cached server time p95 < 50 ms (plan §10.5.3)', p95 !== undefined && p95 < 50, `p95 ${p95} ms`)
+
+  // Skip → undo → cancel, on the first active SIP with a next run date
+  const sip = active.find((x) => x.next_due)
+  if (sip) {
+    const ref = { member_id: sip.member_id, isin: sip.isin, folio: sip.folio }
+    const same = (x: M12Sip) => x.member_id === ref.member_id && x.isin === ref.isin && x.folio === ref.folio
+    const skipRes = await api('/api/sips/skip', { body: { ...ref, due: sip.next_due } })
+    check('POST /api/sips/skip 200', skipRes.status === 200, String(skipRes.status))
+    console.log(`     rebuild after skip: ${await rebuilt('the skip')} ms`)
+    const afterSkip = (await portfolioJson()).sips.find(same)
+    check('the skipped instalment is listed and the next run moved on', !!afterSkip?.skipped?.includes(sip.next_due!) && afterSkip.next_due !== sip.next_due)
+    const undo = await api('/api/sips/skip', { method: 'DELETE', body: ref })
+    check('DELETE /api/sips/skip removes it', undo.status === 200 && ((await undo.json()) as { removed: number }).removed === 1)
+    await rebuilt('the undo')
+    check('after the undo the next run is back', (await portfolioJson()).sips.find(same)?.next_due === sip.next_due)
+    check('cancel without confirm is refused (400)', (await api('/api/sips/cancel', { body: ref })).status === 400)
+    check('POST /api/sips/cancel 200', (await api('/api/sips/cancel', { body: { ...ref, confirm: true } })).status === 200)
+    await rebuilt('the cancel')
+    const afterCancel = (await portfolioJson()).sips.find(same)
+    check('the SIP shows cancelled, with no next run', afterCancel?.status === 'cancelled' && !afterCancel.next_date)
+  } else {
+    console.log('     no active SIP with a next run in this statement: skip/cancel not exercised')
+  }
+}
+
 // 4. Clean up: delete the statement and check the blob is gone.
 if (!keep) {
   check('DELETE /api/statements/:id', (await api(`/api/statements/${st.id}`, { method: 'DELETE' })).status === 200)
@@ -200,7 +315,9 @@ if (!keep) {
     await new Promise((ok) => setTimeout(ok, 3000))
     left = await r2List(`h/${hid}/`)
   }
-  check('blobs deleted from R2 (statement and snapshot)', left.length === 0, `${left.length} left`)
+  check('blobs deleted from R2 (statement, snapshot and daily cache)', left.length === 0, `${left.length} left`)
+  const memberId = res.body.member?.id
+  if (memberId) check('DELETE /api/members/:id (takes the SIP changes with it)', (await api(`/api/members/${memberId}`, { method: 'DELETE' })).status === 200)
 }
 await api('/api/auth/sign-out', { body: {} })
 console.log(failed ? `${failed} check(s) failed` : 'all checks passed')
