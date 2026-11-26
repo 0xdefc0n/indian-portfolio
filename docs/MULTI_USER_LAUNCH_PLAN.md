@@ -42,7 +42,7 @@ be verified during implementation are marked ⚠️ VERIFY, with what to check a
 | # | Topic | Decision | Why |
 |---|---|---|---|
 | D1 | Account model 🔒 | **One login owns one household with many members (PANs).** No sharing between logins at launch. | Matches today's family view. |
-| D2 | Extra devices 🔒 | **WhatsApp-Web-style QR login.** The new device shows a QR code; a logged-in device scans and approves it. | Owner request. Built on Better Auth's Device Authorization plugin (RFC 8628), §7.4. |
+| D2 | Extra devices 🔒 | **WhatsApp-Web-style QR login.** The new device shows a QR code; a logged-in device scans and approves it. The new device then shares that account (same user, same household): no new account, no email to type. Linking shows an in-app notice, not an email (owner, 2026-11-26). | Owner request. Built on Better Auth's Device Authorization plugin (RFC 8628), §7.4. |
 | D3 | Sign-in methods 🔒 | **Google + email magic link.** Phone OTP and Apple are later. | Owner request. |
 | D4 | Auth provider 🧪 | **Better Auth** (open source, runs inside our Worker, users stored in our D1). | No MAU fees at any scale. First-class D1 support since v1.5, an official Cloudflare guide, a real magic-link plugin, and a Device Authorization plugin for D2. Hosted options at 100k MAU cost ≈$275 (Firebase), ≈$1,025 (Clerk) or $3,500+ (Auth0) a month. WorkOS (free to 1M MAU) sends 6-digit codes, not magic links. Firebase's free plan sends only 5 email-link emails a day. |
 | D5 | Magic-link email 🔒 | **Cloudflare Email Service** (Email Sending, beta) through the Worker's `send_email` binding, behind an `EmailSender` interface. Workers Paid includes 3,000 emails a month, then $0.35 per 1,000, to any recipient. Sends go through the `email` queue (§7.3). **Before public launch, request a higher daily quota.** Resend stays the fallback implementation if the beta or its quotas get in the way. | Owner decision (2026-11-25), replacing Resend. It is cheaper than Resend Pro ($20/month), adds no extra vendor or API key, and SPF/DKIM/DMARC are managed in the same Cloudflare zone. The risk is the beta: new accounts get an unpublished daily quota and no batch endpoint. Google is the primary sign-in and sends no email, and the interface makes switching back a one-file change. |
@@ -677,7 +677,6 @@ export function createAuth(env: Env) {
   pages … Removing one does not affect the other"), and both record sets are live on `pocketfolio.in`.
 - **Emails at launch:**
   - the sign-in email (magic link plus a 6-digit code, §13A.5)
-  - "New device signed in" (after a QR link)
   - "Your account was deleted"
   - the DPDP inactivity notice (§12)
 - **Keep emails plain.** The magic-link email contains no portfolio data: link, expiry, "didn't request this? ignore it".
@@ -729,10 +728,19 @@ poll POST /api/auth/device/token every `interval`
 ◄── token response (Better Auth session token)
 POST /api/session/adopt {token} ─────► validate token → set the session cookie
 redirect to /
-                                       email the owner "New device signed in"; audit_event
+                                       session for the approver's own user; audit_event;
+                                       in-app "New device linked" notice on the other devices
 ```
 
 Implementation notes:
+- **One account, many devices (owner, 2026-11-26).** Like WhatsApp Web, the new device joins the approver's account.
+  The device grant issues a session for the approving user (`deviceCode.userId`), so it carries the same
+  `householdId` and sees the same data. No user row is created, nothing is typed on the new device, and there's no
+  signup or consent step for it (consent belongs to the user, §12). Signing out of it, or revoking it in Settings →
+  Devices, ends only that session.
+- **No email on link (owner, 2026-11-26).** Instead of a "New device signed in" email, the other signed-in devices
+  show a one-time toast "New device linked: Chrome · macOS · Mumbai" (from the `audit_event`, read with the next
+  `/api/me`), and Settings → Devices marks that session "New" for 7 days. This saves the email budget (§7.3).
 - **Libraries.** Generate the QR in the browser with `uqr` or `qrcode` (small, no network). Scan in-app with
   `BarcodeDetector` where it exists (Chrome and Android), falling back to `qr-scanner` (jsQR-based). Most people will
   just use the phone's camera app, since the QR is a URL.
@@ -752,7 +760,8 @@ Implementation notes:
 - **Client ID.** Better Auth's device plugin expects one. Use the fixed value `web-qr` and validate it with
   `validateClient: id => id === "web-qr"`.
 - **Settings → Devices** lists sessions with UA, city and last active, with **Sign out this device** and **Sign out all
-  other devices** (`listSessions`, `revokeSession`, `revokeOtherSessions`).
+  other devices** (`listSessions`, `revokeSession`, `revokeOtherSessions`). A device linked by QR in the last 7 days
+  shows a "New" badge.
 
 ---
 
@@ -1589,7 +1598,7 @@ review before launch.
    delete a member.
 7. **Settings**:
    - Account (name, email, sign-in methods)
-   - **Devices** (sessions list, sign out others, **Link a device** opening the scanner)
+   - **Devices** (sessions list with a "New" badge on recently linked ones, sign out others, **Link a device** opening the scanner)
    - Fair-use usage
    - **Download my data**
    - **Delete account** (typed confirmation)
@@ -1994,7 +2003,7 @@ until those features ship.
 | Kind | Must cover |
 |---|---|
 | **Tenant isolation** (Worker, vitest) | User A cannot read, delete or upload to user B's members, statements or snapshot by ID guessing (all 404). The R2 key always contains the session's household. Two households with the same PAN stay separate. |
-| Auth | Magic link single use and expiry. Google account linking to an existing magic-link user. Session revoke. QR flow: approve, deny, expired code, code reuse, approving while logged out. |
+| Auth | Magic link single use and expiry. Google account linking to an existing magic-link user. Session revoke. QR flow: approve, deny, expired code, code reuse, approving while logged out; the approved session has the approver's user and `householdId`, no user row is created, no email is queued, and the other device gets the "New device linked" notice once. |
 | Crypto | Round trip, both compress-then-encrypt JSON (flags bit set) and a parked PDF (no gzip). Tampering with the AAD or ciphertext fails. KEK rotation re-wrap. Deletion crypto-shreds. |
 | Upload | Wrong password, then a candidate password works. Different PAN rejected. Duplicate gives 409 (including while the same file is queued). Non-PDF rejected. Over 10 MB rejected. Quotas give 429. A failed parse leaves no empty member. |
 | **Queued upload** | With the pool forced to 0 free slots: `202` with position and ETA. The R2 `tmp/` object is encrypted (raw read shows no `%PDF`). After processing, **the `tmp/` object is gone** and `blob_key` is NULL. Cancel deletes the PDF. Expiry: a job older than 24 h is swept and its object deleted. Account deletion removes `tmp/{household_id}/`. A lost queue message is re-enqueued by `tmp-sweep`. |
@@ -2015,7 +2024,7 @@ until those features ship.
 
 ## 17. Implementation phases
 
-**The build order is [MILESTONES.md](MILESTONES.md).** It splits these phases into milestones M0–M18, one Claude Code
+**The build order is [MILESTONES.md](MILESTONES.md).** It splits these phases into milestones M0–M21, one Claude Code
 session each, with owner inputs and done-checks per milestone. Phase → milestones:
 
 | Phase | Milestones |
@@ -2030,6 +2039,10 @@ session each, with owner inputs and done-checks per milestone. Phase → milesto
 | 5b | M15 |
 | 6 | M16–M17 |
 | 7 | M18 |
+| 8 | M19–M21 |
+
+The build order isn't the phase order (owner, 2026-11-26): … M12 → M14 → M15 → **M13** → M18 → M19 → M20 → M21 →
+**M16** → **M17** (hardening and load tests, then production launch, last).
 
 The phase text below stays the reference for acceptance criteria. Each phase ends with its acceptance criteria met and
 a commit/PR.
@@ -2094,7 +2107,8 @@ a commit/PR.
 
 ### Phase 4: QR device login
 - Device authorization plugin, `/login` QR tab, the `/link` approval page, the in-app scanner, the cookie bridge if
-  needed, the Devices list, the "new device" email.
+  needed, the Devices list, the in-app "New device linked" notice (no email). The linked device shares the
+  approver's account.
 - **Accept:** all the QR auth tests pass, and linking from a phone to a desktop works on staging.
 
 ### Phase 5: Privacy and compliance
@@ -2110,6 +2124,8 @@ a commit/PR.
 - **Accept:** everything in §13A.7.
 
 ### Phase 6: Hardening and launch
+- **Hardening (M16) and launch (M17) wait until Phases 7 and 8 are built** (owner, 2026-11-26), so the load tests
+  cover everything that ships.
 - Rate limits and quotas (§11), the "Coming soon" states (D8, D9), security headers (CSP: `default-src 'self'`; `manifest-src 'self'`; `worker-src 'self'`;
   allow Google and Turnstile origins; `frame-ancestors 'none'`; HSTS), dependency audit, **the burst, nightly and polling
   load tests (§16)**, staging soak.
@@ -2123,7 +2139,7 @@ a commit/PR.
   - pool caps and queue `max_concurrency` set from the load-test results
 - **Accept:** everything in §16 is green, and the launch checklist is done.
 
-### Phase 7: AMC disclosure scraper (can ship after launch)
+### Phase 7: AMC disclosure scraper (before launch)
 - The adapter framework, the top 10 AMC adapters, `scrape_run` monitoring, and BharatStock limited to gaps.
 - **Accept:**
   - At least 80% of tracked equity schemes have `source='amc'` holdings for the latest month by day 15.
@@ -2175,7 +2191,7 @@ get a nightly rebuild; parse ~1.5 vCPU-s on average; build ~0.5 vCPU-s.
 - Shared households (invite a spouse with roles), billing and plans, an NSDL CAS parser, and a native mobile app.
 - Daily web push ("PocketFolio today: +₹2,340") after the market day is final. Needs the installed PWA on iOS
   (16.4+), the user's opt-in and VAPID keys. It builds on §10.5 and §13A.
-- Exchange prices for ETFs and stocks held in CDSL, so they're included in daily returns. Scheduled as M20 (after launch).
+- Exchange prices for ETFs and stocks held in CDSL, so they're included in daily returns. Scheduled as M20 (before launch).
 - Manually entered FD, PPF and EPF with approximate returns (M19), and stock gains from broker tradebooks or manual buy
   prices (M21). Owner request, 2026-11-26; see `docs/MILESTONES.md` Phase 8. Design to be written before each starts.
 - A Python Worker for the engine, if Pyodide memory limits and the `pillow`/`rapidfuzz` gaps change (re-run the §3.1 test).

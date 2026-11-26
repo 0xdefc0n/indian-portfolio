@@ -10,7 +10,8 @@ Code session each. If the two disagree, this file wins for order and scope, and 
 
 ## Status
 
-Claude updates this table at the end of every milestone.
+Claude updates this table at the end of every milestone. **The rows are in build order; the numbers are IDs, not
+order** (owner, 2026-11-26: M13 moved after M15, and M16 and M17 moved to the end, after M21).
 
 | # | Milestone | Plan phase | Status | Date | Commit | Notes |
 |---|---|---|---|---|---|---|
@@ -27,15 +28,15 @@ Claude updates this table at the end of every milestone.
 | M10 | Snapshots and the live dashboard | 3 | done (staging checks passed 2026-11-26; the status fix below ships with the next merge) | 2026-11-26 | `72ef4be`, `a3c2323` | Local Done-when items pass. **Parity:** the private statements uploaded through the Worker (real `/parse`), built by the pf-rebuild consumer on a real EngineBatch container and served by `GET /api/portfolio` equal the old app's `/api/portfolio` with 0 differing paths (3 members, 14 holdings, 20 NAV series, build 2.0 s). The engine build gives the same 0 differing paths. Then `app/`, `parse.py`, `static/` and `requirements.txt` were deleted and the README Run section rewritten. 26 new Worker tests (220 total) and 9 new engine tests (43 in CI; 50/50 with private PDFs before the deletion) pass. `test/snapshot.test.ts` (24) covers the §16 Jobs rows: **4 uploads in 5 s → 1 build** (four 10 s debounced messages: built, current, current, current); **the older-build race** (the newer pointer stays, the older blob is deleted); concurrent same-input claim; idempotent re-delivery; failure keeps the previous snapshot and retries 3×; slot wait with a ticket; delete last statement → empty; rename/delete triggers; queued job → rebuild; backfill-pending codes sent as `refresh` with 2-min follow-ups; **stale snapshot served (`X-Snapshot-Stale`) then rebuilt**; lazy rebuild once per stale period, held back 10 min after a failure; tenant isolation; status `pending`/`building`/`ready` with `Retry-After`; prebuild once per date for households active in 7 days, skipping weekend/holiday finals; a rebuild right after finality reads the fresh day state. `GET /api/portfolio` is 1 D1 query with a warm cookie cache. ✅ VERIFY gzip passthrough: with `encodeBody: "manual"` the bytes on the wire match the Worker's (same SHA-256, `wrangler dev` + curl). Without it, workerd gzips again. Web: onboarding bento, a building state, the "Updating to today's NAV…" banner and a "NAVs still coming in" hint (M9 Later), and upload progress (uploading → reading statement → updating dashboard, status polling with Retry-After). Checked headless at 360 px and desktop, dark and light: 20 runs, 0 page errors, new touch targets 44 px. No sandbox notice was left in `web/` (it was in the deleted `static/`). **Changes:** the engine reads NAVs through `ctx.container.interceptOutboundHttp("market.internal", MarketGateway)` (R2 `market/nav/*`, read-only), not the S3 API. The container stays offline and gets no R2 keys, and the `R2_MARKET_READONLY_*` secrets are unused (the owner may revoke that token). Interception verified with a real container in vitest. The engine cache key is `(code, nav_key)`, not `(code, market_date)`; nav_key is date, final and coverage. The lease is taken before the claim. Snapshot keys are `{inputs_hash}-{8 hex}.bin`. `/build` answers `format: "gzip"` with the snapshot bytes. The consumer reads market status fresh, not from the edge cache. Migration `app/0005_snapshot.sql` (`requested_at`, `checked_at`, `failed_at`, `prebuild_run`). A member name equal to the statement holder name is sent as null, so the engine title-cases it as the old app did. Test guard `test/no-rebuild-queue.ts`. **Staging, after the merge** (CI applies `app/0005`): (1) ✅ carried from M9, 2026-11-26: `node scripts/nav-check.ts` passes, all 7 checks. Instead of waiting for the night, the 10:00 IST nav-ingest (`30 4 * * *`) was run twice with the deployed commit's code under `wrangler dev`, with remote bindings to staging: 14,240 NAVs and 14,481 schemes, then 0 rows on the re-run; 25-Nov is final (8,698 schemes). The run's queue sends didn't arrive, because remote queue producer bindings under `wrangler dev` deliver nothing (the queue analytics show 0 operations). So the 3 backfills were re-sent through the Queues REST API; the deployed consumer finished them (3/3) and wrote their R2 series. (2) + (3) ✅ `node scripts/upload-smoke.ts https://staging.pocketfolio.in` (now with snapshot checks) uploads one private statement, and the snapshot is `ready` about 28 s later (10 s debounce plus a cold EngineBatch start on Cloudflare). The checks: one sealed snapshot blob, no plaintext in it; the raw `GET /api/portfolio` has `Content-Encoding: gzip`, starts `1f 8b`, and one gunzip gives the JSON; the benchmark and fund returns are present for both holdings, so the Cloudflare container read the R2 series through `market.internal`; without gzip it's plain JSON. After the delete, staging R2 `h/` is empty. **Fixed after the staging run:** right after the last statement is deleted, status said `empty` and `GET /api/portfolio` could serve the old snapshot until the rebuild emptied it (10–30 s). A due rebuild now counts as `pending` whenever a blob exists, and with no statements the empty portfolio is served (test added). Later: delete the old blob's `daily/` cache entries on pointer switch (M12); the prebuild household scan and the nightly drain rate (M16 load test, 5,000 households); a lease leaks until expiry (120 s) if the claim query throws; root `.env.example` still lists the old app's keys (owner's call; `BHARATSTOCK_API_KEY` moves to `.dev.vars` in M11); `test/tenant.test.ts` member order is flaky when two members get the same `created_at` ms (pre-existing) |
 | M11 | Stocks inside funds (BharatStock fallback job) | 3 | done (on staging 2026-11-26, PR #8) | 2026-11-26 | `1e2509a`…PR #8 | Owner confirmed cloud use (50 calls/day); the key was copied from the root `.env` into `worker/.dev.vars` without being printed. 21 new Worker tests (242 total, 241 pass + the opt-in live one) and 5 new engine tests (46 pass) pass. `test/stocks.test.ts` runs a synthetic BharatStock in the real response shape. **Equity funds in a test household get holdings:** build → the engine names its equity funds → `stock_match` → `stocks` job → `fund_portfolio` + R2 `market/holdings/{isin}/{month}.json` → the follow-up build has them, and no more follow-ups. **The budget stops at the limit** (limit 3 → exactly 3 calls; 3 parallel passes at limit 5 → 5), continues the next UTC day, and a 429 spends the rest of the day. Also covered: direct and regular plans share one fetch, paging at 100, refetch only on a newer coverage month (an empty newest month falls back to the one before), fund-of-funds look-through, unmatched retried after 30 days, 4xx skips the fund for a day, 5xx retries the message, single flight with one more pass on a request mid-run, lost-message resend, no key = off, and the stocks version in the inputs hash. **Live check** (`BHARATSTOCK_LIVE=1`; synthetic household, one real public fund, real EngineBatch container, real API): 5 paid calls, 2 job rounds, 145 holdings (100% of the fund), look-through 1, month 2026-10, nothing pending. M10 parity still 0 differing paths. ✅ VERIFY: the BharatStock API fields match the old app; `page_size` max 100 (422 above); coverage is free and keyless. **Changes:** the Worker doesn't classify funds: `/build` returns `X-Engine-Stocks-Want` ([isin, display name], equity plus one level of fund-of-funds), and matching uses that name, as the old app did. The budget counts UTC days (the provider's) via the new `QuotaSpec.utc`. The cron is daily `0 4 * * *` (09:30 IST) instead of `0 5 10-20 * *`, until M18 brings the monthly scrape back. New tables: `stock_match`, `stock_coverage`, `job_lock`, `stock_state`. SNAPSHOT_VERSION 2 (every snapshot rebuilds once after deploy). `BHARATSTOCK_API_KEY` is an optional secret (not in `secrets.required`). The parity expectation now has stocks enabled (tests have a test key). **Staging** (on the owner's instruction: Claude put the secret on staging from `.dev.vars` over stdin, then merged PR #8; CI deploy green): `market/0003` applied (job_lock row, `stock_state` 0), the `0 4 * * *` cron registered, `/api/health` ok. One `stocks` message sent through the Queues API ran on the deployed consumer: it claimed and released the lock and stored BharatStock's free coverage list (82 fund houses), with no wanted funds yet, so 0 paid calls. The first real upload on staging will exercise the paid path. Later: the Worker reads ~1 R2 blob per held equity fund per build, so an engine-side cache through `market.internal` if the nightly prebuild makes that costly (M16); delete `stock_match` rows unwanted for 90 days and their blobs and `fund_portfolio` rows in cleanup (M14); alert when the budget runs out on consecutive days (M16); M18 restores the monthly scrape cron and fetches from BharatStock only when no `amc` row exists after day 15; root `.env.example` still lists the old app's keys (owner's call) |
 | M12 | Daily returns | 3b | done (staging verified 2026-11-26, PRs #9 and #10) | 2026-11-26 | `529f5d5`, `db7f4fb`, PR #9 `02c10f9`, PR #10 `7955137` | Done-when items pass. **Golden tests:** `test/daily.test.ts` (19) works `dailySeries()` out by hand. Day change for a two-fund household: Tue +₹15 / +1.2%, Wed −₹2.50 / −0.1976%. A purchase or a redemption mid-window is not a gain or loss, and estimated SIP units count from the day after allotment. Weekends and holidays give no point, and a liquid fund's holiday NAV rolls into the next market day. Partial coverage shows "1 of 2". An IDCW payout is added back; an unexplained `nav_anomaly` move is left out and flagged. Also covered: the CDSL-only `units_exact=false` note, ETFs/shares excluded, the member filter. Endpoint: the hand calculation through the real pf-rebuild consumer, cache hit, a new NAV day uses a new key, the rebuild deletes the old inputs' entries, partial coverage fresh for 30 min only, member 404 across households, bad `days` → 400, sealed blob. **Measured** (vitest/workerd): cached p95 3 ms (50-fund household, ~19k NAV rows; uncached 57 ms). A cached call does no MARKET read. Totals after the follow-up: Worker 268 pass + 1 opt-in skipped (269); engine 68 pass (+4/4 private parse with the test password). The M10 parity on the private statements still has 0 differing paths (3 members, 14 holdings). Private engine build, counts only: 22 holdings, 22 coded, 14 exact timelines, 6 active SIPs, all with a next run date on or after today. **Owner additions (2026-11-26, in scope by request):** (1) returns from the last statement: holdings are valued at the latest NAV, and active SIPs are estimated after the statement date (mandate day, units at the run day's NAV after stamp duty) into units, invested, XIRR flows, activity and the month-end chart. A newer statement replaces them. The UI never asks for a new upload. (2) Broker-style run days and statuses. ✅ AMFI Annexure A2 (NACH: debit T, allot T) and KFintech's SIP TAT (NACH T+1/T+2): a due date on a weekend or holiday runs the next business day. An instalment is "In progress" from T until T+2 business days, then "Done". Shown as "Moved from 24 Nov (market holiday)" and "In progress · debited 25 Nov · units by 27 Nov" on the overview, SIP page, fund dialog and transactions. Engine `projection.py` and `holidays.py`. Snapshot fields: `statement`, `estimated`, `amfi_code`, `units_timeline`, `units_exact`, `payouts` per holding; `statement_total`, `value_date`, `estimated` per member; `sip_day`, `next_due`, `next_moved`, `latest` per SIP. SNAPSHOT_VERSION 3. ✗ Correction: a version bump alone did **not** rebuild existing snapshots. A snapshot rebuilt only on a new market day or a statement change, so the owner kept seeing the pre-M12 dashboard (no estimated 24 Nov SIP; next SIP "25 Dec" from the old last + 30 days). Fixed in PR #12: `snapshot.version` (`app/0007`) makes an older-version snapshot stale, so the first read after a deploy rebuilds it, and the consumer never calls it current. Web: the Today tile (4 bento tiles now), a sortable 1D column (under the value on mobile), the Daily returns panel (1M/3M/1Y, bars, calendar heatmap, best/worst/% up, honesty note), and the value date in the hero. Checked headless at 360 px and 1280 px, dark and light, on two synthetic households: 8 runs, 0 page errors. **Changes from the plan:** market days come from the household's funds (>½ of the funds alive have a NAV), since `market_day` only keeps recent dates; one `json_each` NAV query instead of ≤ 90-code chunks; the cache write is awaited, not `waitUntil`; `by_fund` covers only funds updated on the latest day; a cached hit skips the member check (its key can only exist after one). **Follow-up, same day (owner decisions):** (a) no time cap on estimates; instead, as at brokers, **skip the next instalment** (one per SIP, undoable) or **cancel a SIP** for good after a confirmation. Both are recorded for PocketFolio only, and the dialog says it doesn't cancel with the broker. Stored sealed in `sip_override` (`app/0006`), sent to `/build` as `overrides`, part of the inputs hash; a newer statement showing instalments after a cancel wins. (b) **Holiday job:** ✅ Upstox's public market-holidays API lists the 2026 NSE closures (16), matching the NAV store, except 31 Mar (year end: NAVs published, exchange closed). `refreshHolidays` rides the daily `0 4 * * *` cron and fetches weekly into `market_holiday` (`market/0004`); builds send the dates, and the engine falls back to its own 2026 list. Tests: `test/sips.test.ts` (8): the real 2026 answer parsed, weekly fetch, failure keeps dates and retries, a dropped holiday goes, skip/undo/one-per-SIP, cancel needs confirm, is final and blocks skips, 404 across households, bad dates/ISINs 400, sealed storage, build gets overrides and holidays, a change rebuilds, member delete cascades. Engine +7 (skip, past skip, cancel, statement beats cancel, Worker holidays, bad overrides, `/build` overrides). UI checked headless at 360 px and 1280 px: menu (44 px target), skip, cancel dialog, skipped and cancelled states, 0 page errors. Fixed in the check: a malformed `/daily` answer could crash the dashboard (now treated as unavailable). **Staging (PRs #9 and #10 merged by Claude on the owner's instruction; CI deploy green, `app/0006` and `market/0004` applied):** `node scripts/upload-smoke.ts https://staging.pocketfolio.in` with a private statement that has active SIPs passes 43/43. Results: 8 funds revalued to the latest NAV; 6 active SIPs with next runs from today, 3 of them moved for a weekend or holiday; 3 estimated instalments, all in progress (the 24 Nov holiday instalment); `/daily` miss then hit, 21 points, coverage 8/8; skip → rebuild → undo → rebuild → cancel (400 without confirm) → rebuild → cancelled; cleanup removes the statement, snapshot, daily cache and member. The holiday job ran against staging (deployed code, scratch Worker): Upstox answered, 16 rows stored, 25 Dec 2026 the one ahead. **Found on staging and fixed (PR #10):** a cached `/daily` call paid ~250 ms for the R2 read, so the sealed blob is now also in the edge cache. The endpoint's own work is now 4 ms p50, and `Server-Timing` reports the phases. The remaining ~220 ms is the D1 snapshot-row read every signed-in endpoint makes; this machine reaches Cloudflare through Marseille (MRS) while the staging D1 is in APAC. Also: a network timeout ended one smoke run before its cleanup, which stranded a statement on staging. It was deleted through the API, along with members left by earlier runs, and the script now retries network errors and cleans up if it crashes. **Owner check after PR #12:** three SIPs showed the next run on 21 Dec (moved from the 20th) instead of 24 Dec. Their mandate moved from the 20th to the 24th in June, and the "most common day over 12 instalments" rule still picked the 20th, so their 24 Nov instalments weren't estimated. Fixed in PR #13: the mandate day is the one the latest run of instalments agrees on (each instalment allows its own date or a weekend/holiday before it). SNAPSHOT_VERSION 4. Checked on the owner's statement (counts only): 6/6 SIPs on the 24th, next run 24 Dec, 6 November instalments estimated. Later: measure signed-in latency from India and consider app-DB read replicas or Smart Placement for the per-request D1 read (M16); `GET /api/portfolio` reads the snapshot from R2 on every call, so edge-cache it too (M16); delete `sip_override` skips older than the newest statement in cleanup (M14); alert when the holiday fetch fails for a week (M16); re-measure `/daily` on Cloudflare in the M16 load test; the tax figures (`tax`, harvest) stay as of the statement; "Invested via these SIPs" on the SIP page counts statement instalments only; a dashboard left open past `units_by` only flips "In progress" → "Done" on the next load |
-| M13 | QR device login | 4 | todo | | | |
 | M14 | Privacy and compliance | 5 | todo | | | |
 | M15 | Installable app (PWA) | 5b | todo | | | |
+| M13 | QR device login | 4 | todo | | | |
+| M18 | AMC disclosure scraper | 7 | todo | | | |
+| M19 | Manual assets: FD, PPF, EPF | 8 | todo | | | |
+| M20 | Stock and ETF prices | 8 | todo | | | |
+| M21 | Stock gains: buy prices and corporate actions | 8 | todo | | | |
 | M16 | Hardening and load tests | 6 | todo | | | |
 | M17 | Production launch | 6 | todo | | | |
-| M18 | AMC disclosure scraper (after launch) | 7 | todo | | | |
-| M19 | Manual assets: FD, PPF, EPF (after launch) | 8 | todo | | | |
-| M20 | Stock and ETF prices (after launch) | 8 | todo | | | |
-| M21 | Stock gains: buy prices and corporate actions (after launch) | 8 | todo | | | |
 
 Status values: `todo` · `in progress` · `blocked (needs owner: …)` · `done`.
 
@@ -327,13 +328,6 @@ estimated after the statement date and valued at the latest NAV, and a newer upl
 days and statuses follow brokers and RTAs: a weekend or holiday runs the next business day, and an instalment is "In
 progress" until units show (T+2), then "Done". See plan §10.5.1.
 
-## M13: QR device login
-**Read:** plan §7.4, D2, §13 items 1, 2 and 7.
-**Needs from owner:** none.
-**Build:** the device-authorization plugin, the `/login` QR tab, the `/link` approval page, the scanner, the cookie
-bridge if needed, the Devices list, and the "new device" email.
-**Done when:** the QR auth tests in plan §16 pass, and phone-to-desktop linking works on staging.
-
 ## M14: Privacy and compliance
 **Read:** plan §12, §8 (deletion), §9.2 (export, delete), §13 items 3 and 7.
 **Needs from owner:** legal entity name, grievance officer name and email, and jurisdiction. If they're missing, build
@@ -353,46 +347,36 @@ data and nothing else.
 **Build:** everything in §13A.1–§13A.6.
 **Done when:** everything in §13A.7 is true.
 
-## M16: Hardening and load tests
-**Read:** plan §11, §16 (Load row), §3.5, §17 Phase 6.
-**Needs from owner:** an OK to run load tests on staging (synthetic users and fixture PDFs only).
-**Build:**
-- All fair-use limits and 429 copy, the "Coming soon" states (D8, D9), security headers / CSP, dependency audit.
-- Alerts: DLQ, engine 5xx, D1 overloaded, stuck queued jobs, usage.
-- **Load tests:** a 2,000-upload burst, a 5,000-household nightly prebuild, polling. Set pool caps and
-  `max_concurrency` from the results. Write the measured drain time and cost into plan §3.5 and §18.
+## M13: QR device login
+**Read:** plan §7.4, D2, §13 items 1, 2 and 7.
+**Needs from owner:** none.
+**Order:** after M15 (owner, 2026-11-26), so the QR flow is built and tested in the installed app too (plan §13A.5).
+**Owner decisions (2026-11-26):**
+- **One account, many devices, like WhatsApp Web.** The linked device signs in to the approving device's own account:
+  same user, same household, same data. It doesn't create a user, ask for an email, or sign up. It's just one more
+  session for that user.
+- **No "new device" email.** Instead, an in-app notice: the account's other devices show a one-time "New device
+  linked: Chrome · macOS · Mumbai" toast, and Settings → Devices marks the device "New". The `audit_event` is still
+  written.
 
-**Done when:** the whole §16 table is green on staging, and the load-test numbers are recorded.
+**Build:** the device-authorization plugin, the `/login` QR tab, the `/link` approval page, the scanner, the cookie
+bridge if needed, the Devices list, and the in-app "New device linked" notice.
+**Done when:** the QR auth tests in plan §16 pass (including: the new session belongs to the approver's user and
+household, no user row is created, and no email is queued), and phone-to-desktop linking works on staging.
 
-## M17: Production launch
-**Read:** plan §7.2, §17 Phase 6 launch checklist, §19.
-**Needs from owner** (the most owner work of any milestone):
-- Google consent screen brand verification and "In production", plus a production client ID.
-- Cloudflare Email Service daily-quota increase approved (Limit Increase Request form).
-- Legal review done.
-- Production approval in the GitHub environment.
-
-**Build:**
-- Create production resources (like M4), set the secrets, run the production migrations.
-- Deploy through the manual production job.
-- Smoke test: sign-in, upload, dashboard, export, delete with a test account.
-- Usage alerts on.
-
-**Done when:** the launch checklist in plan §17 Phase 6 is ticked, and the owner confirms go-live.
-
-## M18: AMC disclosure scraper (after launch)
+## M18: AMC disclosure scraper
 **Read:** plan §10.3.1 (all), D10.
 **Needs from owner:** none.
 **Build:** the adapter framework, the top 10 AMC adapters (each with its own ⚠️ VERIFY notes at the top of the file),
 `scrape_run` monitoring, and BharatStock limited to the gaps.
 **Done when:** ≥ 80% of tracked equity schemes have `source='amc'` holdings by day 15 of the month.
 
-## Phase 8: beyond mutual funds (after launch; owner request, 2026-11-26)
+## Phase 8: beyond mutual funds (before launch; owner request, 2026-11-26)
 These extend tracking to stocks/ETFs and to manually entered instruments. The plan has no design for them yet: the
 first session of each milestone writes the plan section (data model, API, UI, privacy), gets the owner's OK on it, and
 only then builds. Keep the design system (plan §13), tenant guard (§9.1) and encryption (§8) as for everything else.
 
-## M19: Manual assets: FD, PPF, EPF (after launch)
+## M19: Manual assets: FD, PPF, EPF
 **Goal:** a family adds fixed deposits, PPF and EPF by hand and sees an approximate current value and return next to
 their funds.
 **Read:** plan §6 (member), §8, §9.1, §10.2, §13.
@@ -415,7 +399,7 @@ their funds.
 rate change mid-year); isolation tests (another household gets 404); no plaintext amounts in D1; the screens are checked
 at 360 px and desktop, dark and light.
 
-## M20: Stock and ETF prices (after launch)
+## M20: Stock and ETF prices
 **Goal:** stocks and ETFs already in CDSL statements are valued at the latest exchange price and are included in daily
 returns.
 **Read:** plan §10.4 (the NAV store pattern), §10.5, §20 ("Exchange prices for ETFs and stocks").
@@ -431,7 +415,7 @@ returns.
 **Done when:** the ingest parses saved public files (committed fixtures), idempotent re-runs insert 0 rows, a CDSL
 statement's stocks are revalued in a snapshot test, and daily returns include them.
 
-## M21: Stock gains: buy prices and corporate actions (after launch)
+## M21: Stock gains: buy prices and corporate actions
 **Goal:** gains, XIRR and capital-gains tax for stocks and ETFs, as for funds.
 **Read:** plan §10.2, the engine's `analysis.py` (FIFO, LTCG), and the M20 section.
 **Needs from owner:** which brokers to support first (tradebook formats), and OK on the plan section.
@@ -444,6 +428,37 @@ statement's stocks are revalued in a snapshot test, and daily returns include th
 **Done when:** golden tests for FIFO with a split and a bonus, a parser test per supported broker on synthetic files,
 and private tradebooks checked with counts only.
 
+## M16: Hardening and load tests
+**Read:** plan §11, §16 (Load row), §3.5, §17 Phase 6.
+**Needs from owner:** an OK to run load tests on staging (synthetic users and fixture PDFs only).
+**Build:**
+- All fair-use limits and 429 copy, the "Coming soon" states (D8, D9), security headers / CSP, dependency audit.
+- Alerts: DLQ, engine 5xx, D1 overloaded, stuck queued jobs, usage.
+- **Load tests:** a 2,000-upload burst, a 5,000-household nightly prebuild, polling. Set pool caps and
+  `max_concurrency` from the results. Write the measured drain time and cost into plan §3.5 and §18.
+
+**Order:** after M21, just before launch (owner, 2026-11-26), so the load tests and hardening cover everything that
+ships, including the AMC scraper (M18), manual assets (M19), stock prices (M20) and stock gains (M21).
+
+**Done when:** the whole §16 table is green on staging, and the load-test numbers are recorded.
+
+## M17: Production launch
+**Order:** last, after M21 (owner, 2026-11-26), so everything is built before go-live.
+**Read:** plan §7.2, §17 Phase 6 launch checklist, §19.
+**Needs from owner** (the most owner work of any milestone):
+- Google consent screen brand verification and "In production", plus a production client ID.
+- Cloudflare Email Service daily-quota increase approved (Limit Increase Request form).
+- Legal review done.
+- Production approval in the GitHub environment.
+
+**Build:**
+- Create production resources (like M4), set the secrets, run the production migrations.
+- Deploy through the manual production job.
+- Smoke test: sign-in, QR device link, upload, dashboard, export, delete with a test account.
+- Usage alerts on.
+
+**Done when:** the launch checklist in plan §17 Phase 6 is ticked, and the owner confirms go-live.
+
 ---
 
 ## Order notes
@@ -451,9 +466,12 @@ and private tradebooks checked with counts only.
   - Risky unknowns first: the engine in a container (M1), the pool (M2), pdf.js in a Worker (M3).
   - Then the secure foundations (M5–M6), before any user data flows (M7+).
   - Market data (M9) comes before snapshots (M10), because builds need NAVs.
-  - Everything users see before launch exists by M15. M16 proves it holds under load.
+  - M13 (QR device login) comes after the installable app (M15), so it's built against the installed app too.
+  - M18–M21 add the AMC scraper and the beyond-mutual-fund features.
+  - Then M16 proves everything holds under load, and production launch (M17) is last (owner, 2026-11-26).
 - **What can move:** M9 can start any time after M7, M13 any time after M5, and M15 any time after M10. Keep the table
   order unless the owner asks otherwise.
 - **Owner inputs, by first milestone that needs them:** M0 branch OK · M4 Cloudflare Paid + token + domain · M5 Google
-  clients + Email Sending domain (✅) + test emails · M10 R2 read-only token · M11 BharatStock OK · M14 legal details · M16 load-test OK ·
-  M17 Google production, email quota increase, legal review, go-live approval.
+  clients + Email Sending domain (✅) + test emails · M10 R2 read-only token · M11 BharatStock OK · M14 legal details ·
+  M19/M21 OK on their plan sections (M21 also the brokers) · M16 load-test OK · M17 Google production, email quota
+  increase, legal review, go-live approval.
