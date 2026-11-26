@@ -468,6 +468,9 @@ CREATE TABLE parse_job (                         -- queued uploads (§10.1 queue
 CREATE INDEX parse_job_status ON parse_job(status, expires_at);
 -- Finished rows ('done','failed','expired') are deleted by `cleanup` after 7 days. They hold no PDF and no password.
 -- Re-uploading the same file after a 'failed' or 'expired' job deletes that old row first, so the UNIQUE doesn't block a retry.
+-- ✅ M8: rebuilt in migrations/app/0004_parse_job.sql (SQLite can't alter a CHECK): password_source also allows 'none'
+-- (an unencrypted PDF), plus user_id (the uploader, for the audit row), pending_pan_hmac (the pending KFintech password
+-- used), pdf_bytes (for the parked-PDF recount) and updated_at (lost-message detection). Index on (household_id, created_at).
 
 CREATE TABLE pending_statement_password (        -- KFintech guided request (D9); replaces .statement-requests.json
   household_id  TEXT NOT NULL REFERENCES household(id) ON DELETE CASCADE,
@@ -481,7 +484,7 @@ CREATE TABLE pending_statement_password (        -- KFintech guided request (D9)
 CREATE TABLE quota (                             -- fair-use counters (§11)
   subject       TEXT NOT NULL,                   -- 'user:{id}' | 'household:{id}' | 'global'
   metric        TEXT NOT NULL,                   -- 'upload' | 'parse_fail' | 'device_link' ...
-  window        TEXT NOT NULL,                   -- '2026-11-24' or '2026-11'
+  window        TEXT NOT NULL,                   -- '2026-11-24' or '2026-11' (✅ M6: IST; also '2026-11-24T13' for hourly)
   count         INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (subject, metric, window)
 );
@@ -761,24 +764,35 @@ bucket or D1 export is useless on its own.
 - **KEK** (key-encryption key):
   - 32 random bytes held as a Worker secret, `DATA_KEK_V1`.
   - `kek_version` is stored per household. To rotate: add `DATA_KEK_V2`, re-wrap the DEKs, then remove V1.
+    ✅ M6: new DEKs are wrapped with the highest `DATA_KEK_V<n>` that is set, and `rewrapDeks()` moves households in
+    batches with a compare-and-set on `kek_version` (call it until it returns 0). Tested.
 - **DEK** (data key): 32 random bytes per household, generated at household creation and stored wrapped
   (`AES-GCM(KEK, DEK)`) in `household.dek_wrapped`.
 - **Blob format:** `0x01 | kek_version (1B) | flags (1B) | iv (12B) | AES-256-GCM ciphertext+tag`. `flags` bit 0 = the
   plaintext was gzip-compressed before encryption (D18). It's set for JSON blobs and clear for parked PDFs. The AAD is
   `"{household_id}:{blob_key}"`, so a blob can't be swapped into another household. Use `CompressionStream("gzip")`
   and `DecompressionStream` in the Worker. Never compress after encrypting.
+  ✅ M6 (`src/lib/crypto.ts`, `src/lib/blob.ts`): the AAD is the 3 header bytes followed by `"{household_id}:{key}"`,
+  so the flags and KEK byte can't be edited either. Encrypted columns use the same format, with a field name as the key
+  (`member/{id}/pan`, `member/{id}/name`). `kek_version` records the KEK at seal time; a re-wrap keeps the DEK, so
+  old blobs still open. D1 returns BLOB columns as number arrays; the readers accept them.
 - **Fields:** `pan_enc`, `display_name_enc`, `password_enc` (both tables) and all R2 user blobs, including parked PDFs
   in `tmp/`, use the household DEK.
   `pan_hmac = HMAC-SHA256(PAN_PEPPER, PAN)`, where `PAN_PEPPER` is a Worker secret.
 - **API:** WebCrypto only (`crypto.subtle`), in `worker/src/lib/crypto.ts`. Expose
   `seal(householdId, key, bytes)` and `open(householdId, key, bytes)`. Cache the unwrapped DEK per request only;
   never store it in KV.
+  ✅ M6: these are `Vault.seal(key, bytes, flags)` / `Vault.open(key, bytes)`, where a `Vault` holds one household's
+  non-extractable DEK for one request (`tenant(c).vault()`, at most one D1 read, or none when the key row comes in a
+  batch). `blob.ts` adds `sealJson`/`openJson` (gzip), `sealPdf`/`openPdf` (no gzip) and the R2 key builders.
 - **The engine never sees keys.** The Worker decrypts and sends plaintext over the internal DO→container channel, and
   the engine returns plaintext.
 - **Account deletion is crypto-shredding.** Delete `household.dek_wrapped` first, then the R2 prefixes
   `h/{household_id}/` **and `tmp/{household_id}/`**, then the rows. D1
   Time Travel (30 days) can still hold rows, but they're useless without the DEK. Say this in the privacy policy:
   "backups purged within 30 days".
+  ✅ M6: `shredHousehold()` in `src/lib/household.ts` (blanks `dek_wrapped`, deletes both prefixes, then the household
+  row, which cascades). M14 calls it from `DELETE /api/account` and also removes the user and session rows.
 
 ---
 
@@ -796,6 +810,10 @@ export async function assertMember(c, memberId: string) {
 - Every SQL statement on user tables includes `household_id = ?` bound from the session.
 - R2 keys are built only from server-side IDs.
 - The SPA never sends a household ID.
+- ✅ M6: `src/lib/tenant.ts` is a per-request `Tenant` (`tenant(c)`): `assertMember`, `assertStatement` (non-UUIDs are
+  404 without a query), `keys.*` for R2, and `vault()`. Errors are thrown as `ApiError` and returned as
+  `{ ok: false, code }` (the shape the Worker has used since M2, not `{ error: { code, message } }`; the SPA maps codes to
+  safe messages).
 
 ### 9.2 Endpoints
 
@@ -806,14 +824,14 @@ export async function assertMember(c, memberId: string) {
 | `GET /api/me` | ✅ | `{ user: {name, email, image}, household: {id, created_at}, consent_ok, limits, usage }` | |
 | `POST /api/consent` | ✅ | record acceptance of `notice_version` | Blocks every `/api/*` data route until accepted (403 `consent_required`) |
 | `GET /api/config` | – | `{ features: { cdsl_fetch: false, kfintech_auto: false, stocks: true }, kfintech_form_url, turnstile_site_key }` | replaces today's sandbox config |
-| `GET /api/members` | ✅ | list `{id, name, pan_masked, statements: [{id, kind, as_of, holdings_count}]}` | |
-| `PATCH /api/members/:id` | ✅ | rename (display override) | |
+| `GET /api/members` | ✅ | list `{id, name, pan_masked, statements: [{id, kind, as_of, holdings_count}]}` | ✅ M6: returns `{ members: [...] }`; `name` is null until a statement or a rename sets it. One D1 batch |
+| `PATCH /api/members/:id` | ✅ | rename (display override) | ✅ M6: `{ name }`, 1–60 characters; replaces the sealed `display_name_enc` (a later statement doesn't overwrite it, M7) |
 | `DELETE /api/members/:id` | ✅ | delete member + their statements + blobs; enqueue rebuild | confirm in UI |
-| `POST /api/statements` | ✅ | multipart `file`, `password?` **only**: no PAN, no member (D19). The member comes from the statement |  §10.1. `201 {statement}` (direct path) or `202 {job: {id, position, eta_s}}` (queued path) |
-| `GET /api/jobs` | ✅ | the household's open and recently finished parse jobs: `[{id, status, position, eta_s, error_code, statement_id}]` | drives the "Processing" list; no PDF data |
-| `GET /api/jobs/:id` | ✅ | one job's status | polled with backoff; `Retry-After` header set to the suggested next poll |
-| `DELETE /api/jobs/:id` | ✅ | cancel: delete the parked PDF and the job | |
-| `DELETE /api/statements/:id` | ✅ | delete one statement; enqueue rebuild | |
+| `POST /api/statements` | ✅ | multipart `file`, `password?` **only**: no PAN, no member (D19). The member comes from the statement |  §10.1. `201 {statement}` (direct path) or `202 {job: {id, position, eta_s}}` (queued path). ✅ M7: `201 { statement: {id, kind, as_of, holdings_count, warnings_count}, member: {id, name, pan_masked, created} }`; ✅ M8: `202 { job }` when no slot is free, `503 queue_full` over the parked-PDF cap |
+| `GET /api/jobs` | ✅ | the household's open and recently finished parse jobs: `[{id, status, position, eta_s, error_code, statement_id}]` | drives the "Processing" list; no PDF data. ✅ M8: `{ jobs }`, open ones plus those finished in the last 24 h; one D1 read + one pool call |
+| `GET /api/jobs/:id` | ✅ | one job's status | polled with backoff; `Retry-After` header set to the suggested next poll. ✅ M8: `{ job }`; `Retry-After` 2–10 s while queued, 2 s while parsing, none once finished; a `done` job also returns `statement` and `member` (as the `201` does) |
+| `DELETE /api/jobs/:id` | ✅ | cancel: delete the parked PDF and the job | ✅ M8: also dismisses a finished job; `409 job_running` while it's being parsed |
+| `DELETE /api/statements/:id` | ✅ | delete one statement; enqueue rebuild | ✅ M7: row (`RETURNING blob_key`) + audit in one batch, then the blob; 404 for other households. The rebuild is enqueued from M10 |
 | `GET /api/portfolio` | ✅ | snapshot JSON (same shape as today's `Portfolio` type, with stable member IDs) + `{ stale, building }` | §10.2 |
 | `GET /api/portfolio/status` | ✅ | `{ status, built_at, market_date }` for polling after upload | one indexed D1 read; polled with backoff (1 → 10 s), `Retry-After` set |
 | `GET /api/portfolio/daily?days=30&member=all` | ✅ | daily returns (§10.5): `{ as_of, coverage, today, series }` | `days` ≤ 366; `member` is `all` or a member ID, checked with `assertMember` |
@@ -916,6 +934,38 @@ tab (owner decision, 2026-11-25).
    `201 { statement: {id, kind, as_of, holdings_count, warnings_count} }`.
 9. **Nothing to clean up.** The bytes were never written.
 
+✅ M7 (2026-11-26), as built in `src/lib/statements.ts` + `src/routes/statements.ts`:
+- **One D1 round trip before the pre-check:** the household key, members, unexpired pending passwords, the duplicate
+  check (stored or open job), open jobs and the three quota counters, all in one batch. Then one store batch.
+- **Refusals** (all `{ ok: false, code }`, nothing stored): `413 file_too_large` (also refused from `Content-Length`
+  before buffering), `422 not_pdf`, `409 already_added` / `already_processing`, `422 password_required` with
+  `typed: true|false` (the SPA picks the message), `unrecognised`, `too_large`, `pan_mismatch` (the member PAN that
+  opened the file differs from the PAN printed in it), `member_limit`, `parse_error`, `multi_pan`, `precheck_disagree`,
+  `504 parse_timeout`, `429 upload_limit` / `too_many_failures` / `jobs_limit` with `retry_after` and `Retry-After`.
+- ~~Until M8, a busy pool answers `503 busy`~~: replaced by the queued path in M8 (`202`, below).
+- A typed PAN in lower case is also tried upper-cased. If the PDF has no single labelled PAN but a member's PAN opened
+  it, that PAN is the pre-check PAN.
+- **Failed parses** (`parse_fail`, 10 per hour) count wrong typed passwords, unrecognised files and parser failures.
+  The first "this statement needs a password" prompt (nothing typed) doesn't count.
+- **Race-safe store:** the member insert is `INSERT … SELECT … WHERE (member count) < 10 ON CONFLICT DO NOTHING`, and
+  the statement row takes `member_id` from a `pan_hmac` subquery. A full household fails the batch on the NOT NULL
+  `member_id` (`member_limit`), a concurrent duplicate on the UNIQUE `content_hash` (`409`), and the upload quota on its
+  NOT NULL trick (`429`). Any of these deletes the already-written blob again. The upload quota is also read early,
+  so the engine isn't used for an upload that would be refused.
+- A statement for an existing member without a name sets the holder's name; a rename is never overwritten.
+- **24 per member:** after the insert, the same batch deletes the oldest statements of the arriving kind until the
+  member has 24 (`DELETE … RETURNING blob_key`), then their blobs.
+- **Blob:** `{ format: 1, kind, parser_version, statement }`, gzip then sealed. The engine's `/parse` now returns its
+  `version` (stored as `parser_version`).
+- **`tracked_scheme`:** fund ISINs (`INF…`) only, 30 rows per statement (D1's 100-parameter limit), all in one `MARKET`
+  batch. Rows unchanged and seen within the last day are skipped by the upsert's `WHERE`; a CDSL statement (no AMFI
+  code) never erases a known code. A failure here is logged and doesn't fail the upload.
+- The engine call retries a refused connection or an engine `503` up to 3 times, 1 s apart (the process restarts every
+  200 requests), and gives up after 60 s with `parse_timeout`.
+- Tests: `test/statements.test.ts` (31, synthetic PDFs, fake engine) and `test/statements.private.test.ts` (4 private
+  statements through the real engine container: stored sealed, nothing in `tmp/`, duplicate refused, re-filed by the
+  member PAN with no password).
+
 **D. Queued path (all slots busy; only reached after every check in A passed):**
 5. **Park.** Encrypt the PDF with the household DEK (no gzip; PDFs are already compressed) and put it at
    `tmp/{household_id}/{job_id}.bin`. Insert the `parse_job` row with `status='queued'`, the detected `kind`, the
@@ -942,6 +992,41 @@ tab (owner decision, 2026-11-25).
 10. **Time estimate.** `EnginePool` keeps a moving average of parse time per class (p50 over the last 200 jobs) and
     the number of free slots. `eta_s ≈ ceil((jobs ahead + 1) / slots) × avg_parse_s`, plus a cold-start allowance
     (3 s) when instances are asleep. `GET /api/jobs/:id` returns the current `position` and `eta_s`.
+
+✅ M8 (2026-11-26), as built in `src/lib/jobs.ts` + `src/routes/jobs.ts`:
+- **One pool call decides the path.** After every check in A, the upload asks `acquire({ class: "fast", wait: true,
+  park: bytes })`: a lease (direct path), `busy` with a ticket (queued path; the parked-PDF counter is taken in the same
+  call), or `full` when the global cap is reached (`503 queue_full`, `Retry-After: 60`, nothing stored).
+- **Park** = sealed PDF in `tmp/`, then one batch: delete a finished job row for the same file, insert the job (the
+  open-jobs cap is enforced inside the INSERT by writing NULL into the NOT NULL `status`, so a race can't pass 10),
+  extend the pending KFintech password to the job's expiry, and **take the upload quota now**, so a parked job never
+  fails on quota later. Any refusal deletes the PDF again. Then `{ job_id }` is sent; if that send fails the job is
+  safe and tmp-sweep re-sends it. Response `202 { job: { id, position, eta_s } }`.
+- **Password at parse time:** `typed` is kept sealed in `password_enc` (AAD `job/{id}/password`); `pan` is re-read from
+  the member (`member_id`); `kfintech_pending` from `pending_pan_hmac`; an unencrypted PDF is `none`.
+- **Slot waits re-send a fresh delayed message and ack the original** instead of `msg.retry()`. The Queues docs
+  (read 2026-11-26) don't say whether `retry()` counts toward `max_retries`, and retries are capped (100 at most), so a
+  long wait could have pushed a healthy job into the DLQ. The delay is about half the job's ETA, 5–60 s with ±20%
+  jitter (the plan said 5–30 s; longer waits far back in a 10k burst keep the pool's request rate down). A queued job
+  keeps its place: the pool re-registers an expired ticket at the same number (the ticket is `parse_job.seq`).
+- **Claim** is a compare-and-set on `status` + `updated_at`, so a message delivered twice is parsed once. A job left
+  `parsing` for 2 min is treated as crashed and re-claimed. An engine timeout, a crash or an infrastructure error goes
+  back to `queued` (attempts 1–2) and fails as `parse_timeout` on the 3rd. `parse_error`, `multi_pan`,
+  `precheck_disagree`, `member_limit` and `password_unavailable` fail at once. A missing parked object becomes
+  `expired`. A concurrent direct upload of the same file ends the job as `done`.
+- **Store** reuses `finishParsed` + `storeStatement` (the C6/C7 code of the direct path) with the job's `done` update in
+  the same batch and no second quota take. The statement_added audit row has no country or UA (no request). Then the
+  PDF is deleted and `blob_key` set NULL. Every end deletes the PDF first; if that fails, `blob_key` stays and
+  tmp-sweep deletes it. The pool's parked counter and waiter are released.
+- Failed queued parses don't count toward the hourly failed-upload limit (nothing the user did).
+- **tmp-sweep** (`15 * * * *`, dispatched on `event.cron`): expires open jobs past `expires_at` (PDF first), deletes
+  leftover PDFs of finished jobs, re-sends open jobs untouched for 15 min (waiting jobs touch `updated_at` every 5 min;
+  the sweep touches what it re-sends), and recounts the parked PDFs into `EnginePool.setParked()`.
+- **ETA:** `ceil((ahead + 1) / slots) × moving-average job time`, as before. The 3 s cold-start allowance isn't added:
+  a busy answer means every slot was used in the last minute, so none is asleep.
+- Tests: `test/jobs.test.ts` (16, real `EnginePool` forced to 0 free slots, fake engine container; one goes through the
+  real pf-parse queue), 6 new `EnginePool` tests, and 4 private statements through the queued path on the real engine
+  (consumer 0.35–1.7 s each, `tmp/` empty after).
 
 **Never logged:** file names, PANs, passwords, statement contents. Log only `job_id`, status changes, durations and
 error codes.
@@ -1003,7 +1088,7 @@ Engine `/parse` timeout: 60 s. On timeout return `parse_timeout`, and count it i
 | `snapshot-prebuild` | triggered when a market day becomes final (§10.4), at the latest `0 5 * * *` | Enqueue a rebuild for households with `last_active_at` in the last 7 days, with `sendBatch` (100 per call). The `rebuild` queue's `max_concurrency` and the `EngineBatch` cap set the drain rate, so this is the nightly burst handled at a steady pace. The per-message delay is spread over 0–30 min to smooth the wake-ups. |
 | `stocks-monthly` | `0 5 10-20 * *` | §10.3.1 |
 | `cleanup` | `0 21 * * *` | Expire pending passwords and old quota windows. Drop `tracked_scheme` rows unseen for 90 days. Delete finished `parse_job` rows older than 7 days and expired Better Auth `session` / `verification` rows. Send DPDP inactivity notices and do erasures (§12). |
-| `tmp-sweep` | `15 * * * *` (hourly) | Parked PDFs past `expires_at`: delete the R2 object, set `expired`. Re-enqueue `queued` jobs whose message was lost (no change for 15 min). Counts only in logs. |
+| `tmp-sweep` | `15 * * * *` (hourly) | Parked PDFs past `expires_at`: delete the R2 object, set `expired`. Re-enqueue `queued` jobs whose message was lost (no change for 15 min). Counts only in logs. ✅ M8: also deletes leftover PDFs of finished jobs and recounts the parked PDFs for `EnginePool` (§10.1 D, as built). |
 
 #### 10.3.1 Stocks inside funds: AMC scraper first, BharatStock fallback (D10)
 
@@ -1240,7 +1325,7 @@ Edge cases:
 | Uploads | 20 per day, 100 per month per user | `quota` |
 | Failed parses (wrong password, etc.) | 10 per hour per user | `quota`, then 429 "Try again later" |
 | Open parse jobs (queued, parsing) | 10 per household | `parse_job` count, then 429 "Finish the uploads in progress first" |
-| Parked PDFs, all users | 50,000 objects or 5 GB in `tmp/` | `EnginePool` counter. Above it, uploads get 503 + `Retry-After` and nothing is stored (protects R2 and the 24 h promise if the engine is down) |
+| Parked PDFs, all users | 50,000 objects or 5 GB in `tmp/` | `EnginePool` counter. Above it, uploads get 503 + `Retry-After` and nothing is stored (protects R2 and the 24 h promise if the engine is down). ✅ M8: taken in the same `acquire` call that queues the upload; `503 queue_full`, `Retry-After: 60`; tmp-sweep recounts it from D1 hourly |
 | Status polling | `Retry-After` 1 → 10 s, set by the server | the SPA follows it; the IP rate limit catches clients that don't |
 | API requests | 120 per 60 s per user; 300 per 60 s per IP | Rate Limiting binding (approximate, per location) |
 | Magic-link requests | 5 per hour per email, 20 per hour per IP, plus Turnstile | Better Auth rate limit + binding |
@@ -1248,6 +1333,11 @@ Edge cases:
 | Export | 3 per day | `quota` |
 
 Show the limits in Settings, using the existing UI style. Return 429 with a friendly `message` and a `retry_after`.
+
+✅ M6: `src/lib/quota.ts` `takeQuota(env, specs)` takes one unit from several counters all-or-nothing in one D1 batch.
+At the limit the UPSERT writes NULL into the NOT NULL `count`, which fails the statement and rolls the batch back, so
+there's no read-then-write race (tested: 30 parallel takes at a limit of 20 give exactly 20). Windows are IST hours,
+days and months; the refusal says which counter and the seconds until it resets.
 
 ---
 
@@ -1609,7 +1699,8 @@ integration accept. Switch only if a later wrangler requires `exports`.
     ]
   },
   // max_concurrency of pf-parse / pf-rebuild must equal the EngineFast / EngineBatch pool caps (§14).
-  // Retries that only waited for a slot use msg.retry({ delaySeconds }) and don't count as attempts (tracked in parse_job.attempts).
+  // Slot waits send a fresh delayed message and ack the original (✅ M8, §10.1 D): they don't count as attempts
+  // (parse_job.attempts) and can't use up max_retries.
   "triggers": { "crons": ["30 17 * * *", "30 20 * * *", "30 1 * * *", "30 4 * * *", "0 5 * * *", "0 3 * * SUN", "0 5 10-20 * *", "0 21 * * *", "15 * * * *"] },
   // nav-ingest ×4 (23:00, 02:00, 07:00, 10:00 IST), snapshot-prebuild fallback, nav-repair (Sun), stocks, cleanup, tmp-sweep (hourly).
   // ⚠️ "0 5 * * *" serves both prebuild and stocks on the 10th–20th: dispatch on event.cron in scheduled().

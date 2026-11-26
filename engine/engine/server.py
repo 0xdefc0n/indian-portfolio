@@ -2,6 +2,7 @@
 
 POST /parse   body: the raw PDF bytes (application/pdf)
               headers: X-Pdf-Password (base64url of the UTF-8 password, may be empty), X-Statement-Kind (CDSL|RTA)
+              → parse_pdf()'s result plus the engine `version`
               The body is read into memory. Multipart is deliberately not used: Starlette spools uploads over 1 MB
               to a temporary file on disk, and PDFs must never touch disk.
 POST /build   JSON {statements, market, today} → the portfolio snapshot
@@ -96,7 +97,7 @@ async def parse(request: Request):
         kind = request.headers.get("x-statement-kind") or None
         result = await asyncio.to_thread(parse_pdf, data, password, kind)
         del data, password
-        return JSONResponse(result)
+        return JSONResponse({**result, "version": VERSION})  # stored as statement.parser_version
 
 
 @app.post("/build")

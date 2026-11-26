@@ -3,8 +3,13 @@
 import { Hono } from 'hono'
 import { handleEmailBatch, type EmailJob } from './lib/email'
 import { withEngine } from './lib/engine-client'
+import { ApiError } from './lib/errors'
+import { handleParseBatch, type ParseMessage, tmpSweep } from './lib/jobs'
 import { requireSession } from './middleware/session'
 import { authRoutes } from './routes/auth'
+import { jobRoutes } from './routes/jobs'
+import { memberRoutes } from './routes/members'
+import { statementRoutes } from './routes/statements'
 import type { AppBindings, AppEnv } from './types'
 
 export { EngineBatch, EngineFast } from './engine'
@@ -60,6 +65,10 @@ app.get('/me', signedIn, async (c) => {
   })
 })
 
+app.route('/', memberRoutes)
+app.route('/', statementRoutes)
+app.route('/', jobRoutes)
+
 // Until the first build (M10) a household's snapshot row has no blob, so the portfolio is empty. M10 replaces this.
 app.get('/portfolio', signedIn, (c) =>
   c.json({ members: [], holdings: [], activity: [], sips: [], benchmark: null, stocks: EMPTY_STOCKS, stale: false, building: false }),
@@ -73,12 +82,19 @@ app.notFound((c) => c.json({ ok: false, code: 'not_found' }, 404))
 
 // Privacy (§0.1): log the error class only, never messages that could carry request data.
 app.onError((err, c) => {
+  if (err instanceof ApiError) {
+    if (typeof err.extra.retry_after === 'number') c.header('Retry-After', String(err.extra.retry_after))
+    return c.json({ ok: false, code: err.code, ...err.extra }, err.status)
+  }
   console.error('api_error', err.name)
   if (err instanceof EngineUnavailable || err.name === 'EngineStartError') {
     return c.json({ ok: false, code: 'engine_unavailable' }, 502)
   }
   return c.json({ ok: false, code: 'internal' }, 500)
 })
+
+/** tmp-sweep (§10.3): hourly at :15. */
+export const TMP_SWEEP_CRON = '15 * * * *'
 
 class EngineUnavailable extends Error {
   override name = 'EngineUnavailable'
@@ -87,15 +103,21 @@ class EngineUnavailable extends Error {
 export default {
   fetch: app.fetch,
 
-  // Cron jobs arrive in M8 (tmp-sweep), M9 (nav-*), M10 (prebuild), M11 (stocks), M14 (cleanup).
-  async scheduled(controller) {
+  // Dispatch on event.cron (wrangler.jsonc triggers). Still to come: M9 (nav-*), M10 (prebuild), M11 (stocks),
+  // M14 (cleanup).
+  async scheduled(controller, env, ctx) {
+    if (controller.cron === TMP_SWEEP_CRON) {
+      ctx.waitUntil(tmpSweep(env).then(() => undefined))
+      return
+    }
     console.log('cron_unhandled', controller.cron)
   },
 
-  // Queue names carry an environment suffix (pf-email-staging). Consumers for parse (M8), market (M9) and rebuild
-  // (M10) arrive later; until then retrying keeps a stray message until its consumer exists (then the DLQ).
+  // Queue names carry an environment suffix (pf-email-staging). Consumers for market (M9) and rebuild (M10) arrive
+  // later; until then retrying keeps a stray message until its consumer exists (then the DLQ).
   async queue(batch, env) {
     if (batch.queue.startsWith('pf-email')) return handleEmailBatch(batch as MessageBatch<EmailJob>, env)
+    if (batch.queue.startsWith('pf-parse')) return handleParseBatch(batch as MessageBatch<ParseMessage>, env)
     console.log('queue_unhandled', batch.queue, batch.messages.length)
     batch.retryAll({ delaySeconds: 60 })
   },

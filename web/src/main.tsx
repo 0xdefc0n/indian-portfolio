@@ -4,19 +4,32 @@ import { createRoot } from "react-dom/client"
 import { Route, Switch } from "wouter"
 
 import App from "./App.tsx"
+import { FailedJobNotices } from "@/components/jobs"
 import { Toaster } from "@/components/ui/sonner"
 import { Skeleton } from "@/components/ui/skeleton"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { api, type Me, SignedOut } from "@/lib/api"
 import { LoginPage, VerifyLinkPage } from "@/pages/login"
+import { MembersPage } from "@/pages/members"
+import { SettingsPage } from "@/pages/settings"
 import "./index.css"
 
-/** Loads the session once (/api/me); a 401 sends the user to /login via the global handler in lib/api.ts. */
-function SignedIn() {
+// /api/me is loaded once per page load and shared by every signed-in route.
+let mePromise: Promise<Me> | null = null
+const loadMe = () => {
+  mePromise ??= api.me().catch((e) => {
+    mePromise = null
+    throw e
+  })
+  return mePromise
+}
+
+/** Loads the session (/api/me); a 401 sends the user to /login via the global handler in lib/api.ts. */
+function SignedIn({ page: Page }: { page: React.ComponentType<{ me: Me }> }) {
   const [me, setMe] = useState<Me | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
-    api.me().then(setMe, (e: Error) => !(e instanceof SignedOut) && setError(e.message))
+    loadMe().then(setMe, (e: Error) => !(e instanceof SignedOut) && setError(e.message))
   }, [])
   if (error)
     return (
@@ -25,7 +38,12 @@ function SignedIn() {
       </p>
     )
   if (!me) return <Skeleton className="mx-auto mt-24 h-40 max-w-md rounded-[22px]" />
-  return <App me={me} />
+  return (
+    <>
+      <Page me={me} />
+      <FailedJobNotices />
+    </>
+  )
 }
 
 function NotFound() {
@@ -44,7 +62,9 @@ createRoot(document.getElementById("root")!).render(
         <Switch>
           <Route path="/login/verify" component={VerifyLinkPage} />
           <Route path="/login" component={LoginPage} />
-          <Route path="/" component={SignedIn} />
+          <Route path="/">{() => <SignedIn page={App} />}</Route>
+          <Route path="/members">{() => <SignedIn page={MembersPage} />}</Route>
+          <Route path="/settings">{() => <SignedIn page={SettingsPage} />}</Route>
           <Route component={NotFound} />
         </Switch>
         <Toaster position="bottom-right" />

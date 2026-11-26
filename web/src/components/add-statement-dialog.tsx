@@ -1,7 +1,8 @@
-import { FileUpIcon, Loader2Icon, PlusIcon } from "lucide-react"
-import { type FormEvent, useState } from "react"
+import { ChevronDownIcon, FileUpIcon, Loader2Icon, PlusIcon } from "lucide-react"
+import { type FormEvent, useRef, useState } from "react"
 import { toast } from "sonner"
 
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -14,71 +15,103 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { QueuedUpload } from "@/components/jobs"
 import { RequestStatementForm } from "@/components/request-statement-form"
-import { api, type SaveResult } from "@/lib/api"
+import { type AddedStatement, ApiFailure, api, type QueuedUpload as Queued, SignedOut } from "@/lib/api"
 
-const PAN_PATTERN = "[A-Za-z]{5}[0-9]{4}[A-Za-z]"
+const PASSWORD_HINT =
+  "For a CDSL eCAS this is usually the PAN in capital letters. For CAMS/KFintech it's the password you chose when requesting it."
 
-/** Toast the outcome of a save and report whether anything usable was added. */
-function report(res: SaveResult): boolean {
-  const parsed = res.parsed ?? []
-  const ok = parsed.filter((p) => p.ok)
-  if (ok.length) {
-    const n = ok.reduce((s, p) => s + (p.holdings ?? 0), 0)
-    toast.success("Statement added", { description: `${n} holding${n === 1 ? "" : "s"} found.` })
-    return true
-  }
-  toast.error("Statement saved, but it couldn't be read", {
-    description: parsed[0]?.error ?? "Only CDSL consolidated statements are supported right now.",
+/** Say whose portfolio it went to (plan §13 item 5). The dashboard update arrives with snapshots (M10). */
+function report({ member }: AddedStatement) {
+  const name = member.name ?? member.pan_masked
+  toast.success("Statement added", {
+    description: member.created ? `New member added: ${name} (${member.pan_masked})` : `Added to ${name}`,
   })
-  return false
 }
 
-function Field({ id, label, hint, ...props }: React.ComponentProps<typeof Input> & { label: string; hint?: string }) {
-  return (
-    <div className="grid gap-2">
-      <Label htmlFor={id}>{label}</Label>
-      <Input id={id} {...props} />
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-    </div>
-  )
-}
+type Problem = { message: string; hint?: string }
 
-function UploadForm({ onDone }: { onDone: () => void }) {
+/**
+ * Only the file and an optional password (D19). Members' PANs and pending passwords are tried on the server. Every
+ * check the user could fix happens before anything is queued, so a queued upload never needs them again (§10.1 A).
+ */
+function UploadForm({ onDone, onQueued }: { onDone: () => void; onQueued: () => void }) {
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [queued, setQueued] = useState<Queued["job"] | null>(null)
+  const [problem, setProblem] = useState<Problem | null>(null)
   const [file, setFile] = useState<File | null>(null)
+  const [showPassword, setShowPassword] = useState(false)
+  const passwordRef = useRef<HTMLInputElement>(null)
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    const f = new FormData(e.currentTarget)
     if (!file) return
+    const password = showPassword ? String(new FormData(e.currentTarget).get("password") ?? "") : ""
     setBusy(true)
-    setError(null)
+    setProblem(null)
     try {
-      const res = await api.upload(String(f.get("pan")), String(f.get("password") ?? ""), file)
-      if (report(res)) onDone()
+      const result = await api.addStatement(file, password)
+      if ("job" in result) {
+        setQueued(result.job) // 202: parked until an engine slot is free
+        onQueued()
+      } else {
+        report(result)
+        onDone()
+      }
     } catch (err) {
-      setError((err as Error).message)
+      if (err instanceof SignedOut) return
+      if (err instanceof ApiFailure && err.code === "password_required") {
+        // Nothing was stored: open the password field and say what to type (plan §10.1 A5).
+        const typed = err.data.typed === true
+        setShowPassword(true)
+        setProblem(typed
+          ? { message: "That password didn't open this statement.", hint: PASSWORD_HINT }
+          : { message: err.message, hint: PASSWORD_HINT })
+        requestAnimationFrame(() => passwordRef.current?.focus())
+      } else {
+        setProblem({ message: (err as Error).message })
+      }
     } finally {
       setBusy(false)
     }
   }
 
+  if (queued)
+    return (
+      <QueuedUpload
+        initial={queued}
+        onDone={(added) => {
+          report(added)
+          onDone()
+        }}
+        onFailed={(message) => {
+          // The file is already deleted on the server: start again from the form.
+          setQueued(null)
+          setFile(null)
+          setProblem({ message, hint: "Choose the statement PDF again to retry." })
+          onQueued()
+        }}
+        onCancelled={() => {
+          setQueued(null)
+          setFile(null)
+          onQueued()
+        }}
+      />
+    )
+
   return (
     <form onSubmit={submit} className="grid gap-4">
-      <Field id="u-pan" name="pan" label="PAN" required maxLength={10} pattern={PAN_PATTERN} autoComplete="off"
-        placeholder="ABCDE1234F" className="uppercase" hint="The member this statement belongs to." />
       <div className="grid gap-2">
         <Label htmlFor="u-file">Statement PDF</Label>
         <label
           htmlFor="u-file"
-          className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed px-4 py-4 text-sm transition-colors hover:bg-muted/60 focus-within:outline-2 focus-within:outline-ring"
+          className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-dashed px-4 py-4 text-sm transition-colors hover:bg-muted/60 focus-within:outline-2 focus-within:outline-ring"
         >
-          <FileUpIcon className="size-5 text-muted-foreground" />
-          <span className={file ? "font-medium" : "text-muted-foreground"}>{file ? file.name : "Choose a PDF"}</span>
+          <FileUpIcon className="size-5 shrink-0 text-muted-foreground" />
+          <span className={file ? "min-w-0 truncate font-medium" : "text-muted-foreground"}>{file ? file.name : "Choose a PDF"}</span>
           <input id="u-file" type="file" accept="application/pdf" required className="sr-only"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            onChange={(e) => { setFile(e.target.files?.[0] ?? null); setProblem(null) }} />
         </label>
         <p className="text-xs text-muted-foreground">
           A{" "}
@@ -92,82 +125,51 @@ function UploadForm({ onDone }: { onDone: () => void }) {
           one. Choose “Detailed” with the earliest start date to see gains.
         </p>
       </div>
-      <Field id="u-password" name="password" label="PDF password" type="password" autoComplete="off"
-        hint="Leave empty if it's the PAN (CDSL) or if you requested the statement here. Used once to read the file, never saved." />
-      {error && <p className="text-sm text-loss" role="alert">{error}</p>}
-      <Button type="submit" disabled={busy || !file}>
+      {showPassword ? (
+        <div className="grid gap-2">
+          <Label htmlFor="u-password">PDF password</Label>
+          <Input id="u-password" ref={passwordRef} name="password" type="password" autoComplete="off" className="h-11"
+            aria-describedby="u-password-hint" onChange={() => { if (problem?.hint) setProblem(null) }} />
+          <p id="u-password-hint" className="text-xs text-muted-foreground">
+            Used once to open the file, never saved. Family members' PANs are tried automatically.
+          </p>
+        </div>
+      ) : (
+        <Button type="button" variant="ghost" className="-mx-3 h-11 justify-start px-3 text-muted-foreground" onClick={() => setShowPassword(true)}>
+          <ChevronDownIcon />
+          Has a password? Add it
+        </Button>
+      )}
+      {problem && (
+        <div className="grid gap-1" role="alert">
+          <p className="text-sm text-loss">{problem.message}</p>
+          {problem.hint && <p className="text-xs text-muted-foreground">{problem.hint}</p>}
+        </div>
+      )}
+      <Button type="submit" className="h-11" disabled={busy || !file}>
         {busy && <Loader2Icon className="animate-spin" />}
-        {busy ? "Adding statement…" : "Add statement"}
+        {busy ? "Reading statement…" : "Add statement"}
       </Button>
     </form>
   )
 }
 
-function OtpForm({ onDone }: { onDone: () => void }) {
-  const [session, setSession] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  async function sendOtp(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    const f = new FormData(e.currentTarget)
-    setBusy(true)
-    setError(null)
-    try {
-      const res = await api.requestOtp(String(f.get("pan")), String(f.get("bo")), String(f.get("dob")))
-      setSession(res.session_id)
-      toast.info(res.msg || "OTP sent to the mobile registered with CDSL")
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function verify(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    if (!session) return
-    const f = new FormData(e.currentTarget)
-    setBusy(true)
-    setError(null)
-    try {
-      const res = await api.verifyOtp(session, String(f.get("otp")))
-      if (report(res)) onDone()
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
+/** CDSL OTP fetch isn't deployed (D8): shown as coming soon (plan §13 item 5). */
+function OtpComingSoon({ onUpload }: { onUpload: () => void }) {
   return (
-    <div className="grid gap-4">
-      {!session ? (
-        <form onSubmit={sendOtp} className="grid gap-4">
-          <Field id="o-pan" name="pan" label="PAN" required maxLength={10} pattern={PAN_PATTERN} autoComplete="off"
-            placeholder="ABCDE1234F" className="uppercase" />
-          <Field id="o-bo" name="bo" label="CDSL BO ID" required inputMode="numeric" maxLength={16} pattern="[0-9]{16}"
-            placeholder="16 digits" hint="Shown in your broker app under profile or demat details." />
-          <Field id="o-dob" name="dob" label="Date of birth" type="date" required />
-          {error && <p className="text-sm text-loss" role="alert">{error}</p>}
-          <Button type="submit" disabled={busy}>
-            {busy && <Loader2Icon className="animate-spin" />}
-            {busy ? "Contacting CDSL… about 20 seconds" : "Send OTP"}
-          </Button>
-        </form>
-      ) : (
-        <form onSubmit={verify} className="grid gap-4">
-          <Field id="o-otp" name="otp" label="OTP" required inputMode="numeric" maxLength={8} pattern="[0-9]{4,8}"
-            autoComplete="one-time-code" autoFocus hint="Sent by CDSL to the mobile registered on the demat account." />
-          {error && <p className="text-sm text-loss" role="alert">{error}</p>}
-          <Button type="submit" disabled={busy}>
-            {busy && <Loader2Icon className="animate-spin" />}
-            {busy ? "Fetching statement…" : "Fetch statement"}
-          </Button>
-          <Button type="button" variant="ghost" onClick={() => { setSession(null); setError(null) }}>
-            Use different details
-          </Button>
-        </form>
-      )}
+    <div className="grid gap-4 text-sm">
+      <div className="flex items-center gap-2">
+        <span className="font-medium">Fetch from CDSL with OTP</span>
+        <Badge variant="secondary">Coming soon</Badge>
+      </div>
+      <p className="text-muted-foreground">
+        Soon you'll be able to fetch a CDSL statement with the OTP sent to your phone. For now, download it from{" "}
+        <a className="-my-2 py-2 text-primary underline-offset-4 hover:underline" href="https://www.cdslindia.com/CAS/LoginCAS.aspx" target="_blank" rel="noopener noreferrer">
+          CDSL
+        </a>{" "}
+        and upload the PDF.
+      </p>
+      <Button type="button" variant="outline" className="h-11" onClick={onUpload}>Upload a PDF</Button>
     </div>
   )
 }
@@ -178,12 +180,24 @@ export function AddStatementDialog({
   onAdded,
   trigger,
   defaultTab = "upload",
+  open: controlledOpen,
+  onOpenChange,
 }: {
+  /** A statement was added, or a queued upload changed (queued, cancelled, failed): reload. */
   onAdded: () => void
-  trigger?: React.ReactNode
+  /** null: no trigger (the page opens it with `open`). */
+  trigger?: React.ReactNode | null
   defaultTab?: Tab
+  /** Optional control from the page ("Try again" in the Processing list opens it). */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }) {
-  const [open, setOpen] = useState(false)
+  const [ownOpen, setOwnOpen] = useState(false)
+  const open = controlledOpen ?? ownOpen
+  const setOpen = (o: boolean) => {
+    setOwnOpen(o)
+    onOpenChange?.(o)
+  }
   const [tab, setTab] = useState<Tab>(defaultTab)
   const done = () => {
     setOpen(false)
@@ -197,19 +211,21 @@ export function AddStatementDialog({
         if (o) setTab(defaultTab)
       }}
     >
-      <DialogTrigger asChild>
-        {trigger ?? (
-          <Button>
-            <PlusIcon />
-            Add statement
-          </Button>
-        )}
-      </DialogTrigger>
+      {trigger !== null && (
+        <DialogTrigger asChild>
+          {trigger ?? (
+            <Button>
+              <PlusIcon />
+              Add statement
+            </Button>
+          )}
+        </DialogTrigger>
+      )}
       <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Add a statement</DialogTitle>
           <DialogDescription>
-            A family member's CDSL or CAMS / KFintech statement. Funds in both are counted once, using the newer figures.
+            Add any family member's statement. We'll file it under the right person automatically.
           </DialogDescription>
         </DialogHeader>
         <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="mt-2">
@@ -219,10 +235,10 @@ export function AddStatementDialog({
             <TabsTrigger value="request">Request</TabsTrigger>
           </TabsList>
           <TabsContent value="upload" className="pt-4">
-            <UploadForm onDone={done} />
+            <UploadForm onDone={done} onQueued={onAdded} />
           </TabsContent>
           <TabsContent value="otp" className="pt-4">
-            <OtpForm onDone={done} />
+            <OtpComingSoon onUpload={() => setTab("upload")} />
           </TabsContent>
           <TabsContent value="request" className="pt-4">
             <RequestStatementForm onUpload={() => setTab("upload")} />

@@ -1,5 +1,6 @@
 // One login owns one household (D1). It is created with its wrapped DEK and an empty snapshot row the first time a
 // session is created for the user, i.e. on signup, by any sign-in method (plan §6, §7.1).
+import { blobKeys, deletePrefix } from './blob'
 import { newWrappedDek } from './crypto'
 
 type HouseholdEnv = { DB: D1Database; DATA_KEK_V1: string }
@@ -32,4 +33,17 @@ export async function ensureHousehold(env: HouseholdEnv, userId: string, now = D
 
 export class HouseholdError extends Error {
   override name = 'HouseholdError'
+}
+
+/**
+ * Crypto-shred a household (plan §8): destroy the wrapped DEK first, so every sealed blob and column is unreadable
+ * from that moment (including D1 Time Travel copies), then delete its R2 prefixes h/{id}/ and tmp/{id}/, then its
+ * rows (member, statement, parse_job, pending passwords and snapshot cascade). The user and session rows are removed
+ * by account deletion (M14), which calls this.
+ */
+export async function shredHousehold(env: { DB: D1Database; BUCKET: R2Bucket }, householdId: string): Promise<{ objects: number }> {
+  await env.DB.prepare("UPDATE household SET dek_wrapped = x'', kek_version = 0 WHERE id = ?1").bind(householdId).run()
+  const objects = (await deletePrefix(env, blobKeys.householdPrefix(householdId))) + (await deletePrefix(env, blobKeys.tmpPrefix(householdId)))
+  await env.DB.prepare('DELETE FROM household WHERE id = ?1').bind(householdId).run()
+  return { objects }
 }

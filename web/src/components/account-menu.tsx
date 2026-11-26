@@ -1,7 +1,8 @@
-// Avatar menu in the header (plan §13 item 8). Settings joins it with the Settings shell (M6).
-import { LogOutIcon } from "lucide-react"
+// Avatar menu in the header (plan §13 item 8): Members, Settings, Sign out.
+import { LogOutIcon, SettingsIcon, UsersIcon } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
+import { useLocation } from "wouter"
 
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
@@ -10,6 +11,7 @@ import { auth, type Me } from "@/lib/api"
 
 export function AccountMenu({ me }: { me: Me }) {
   const [broken, setBroken] = useState(false)
+  const [, navigate] = useLocation()
   const label = me.user.name || me.user.email
   const initial = label.trim().charAt(0).toUpperCase() || "?"
 
@@ -39,6 +41,13 @@ export function AccountMenu({ me }: { me: Me }) {
           {me.user.name && <span className="truncate text-sm font-medium text-foreground">{me.user.name}</span>}
           <span className="truncate font-normal">{me.user.email}</span>
         </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => navigate("/members")} className="py-2">
+          <UsersIcon /> Members
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => navigate("/settings")} className="py-2">
+          <SettingsIcon /> Settings
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={signOut} className="py-2">
           <LogOutIcon /> Sign out
