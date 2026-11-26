@@ -4,8 +4,10 @@
 // Content-Encoding: gzip (encodeBody "manual"), so Worker CPU and memory stay flat whatever the portfolio size. The
 // stale/building flags travel in headers (X-Snapshot-Stale, X-Snapshot-Building) and the SPA merges them in.
 import { Hono } from 'hono'
-import { blobKeys, ownsKey } from '../lib/blob'
+import { blobKeys, isUuid, ownsKey } from '../lib/blob'
 import { FLAG_GZIP } from '../lib/crypto'
+import { DAILY_FULL_DAYS, dailyFor, EMPTY_DAILY } from '../lib/daily-cache'
+import { ApiError, notFound } from '../lib/errors'
 import { lazyRebuild, readSnapshotRow, snapshotState } from '../lib/snapshot'
 import { tenant } from '../lib/tenant'
 import { requireSession } from '../middleware/session'
@@ -63,6 +65,38 @@ portfolioRoutes.get('/portfolio/status', signedIn, async (c) => {
   if (s.building || s.pending) c.header('Retry-After', String(STATUS_RETRY_S))
   c.header('Cache-Control', 'private, no-store')
   return c.json({ status, building: s.building, pending: s.pending, stale: s.stale, market_date: s.market_date, built_at: s.built_at })
+})
+
+// GET /api/portfolio/daily?days=30&member=all (plan §10.5.3, M12). Cache first: one D1 read (the snapshot row) and one
+// R2 read when cached. The dashboard asks for it after /api/portfolio and never waits on it.
+portfolioRoutes.get('/portfolio/daily', signedIn, async (c) => {
+  const hid = c.var.householdId
+  const rawDays = c.req.query('days') ?? '30'
+  const days = /^\d{1,3}$/.test(rawDays) ? Number(rawDays) : NaN
+  if (!(days >= 1 && days <= DAILY_FULL_DAYS)) throw new ApiError(400, 'bad_request')
+  const member = c.req.query('member') ?? 'all'
+  if (member !== 'all' && !isUuid(member)) throw notFound()
+  const noStore = { 'Cache-Control': 'private, no-store' }
+
+  const [row, market] = await Promise.all([readSnapshotRow(c.env, hid), cachedMarketStatus(c.env, (p) => c.executionCtx.waitUntil(p))])
+  const usable = row?.blob_key && row.inputs_hash && row.statements > 0 && row.blob_key.startsWith(`${blobKeys.householdPrefix(hid)}snapshot/`)
+  if (!row || !usable) {
+    if (member !== 'all') await tenant(c).assertMember(member)
+    return c.json(EMPTY_DAILY, 200, noStore)
+  }
+  const t = tenant(c)
+  const { result, cache } = await dailyFor(c.env, {
+    householdId: hid,
+    vault: await t.vaultFromRow(row),
+    snapshotKey: row.blob_key!,
+    inputsHash: row.inputs_hash!,
+    market,
+    member,
+    days,
+    checkMember: () => t.assertMember(member),
+    // the write is awaited (a miss is the slow path anyway), so the next call is sure to hit
+  })
+  return c.json(result, 200, { ...noStore, 'X-Daily-Cache': cache })
 })
 
 function flags(stale: boolean, building: boolean): Record<string, string> {

@@ -540,9 +540,10 @@
  "holdings": [
   {
    "amc": "Synth",
-   "as_of": "2026-11-20",
+   "amfi_code": "900001",
+   "as_of": "2026-11-24",
    "asset_class": "Equity",
-   "benchmark_value": 273047.85,
+   "benchmark_value": 273716.26,
    "broker": "Synth Broking Limited",
    "cashflows": [
     [
@@ -735,12 +736,14 @@
     ]
    ],
    "category": "Flexi & multi cap",
+   "estimated": null,
    "folio": "F-1001",
    "invested": 207000.0,
    "isin": "INF000S01FC1",
    "member_id": "m-alpha",
    "name": "Synth Flexi Cap Fund",
-   "nav": 66.6851,
+   "nav": 66.8679,
+   "payouts": [],
    "pledged": 0,
    "returns": {
     "1y": 0.13902,
@@ -756,6 +759,12 @@
     "CDSL",
     "KFINTECH"
    ],
+   "statement": {
+    "as_of": "2026-11-20",
+    "nav": 66.6851,
+    "units": 4338.505,
+    "value": 289313.64
+   },
    "tax": {
     "equity": true,
     "lt_gain": 61919.3,
@@ -766,13 +775,213 @@
     "st_value": 58505.17
    },
    "units": 4338.505,
-   "value": 289313.64
+   "units_exact": true,
+   "units_timeline": [
+    [
+     "2022-12-31",
+     0
+    ],
+    [
+     "2023-01-05",
+     122.602
+    ],
+    [
+     "2023-02-05",
+     245.924
+    ],
+    [
+     "2023-03-05",
+     366.835
+    ],
+    [
+     "2023-04-05",
+     485.443
+    ],
+    [
+     "2023-05-05",
+     604.78
+    ],
+    [
+     "2023-06-05",
+     721.499
+    ],
+    [
+     "2023-07-05",
+     836.258
+    ],
+    [
+     "2023-08-05",
+     951.737
+    ],
+    [
+     "2023-09-05",
+     1064.644
+    ],
+    [
+     "2023-10-05",
+     1175.688
+    ],
+    [
+     "2023-11-05",
+     1287.43
+    ],
+    [
+     "2023-12-05",
+     1396.762
+    ],
+    [
+     "2024-01-05",
+     1504.21
+    ],
+    [
+     "2024-02-05",
+     1612.311
+    ],
+    [
+     "2024-03-05",
+     1718.182
+    ],
+    [
+     "2024-04-05",
+     1822.145
+    ],
+    [
+     "2024-05-05",
+     1926.767
+    ],
+    [
+     "2024-06-05",
+     2029.18
+    ],
+    [
+     "2024-07-05",
+     2129.773
+    ],
+    [
+     "2024-08-05",
+     2230.999
+    ],
+    [
+     "2024-09-05",
+     2330.068
+    ],
+    [
+     "2024-10-05",
+     2427.402
+    ],
+    [
+     "2024-11-05",
+     2525.347
+    ],
+    [
+     "2024-12-05",
+     2621.279
+    ],
+    [
+     "2025-01-05",
+     2715.461
+    ],
+    [
+     "2025-02-05",
+     2810.231
+    ],
+    [
+     "2025-03-05",
+     2903.224
+    ],
+    [
+     "2025-04-05",
+     2994.359
+    ],
+    [
+     "2025-05-05",
+     3086.069
+    ],
+    [
+     "2025-06-05",
+     3176.024
+    ],
+    [
+     "2025-06-10",
+     3026.024
+    ],
+    [
+     "2025-07-05",
+     3114.212
+    ],
+    [
+     "2025-08-05",
+     3202.951
+    ],
+    [
+     "2025-09-05",
+     3289.968
+    ],
+    [
+     "2025-10-05",
+     3375.306
+    ],
+    [
+     "2025-11-05",
+     3461.17
+    ],
+    [
+     "2025-12-05",
+     3545.433
+    ],
+    [
+     "2026-01-05",
+     3627.991
+    ],
+    [
+     "2026-02-05",
+     3711.074
+    ],
+    [
+     "2026-03-05",
+     3792.754
+    ],
+    [
+     "2026-04-05",
+     3872.672
+    ],
+    [
+     "2026-05-05",
+     3953.055
+    ],
+    [
+     "2026-06-05",
+     4032.068
+    ],
+    [
+     "2026-07-05",
+     4109.409
+    ],
+    [
+     "2026-08-05",
+     4187.189
+    ],
+    [
+     "2026-09-05",
+     4263.7
+    ],
+    [
+     "2026-10-05",
+     4338.505
+    ],
+    [
+     "2026-11-20",
+     4338.505
+    ]
+   ],
+   "value": 290106.72
   },
   {
    "amc": "Synth",
-   "as_of": "2026-11-20",
+   "amfi_code": "900002",
+   "as_of": "2026-11-24",
    "asset_class": "Debt",
-   "benchmark_value": 130186.8,
+   "benchmark_value": 130505.49,
    "broker": "",
    "cashflows": [
     [
@@ -781,12 +990,14 @@
     ]
    ],
    "category": "Debt",
+   "estimated": null,
    "folio": "F-2002",
    "invested": 100000.0,
    "isin": "INF000S02LQ2",
    "member_id": "m-alpha",
    "name": "Synth Liquid Fund",
-   "nav": 3087.6066,
+   "nav": 3093.8568,
+   "payouts": [],
    "pledged": 0,
    "returns": {
     "1y": 0.06709,
@@ -798,6 +1009,12 @@
    "sources": [
     "KFINTECH"
    ],
+   "statement": {
+    "as_of": "2026-11-20",
+    "nav": 3087.6066,
+    "units": 38.014,
+    "value": 117372.28
+   },
    "tax": {
     "equity": false,
     "lt_gain": 0.0,
@@ -808,22 +1025,40 @@
     "st_value": 117372.28
    },
    "units": 38.014,
-   "value": 117372.28
+   "units_exact": true,
+   "units_timeline": [
+    [
+     "2022-12-31",
+     0
+    ],
+    [
+     "2024-03-15",
+     38.014
+    ],
+    [
+     "2026-11-20",
+     38.014
+    ]
+   ],
+   "value": 117609.87
   },
   {
    "amc": "Synth",
-   "as_of": "2026-10-31",
+   "amfi_code": "900003",
+   "as_of": "2026-11-24",
    "asset_class": "Equity",
    "benchmark_value": null,
    "broker": "Synth Broking Limited",
    "cashflows": null,
    "category": "Large cap",
+   "estimated": null,
    "folio": null,
    "invested": null,
    "isin": "INF000S03NX3",
    "member_id": "m-alpha",
    "name": "Synth Nifty 50 Index Fund",
-   "nav": 232.6723,
+   "nav": 233.6834,
+   "payouts": [],
    "pledged": 0,
    "returns": {
     "1y": 0.11904,
@@ -835,24 +1070,40 @@
    "sources": [
     "CDSL"
    ],
+   "statement": {
+    "as_of": "2026-10-31",
+    "nav": 232.6723,
+    "units": 200.0,
+    "value": 46534.46
+   },
    "tax": null,
    "units": 200.0,
-   "value": 46534.46
+   "units_exact": false,
+   "units_timeline": [
+    [
+     "2026-10-31",
+     200.0
+    ]
+   ],
+   "value": 46736.68
   },
   {
    "amc": "Synth",
-   "as_of": "2026-10-31",
+   "amfi_code": "900003",
+   "as_of": "2026-11-24",
    "asset_class": "Equity",
    "benchmark_value": null,
    "broker": "Synth Securities Pvt Ltd",
    "cashflows": null,
    "category": "Large cap",
+   "estimated": null,
    "folio": null,
    "invested": null,
    "isin": "INF000S03NX3",
    "member_id": "m-beta",
    "name": "Synth Nifty 50 Index Fund",
-   "nav": 232.6723,
+   "nav": 233.6834,
+   "payouts": [],
    "pledged": 0,
    "returns": {
     "1y": 0.11904,
@@ -864,24 +1115,44 @@
    "sources": [
     "CDSL"
    ],
+   "statement": {
+    "as_of": "2026-10-31",
+    "nav": 232.6723,
+    "units": 100.0,
+    "value": 23267.23
+   },
    "tax": null,
    "units": 100.0,
-   "value": 23267.23
+   "units_exact": false,
+   "units_timeline": [
+    [
+     "2026-09-30",
+     100.0
+    ],
+    [
+     "2026-10-31",
+     100.0
+    ]
+   ],
+   "value": 23368.34
   },
   {
    "amc": "Synth Industries",
+   "amfi_code": null,
    "as_of": "2026-10-31",
    "asset_class": "Stocks & bonds",
    "benchmark_value": null,
    "broker": "Synth Broking Limited",
    "cashflows": null,
    "category": "Stocks & bonds",
+   "estimated": null,
    "folio": null,
    "invested": null,
    "isin": "INE000S01EQ1",
    "member_id": "m-alpha",
    "name": "Synth Industries Limited",
    "nav": 1500.0,
+   "payouts": [],
    "pledged": 5.0,
    "returns": {
     "1y": null,
@@ -893,24 +1164,35 @@
    "sources": [
     "CDSL"
    ],
+   "statement": {
+    "as_of": "2026-10-31",
+    "nav": 1500.0,
+    "units": 10.0,
+    "value": 15000.0
+   },
    "tax": null,
    "units": 10.0,
+   "units_exact": false,
+   "units_timeline": null,
    "value": 15000.0
   },
   {
    "amc": "Synth",
-   "as_of": "2026-10-31",
+   "amfi_code": "900001",
+   "as_of": "2026-11-24",
    "asset_class": "Equity",
    "benchmark_value": null,
    "broker": "Synth Securities Pvt Ltd",
    "cashflows": null,
    "category": "Flexi & multi cap",
+   "estimated": null,
    "folio": null,
    "invested": null,
    "isin": "INF000S01FC1",
    "member_id": "m-beta",
    "name": "Synth Flexi Cap Fund",
-   "nav": 66.4979,
+   "nav": 66.8679,
+   "payouts": [],
    "pledged": 0,
    "returns": {
     "1y": 0.13902,
@@ -922,9 +1204,26 @@
    "sources": [
     "CDSL"
    ],
+   "statement": {
+    "as_of": "2026-10-31",
+    "nav": 66.4979,
+    "units": 50.0,
+    "value": 3324.89
+   },
    "tax": null,
    "units": 50.0,
-   "value": 3324.89
+   "units_exact": false,
+   "units_timeline": [
+    [
+     "2026-09-30",
+     50.0
+    ],
+    [
+     "2026-10-31",
+     50.0
+    ]
+   ],
+   "value": 3343.4
   }
  ],
  "members": [
@@ -1233,6 +1532,14 @@
     "replayed_funds": 2
    },
    "as_of": "2026-11-20",
+   "estimated": {
+    "amount": 0,
+    "in_progress": 0,
+    "in_progress_amount": 0,
+    "instalments": 0,
+    "pending": 0,
+    "pending_amount": 0
+   },
    "history": [
     {
      "month": "2026-05",
@@ -1270,7 +1577,9 @@
     "CDSL",
     "KFINTECH"
    ],
-   "total": 468220.38
+   "statement_total": 468220.38,
+   "total": 469453.27,
+   "value_date": "2026-11-24"
   },
   {
    "accounts": [
@@ -1326,6 +1635,14 @@
     "replayed_funds": 0
    },
    "as_of": "2026-10-31",
+   "estimated": {
+    "amount": 0,
+    "in_progress": 0,
+    "in_progress_amount": 0,
+    "instalments": 0,
+    "pending": 0,
+    "pending_amount": 0
+   },
    "history": [
     {
      "month": "2026-07",
@@ -1342,6 +1659,10 @@
     {
      "month": "2026-10",
      "value": 15400.0
+    },
+    {
+     "month": "2026-11",
+     "value": 26711.74
     }
    ],
    "history_covers_all": true,
@@ -1354,13 +1675,19 @@
    "sources": [
     "CDSL"
    ],
-   "total": 26592.12
+   "statement_total": 26592.12,
+   "total": 26711.74,
+   "value_date": "2026-11-24"
   }
  ],
  "sips": [
   {
    "amount": 5000.0,
    "category": "Flexi & multi cap",
+   "estimated": {
+    "amount": 0,
+    "instalments": 0
+   },
    "folio": "F-1001",
    "frequency": "monthly",
    "instalments": 46,
@@ -1368,9 +1695,13 @@
    "invested": 230000.0,
    "isin": "INF000S01FC1",
    "last_date": "2026-10-05",
+   "latest": null,
    "member_id": "m-alpha",
    "name": "Synth Flexi Cap Fund",
-   "next_date": "2026-11-04",
+   "next_date": "2026-12-07",
+   "next_due": "2026-12-05",
+   "next_moved": "weekend",
+   "sip_day": 5,
    "start_date": "2023-01-05",
    "status": "active"
   }

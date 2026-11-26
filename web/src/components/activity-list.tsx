@@ -1,3 +1,4 @@
+import { estimateNote, isBuy, unitsText } from "@/lib/activity"
 import type { Activity, Member } from "@/lib/api"
 import { day, inr, units } from "@/lib/format"
 
@@ -10,7 +11,8 @@ export function ActivityList({ items, members, showMember }: Props) {
   return (
     <ul className="divide-y">
       {items.map((a, i) => {
-        const bought = a.units > 0
+        const bought = isBuy(a)
+        const note = estimateNote(a)
         return (
           <li key={`${a.member_id}-${a.isin}-${a.date}-${i}`} className="flex items-baseline gap-4 py-3 text-sm">
             <time dateTime={a.date} className="hidden w-24 shrink-0 text-muted-foreground sm:block">
@@ -22,6 +24,7 @@ export function ActivityList({ items, members, showMember }: Props) {
                 <span className="sm:hidden">{day(a.date)}</span>
                 {showMember && <span className="ml-3 sm:ml-0">{members.get(a.member_id)?.name}</span>}
               </div>
+              {note && <div className="text-xs text-muted-foreground">{note}</div>}
             </div>
             <div className="shrink-0 text-right">
               {a.amount != null ? (
@@ -30,7 +33,7 @@ export function ActivityList({ items, members, showMember }: Props) {
                     {bought ? (a.sip ? "SIP " : "Bought ") : "Sold "}
                     {inr(Math.abs(a.amount))}
                   </div>
-                  <div className="text-xs text-muted-foreground">{units(Math.abs(a.units))} units</div>
+                  <div className="text-xs text-muted-foreground">{unitsText(a)}</div>
                 </>
               ) : (
                 <div className={bought ? "text-gain" : "text-loss"}>

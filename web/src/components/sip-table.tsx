@@ -3,6 +3,7 @@ import { useState } from "react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import type { Member, Sip } from "@/lib/api"
 import { categoryColor, day, inr } from "@/lib/format"
+import { inProgress, movedNote, nextRun } from "@/lib/sips"
 import { cn } from "@/lib/utils"
 
 type Props = { sips: Sip[]; members: Map<string, Member>; showMember: boolean; missing: Member[] }
@@ -35,13 +36,16 @@ export function SipTable({ sips, members, showMember, missing }: Props) {
             <TableHead className="px-4 text-right">Instalment</TableHead>
             <TableHead className="hidden px-4 lg:table-cell">Started</TableHead>
             <TableHead className="hidden px-4 md:table-cell">Last paid</TableHead>
-            <TableHead className="hidden px-4 sm:table-cell">Next expected</TableHead>
+            <TableHead className="hidden px-4 sm:table-cell">Next</TableHead>
             <TableHead className="hidden pr-0 text-right md:table-cell">Invested via SIP</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.map((s) => {
             const off = s.status === "stopped"
+            const run = nextRun(s)
+            const running = inProgress(s)
+            const moved = run ? movedNote(run.moved, run.due, day) : null
             return (
               <TableRow key={`${s.member_id}-${s.folio}-${s.isin}`} className="hover:bg-muted/50">
                 <TableCell className="py-3.5 pr-6 pl-0 whitespace-normal">
@@ -54,8 +58,16 @@ export function SipTable({ sips, members, showMember, missing }: Props) {
                     {showMember && <span>{members.get(s.member_id)?.name.split(" ")[0]}</span>}
                     {s.folio && <span>Folio {s.folio}</span>}
                     {off && <span className="rounded-full bg-muted px-2 py-0.5 text-foreground/70">Stopped</span>}
-                    {s.next_date && <span className="sm:hidden">Next {day(s.next_date)}</span>}
+                    {running && <span className="rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary">In progress</span>}
+                    {run && <span className="sm:hidden">Next {day(run.date)}</span>}
                   </div>
+                  {running && (
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {inr(running.amount)} debited {day(running.date)} (estimated), units usually by {day(running.units_by)}
+                      {running.moved && <>. {movedNote(running.moved, running.due, day)}</>}
+                    </div>
+                  )}
+                  {moved && <div className="mt-1 text-xs text-muted-foreground sm:hidden">{moved}</div>}
                 </TableCell>
                 <TableCell className="px-4 text-right">
                   <div className={cn("font-medium", off && "text-muted-foreground")}>{inr(s.amount)}</div>
@@ -67,9 +79,13 @@ export function SipTable({ sips, members, showMember, missing }: Props) {
                     {s.instalments} instalment{s.instalments === 1 ? "" : "s"}
                   </div>
                 </TableCell>
-                <TableCell className="hidden px-4 text-muted-foreground md:table-cell">{day(s.last_date)}</TableCell>
+                <TableCell className="hidden px-4 text-muted-foreground md:table-cell">
+                  <div>{day(s.latest?.date ?? s.last_date)}</div>
+                  {s.latest && <div className="text-xs">{s.latest.status === "in_progress" && running ? "In progress" : "Estimated"}</div>}
+                </TableCell>
                 <TableCell className="hidden px-4 sm:table-cell">
-                  {s.next_date ? <span>{day(s.next_date)}</span> : <span className="text-muted-foreground">—</span>}
+                  {run ? <span>{day(run.date)}</span> : <span className="text-muted-foreground">—</span>}
+                  {moved && <div className="text-xs text-muted-foreground">{moved}</div>}
                 </TableCell>
                 <TableCell className="hidden pr-0 text-right text-muted-foreground md:table-cell">{inr(s.invested)}</TableCell>
               </TableRow>

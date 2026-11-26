@@ -1340,8 +1340,34 @@ consumer):
   transaction date from the running balance. `units_exact: true`.
 - **CDSL only:** points at each CDSL statement date, taken from the holdings in each monthly statement. Between points
   units are assumed constant. `units_exact: false`.
-- **After the latest statement date** units are assumed constant: SIP instalments since then aren't known. The UI
-  says so (§10.5.4).
+- **After the latest statement date** (🔒 owner change, 2026-11-26, M12; this replaces "units are assumed constant"):
+  the dashboard shows the portfolio as of today from the last statement, without asking for an upload every month.
+  Code: `engine/engine/projection.py`.
+  - **Estimated SIP instalments.** Each active SIP is rolled forward on its mandate day (the most common day of the
+    month among its latest instalments, so one holiday shift doesn't move the schedule). Every due date after the
+    statement and up to today is an estimated instalment. Its units are the amount after 0.005% stamp duty, divided by
+    the NAV of its run day. They're added to `units_timeline`, `units`, `invested` and the XIRR `cashflows`, and listed
+    in `activity` with `estimated: true`. Irregular and stopped SIPs aren't estimated.
+  - **Run day, as brokers do it.** ✅ AMFI "Payment modes and their efficiency", Annexure A2: NACH/e-NACH debits on
+    T (the SIP date) and allots on T. Auto-debit and internet SIP allot on T+1. KFintech's SIP TAT table for
+    non-liquid schemes gives NACH T debit, T+1/T+2 allotment, and internet SIP T+2. A due date on a weekend or
+    exchange holiday runs on the next business day, at that day's NAV. Past holidays come from the NAVs: a weekday
+    with no NAV for the fund while later NAVs exist was a holiday. Upcoming ones come from
+    `engine/engine/holidays.py`. ⚠️ VERIFY: NSE's 2026 circular (FAOP71777) didn't load on 2026-11-26. The list holds
+    the remaining confirmed weekday closure (25 Dec 2026, from several brokers' copies of NSE's calendar) plus 24 Nov
+    2026 (seen in the NAV store). Fallback until verified: upcoming dates move for weekends and the listed dates only,
+    and other holidays are picked up from the NAVs once they've passed. Add the 2027 list when NSE publishes it in
+    December.
+  - **Status, as the broker shows it.** An instalment is `in_progress` from its run day T until units show (T+2
+    business days, the latest in KFintech's table), then `done`. Its units count in the value as soon as T's NAV is
+    out. Until then it's `pending`: debited but not yet valued. Each SIP carries `next_date` (the run date),
+    `next_due`, `next_moved` (`weekend` / `holiday`) and its `latest` instalment with `status` and `units_by`.
+  - **Today's value.** Every coded mutual fund is valued at its latest NAV (`units`, `nav`, `value`, `as_of` move to
+    that day). The statement's own figures stay in `holding.statement`, and members get `statement_total`,
+    `value_date` and `estimated` totals. The month-end chart carries on to the latest NAV when it already covers every
+    fund. ETFs and shares keep the statement's value.
+  - **A newer statement replaces every estimate:** estimates only ever start after the newest statement date.
+  - Tax figures (`tax`, `analysis.harvest`) stay as of the statement.
 - **ETFs and shares held in CDSL** (`asset_type == "equity_or_bond"`) have no AMFI NAV. They're excluded and listed
   as "not included".
 
@@ -1390,7 +1416,13 @@ Edge cases:
 - **Invalidation.** The key includes `inputs_hash` (new statements) and `latest_nav_date` (new NAVs), so stale entries
   are never read. The rebuild deletes old entries (§10.2 step 7). While coverage is partial ("22 of 24 funds"), cache
   with a 30-minute freshness check instead, so late NAVs show up.
-- ⚠️ Measure p95 with and without the cache. Target: < 50 ms when cached.
+- ✅ Measured in M12 (vitest/workerd, local): a 50-fund household with a year of NAVs (~19k rows) takes 57 ms
+  uncached and has a cached p95 of 3 ms. A 2-fund household: 7–11 ms uncached, 3 ms cached p95. A cached call is one
+  D1 read (the snapshot row) plus one R2 read, with no MARKET read. Re-measure on Cloudflare in the M16 load test.
+  The NAV read is one statement with a `json_each` list instead of ≤ 90-code chunks, so there's no bound-parameter
+  cap, plus the window's `nav_anomaly` rows in the same batch.
+- Market days for the window come from the household's own funds: a date counts when more than half of the funds
+  alive then have a NAV for it (`market_day` only keeps recent dates). The latest market date always counts.
 - The dashboard loads `/api/portfolio` first, then `/daily` in parallel for the Today tile. The overview never waits
   on it.
 
@@ -1408,8 +1440,13 @@ Edge cases:
   - a month calendar heatmap with gain/loss tokens at 3 intensities;
   - best day, worst day, and % of positive days.
   - The member filter applies.
-- **Honesty note** (muted text with a tooltip): "Estimated from daily NAVs and your units as of 12 Nov. Add a newer
-  statement to include recent SIPs." When `units_exact` is false, add "(from your CDSL statement)".
+- **Honesty note** (muted text with a tooltip): "Estimated from daily NAVs and your units as of 12 Nov, plus 2
+  estimated SIP instalments (₹20,000) since then." When `units_exact` is false, add "(from your CDSL statement)". The
+  tooltip says a newer statement replaces the estimates. It never asks the user to upload one.
+- **SIPs (M12, owner request).** Upcoming SIPs, the SIP page and the fund dialog show the run date, "Moved from 24 Nov
+  (market holiday)" when it moved, and "In progress · debited 25 Nov · units by 27 Nov" for an instalment still being
+  processed. The overview hero says the value is at the latest NAV with N estimated instalments. Estimated rows in
+  Transactions say "Estimated".
 - **Market-day hint.** Before the first NAV of the day lands, show "Today's NAVs usually arrive after 9 PM" instead
   of a 0.
 

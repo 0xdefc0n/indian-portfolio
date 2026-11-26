@@ -25,6 +25,11 @@ export const blobKeys = {
   statement: (hid: string, statementId: string) => `h/${part(hid, 'household')}/statements/${part(statementId, 'statement')}.bin`,
   snapshot: (hid: string, inputsHash: string) => `h/${part(hid, 'household')}/snapshot/${part(inputsHash, 'hash')}.bin`,
   parkedPdf: (hid: string, jobId: string) => `tmp/${part(hid, 'household')}/${part(jobId, 'job')}.bin`,
+  /** Cached daily series (§10.5.3): one per snapshot inputs, latest NAV date and member (or `all`). */
+  dailyPrefix: (hid: string, inputsHash?: string) =>
+    `h/${part(hid, 'household')}/daily/${inputsHash === undefined ? '' : `${part(inputsHash, 'hash')}_`}`,
+  daily: (hid: string, inputsHash: string, navDate: string, member: string) =>
+    `h/${part(hid, 'household')}/daily/${part(inputsHash, 'hash')}_${part(navDate, 'date')}_${part(member, 'member')}.bin`,
 }
 
 /** True when an R2 key belongs to this household. Checked again before every read and write. */

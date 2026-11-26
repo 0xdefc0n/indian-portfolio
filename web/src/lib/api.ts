@@ -14,7 +14,20 @@ export type Member = {
   sips_known: boolean // false when the member has no CAMS/KFintech statement
   accounts: Account[]
   analysis: Analysis
+  // M12: `total` is at the latest NAV (value_date); `as_of` stays the newest statement date
+  statement_total?: number
+  value_date?: string | null
+  estimated?: EstimatedTotals & { pending_amount: number }
 }
+
+/** SIP instalments estimated since the statement (plan §10.5.1, M12). `pending`: run, but their NAV isn't out yet. */
+export type EstimatedTotals = { instalments: number; amount: number; pending: number; in_progress: number; in_progress_amount: number }
+
+/** Why an instalment runs on another day than its due date: the next business day (as brokers do). */
+export type Moved = "weekend" | "holiday" | null
+
+/** Broker-style instalment status: debited and waiting for units (T to T+2 business days), or done. */
+export type InstalmentStatus = "in_progress" | "done"
 
 export type HealthItem = { level: "ok" | "warn" | "info"; title: string; detail: string | null }
 
@@ -78,6 +91,11 @@ export type Holding = {
   tax: TaxSplit | null // long/short-term split, only when every lot is known
   returns: Returns // the fund's own NAV returns (not the investor's)
   benchmark_value: number | null // same cash flows replayed into a Nifty 50 index fund
+  // M12: units / nav / value / as_of are at the latest NAV, estimated SIP units included; the statement's own figures:
+  statement?: { units: number | null; nav: number | null; value: number; as_of: string }
+  amfi_code?: string | null
+  units_exact?: boolean
+  estimated?: (EstimatedTotals & { since: string; units: number }) | null
 }
 
 /** 1Y absolute, 3Y / 5Y annualised, as fractions; null when the fund is younger. */
@@ -94,10 +112,16 @@ export type Sip = {
   interval_days: number
   start_date: string
   last_date: string
-  next_date: string | null
+  next_date: string | null // the next run date (moved past weekends and holidays)
   instalments: number
   invested: number
   status: "active" | "stopped"
+  sip_day?: number | null // the mandate's day of the month
+  next_due?: string | null // the scheduled date behind next_date
+  next_moved?: Moved
+  /** The latest instalment run since the statement (estimated). */
+  latest?: { due: string; date: string; moved: Moved; amount: number; status: InstalmentStatus; units_by: string } | null
+  estimated?: { instalments: number; amount: number }
 }
 
 export type Activity = {
@@ -110,6 +134,22 @@ export type Activity = {
   sip: boolean
   kind: "sip" | "purchase" | "redemption" | "switch_in" | "switch_out" | "dividend"
   source: string
+  // M12: an estimated SIP instalment since the statement (units are 0 until its NAV is out)
+  estimated?: boolean
+  status?: InstalmentStatus
+  due?: string
+  moved?: Moved
+  units_by?: string
+}
+
+/** GET /api/portfolio/daily (plan §10.5.3). Fractions for pct. */
+export type DayChange = { change: number; pct: number | null }
+export type Daily = {
+  as_of: string | null
+  coverage: { updated: number; total: number }
+  today: (DayChange & { by_member: (DayChange & { member_id: string })[]; by_fund: (DayChange & { member_id: string; isin: string; nav_date: string })[] }) | null
+  series: { date: string; value: number; change: number; pct: number | null; flag: string | null }[]
+  notes: { units_as_of: string | null; units_exact: boolean; estimated: { instalments: number; amount: number }; excluded: number }
 }
 
 export type Portfolio = {
@@ -344,6 +384,8 @@ export const api = {
     return { ...body, stale: r.headers.get("X-Snapshot-Stale") === "1", building: r.headers.get("X-Snapshot-Building") === "1" }
   },
   portfolioStatus: () => call<PortfolioStatus>("/api/portfolio/status"),
+  /** The whole year for one member key (the server caches 366 days per key); views slice it. */
+  daily: (member: string, days = 366) => call<Daily>(`/api/portfolio/daily?days=${days}&member=${encodeURIComponent(member)}`),
   marketStatus: () => call<MarketStatus>("/api/market/status"),
   members: () => call<{ members: MemberSummary[] }>("/api/members").then((r) => r.members),
   renameMember: (id: string, name: string) =>

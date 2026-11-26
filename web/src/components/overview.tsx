@@ -1,4 +1,4 @@
-import { ArrowDownLeftIcon, ArrowUpRightIcon, ChevronDownIcon, InfoIcon, TriangleAlertIcon } from "lucide-react"
+import { ArrowDownLeftIcon, ArrowUpRightIcon, ChevronDownIcon, InfoIcon, Loader2Icon, TriangleAlertIcon } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 
 import { Count, Money, Percent } from "@/components/ui/rolling-number"
@@ -7,7 +7,8 @@ import type { Activity, Holding, Member, Sip } from "@/lib/api"
 import { CATEGORY_COLOR, categoryColor, day, inr, inrShort, month, monthly, pct, per, signed, units } from "@/lib/format"
 import { useOpenFund } from "@/lib/fund-context"
 import { useScrub } from "@/lib/scrub"
-import type { Upcoming } from "@/lib/sips"
+import { estimateNote, isBuy, unitsText } from "@/lib/activity"
+import { movedNote, type Upcoming } from "@/lib/sips"
 import { cn } from "@/lib/utils"
 import { holdingFlows, xirr } from "@/lib/xirr"
 import type { Slice } from "@/components/allocation-strip"
@@ -438,14 +439,41 @@ export function HoldingBars({ holdings, total, members, showMember, limit = 5 }:
 
 const short = (iso: string) => day(iso).split(" ").slice(0, 2).join(" ")
 
-/** Timeline from today to the last listed due date, one pin per instalment, then the same instalments as a list. */
+/** Instalments debited and waiting for units (T to T+2 business days), as the broker shows them. */
+function InProgressList({ sips, members, showMember }: { sips: Sip[]; members: Members; showMember: boolean }) {
+  return (
+    <ul className="mb-3 space-y-2">
+      {sips.map((s) => {
+        const l = s.latest!
+        const moved = movedNote(l.moved, l.due, short)
+        return (
+          <li key={`run-${s.member_id}-${s.folio}-${s.isin}`} className="flex items-center gap-3 rounded-xl bg-surface-2 px-3 py-2.5 text-sm ring-1 ring-border">
+            <Loader2Icon className="size-4 shrink-0 animate-spin text-primary" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <div className="line-clamp-2 leading-snug font-medium sm:truncate">{s.name}</div>
+              <div className="text-[12.5px] text-muted-foreground">
+                In progress · debited {short(l.date)} · units by {short(l.units_by)}
+                {moved && <> · {moved}</>}
+                {showMember && <> · {firstName(members, s.member_id)}</>}
+              </div>
+            </div>
+            <div className="shrink-0 text-right font-semibold tabular-nums">{inr(l.amount)}</div>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+/** Timeline from today to the last listed run date, one pin per instalment, then the same instalments as a list. */
 export function SipTimeline({ upcoming, members, showMember }: { upcoming: Upcoming; members: Members; showMember: boolean }) {
-  const { list, days, overdue } = upcoming
+  const { list, days, running } = upcoming
   if (!list.length) {
     return (
-      <p className="py-4 text-sm text-muted-foreground">
-        {overdue ? "The due dates in the latest statements have passed. Add a newer CAMS / KFintech statement to refresh them." : "No active SIPs found."}
-      </p>
+      <>
+        {running.length > 0 && <InProgressList sips={running} members={members} showMember={showMember} />}
+        <p className="py-4 text-sm text-muted-foreground">No active SIPs found.</p>
+      </>
     )
   }
   const at = (n: number) => (n / days) * 100
@@ -459,15 +487,16 @@ export function SipTimeline({ upcoming, members, showMember }: { upcoming: Upcom
   const last = list[list.length - 1]
   return (
     <div>
+      {running.length > 0 && <InProgressList sips={running} members={members} showMember={showMember} />}
       <div className="relative mx-1.5 mt-1 mb-4 h-16" aria-hidden>
         <span className="absolute inset-x-0 top-[30px] h-0.5 rounded-full bg-border" />
         <span className="absolute top-[18px] left-0 h-[26px] w-0.5 rounded-full bg-foreground" />
         <span className="absolute top-[50px] left-0 font-mono text-[10.5px] text-muted-foreground">Today</span>
-        <span className="absolute top-[50px] right-0 font-mono text-[10.5px] text-muted-foreground">{short(last.s.next_date!)}</span>
-        {list.map(({ s, n }, i) => (
+        <span className="absolute top-[50px] right-0 font-mono text-[10.5px] text-muted-foreground">{short(last.date)}</span>
+        {list.map(({ s, n, date }, i) => (
           <span key={`${s.member_id}-${s.isin}-${s.folio}`}>
             <span
-              title={`${s.name}: ${inr(s.amount)} on ${day(s.next_date)}`}
+              title={`${s.name}: ${inr(s.amount)} on ${day(date)}`}
               className={cn(
                 "absolute top-[22px] -ml-[9px] size-[18px] rounded-full ring-2 ring-primary ring-inset animate-[pop_.5s_cubic-bezier(.2,1.4,.4,1)_both]",
                 n <= 7 ? "bg-primary" : "bg-surface",
@@ -476,15 +505,16 @@ export function SipTimeline({ upcoming, members, showMember }: { upcoming: Upcom
             />
             {labelled.has(i) && (
               <span className="absolute top-[50px] -translate-x-1/2 font-mono text-[10.5px] whitespace-nowrap text-muted-foreground" style={{ left: `${at(n)}%` }}>
-                {short(s.next_date!)}
+                {short(date)}
               </span>
             )}
           </span>
         ))}
       </div>
       <ul className="divide-y">
-        {list.map(({ s, n }) => {
-          const [d, m] = day(s.next_date).split(" ")
+        {list.map(({ s, n, date, due, moved }) => {
+          const [d, m] = day(date).split(" ")
+          const note = movedNote(moved, due, short)
           return (
             <li key={`${s.member_id}-${s.folio}-${s.isin}`} className="flex items-center gap-3.5 py-2.5 text-sm">
               <span className="w-11 shrink-0 text-center leading-tight">
@@ -495,6 +525,7 @@ export function SipTimeline({ upcoming, members, showMember }: { upcoming: Upcom
                 <div className="line-clamp-2 leading-snug font-medium sm:truncate">{s.name}</div>
                 <div className="text-[12.5px] text-muted-foreground">
                   {inDays(n)}
+                  {note && <> · {note}</>}
                   {showMember && <> · {firstName(members, s.member_id)}</>}
                 </div>
               </div>
@@ -517,7 +548,8 @@ export function ActivityGrid({ items, members, showMember }: { items: Activity[]
   return (
     <ul className="grid grid-cols-1 gap-x-8 md:grid-cols-2">
       {items.map((a, i) => {
-        const bought = a.units > 0
+        const bought = isBuy(a)
+        const note = estimateNote(a)
         return (
           <li
             key={`${a.member_id}-${a.isin}-${a.date}-${i}`}
@@ -533,6 +565,7 @@ export function ActivityGrid({ items, members, showMember }: { items: Activity[]
                 {day(a.date)}
                 {showMember && <> · {members.get(a.member_id)?.name}</>}
               </div>
+              {note && <div className="text-[12.5px] text-muted-foreground">{note}</div>}
             </div>
             <div className="shrink-0 text-right">
               {a.amount != null ? (
@@ -541,7 +574,7 @@ export function ActivityGrid({ items, members, showMember }: { items: Activity[]
                     {bought ? (a.sip ? "SIP " : "Bought ") : "Sold "}
                     {inr(Math.abs(a.amount))}
                   </div>
-                  <div className="text-[12.5px] text-muted-foreground">{units(Math.abs(a.units))} units</div>
+                  <div className="text-[12.5px] text-muted-foreground">{unitsText(a)}</div>
                 </>
               ) : (
                 <div className={cn("font-semibold", bought ? "text-gain" : "text-loss")}>

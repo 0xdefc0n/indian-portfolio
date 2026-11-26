@@ -37,7 +37,8 @@ def test_snapshot_shape_and_rules():
     by = {(h["member_id"], h["isin"]): h for h in snap["holdings"]}
     f1 = by[("m-alpha", synthetic.F1["isin"])]
     assert f1["sources"] == ["CDSL", "KFINTECH"]  # held in both: one row, never double counted
-    assert f1["as_of"] == "2026-11-20"  # the newer (KFintech) statement's numbers
+    assert f1["statement"]["as_of"] == "2026-11-20"  # the newer (KFintech) statement's numbers
+    assert f1["as_of"] == "2026-11-24"  # then valued at the latest NAV (M12)
     assert f1["invested"] is not None and f1["cashflows"]  # same units in both → cost applies
     assert f1["returns"]["1y"] is not None and f1["benchmark_value"] is not None
     assert by[("m-alpha", synthetic.F3["isin"])]["returns"]["1y"] is not None  # code from isin_to_code
@@ -53,8 +54,9 @@ def test_snapshot_shape_and_rules():
     assert f1["sip"] == {"amount": 5000.0, "frequency": "monthly"}
 
     months = [h["month"] for h in beta["history"]]
-    assert months == sorted(months) and len(months) == 4  # Jul..Oct, newer statement wins on overlap
-    assert beta["history"][-2]["value"] == 15300.0
+    # Jul..Oct, newer statement wins on overlap; then Nov from the units and the latest NAV (M12)
+    assert months == sorted(months) and months == ["2026-07", "2026-08", "2026-09", "2026-10", "2026-11"]
+    assert beta["history"][-3]["value"] == 15300.0 and beta["history"][-2]["value"] == 15400.0
     assert any(i["level"] == "warn" and "nominee" in i["title"].lower() for i in beta["analysis"]["health"])
     assert snap["stocks"]["enabled"] is False
 

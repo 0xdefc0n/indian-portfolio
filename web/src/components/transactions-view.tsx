@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react"
 
 import { ActivityList } from "@/components/activity-list"
+import { isBuy } from "@/lib/activity"
 import type { Activity, Member } from "@/lib/api"
 import { inr } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -56,7 +57,7 @@ export function TransactionsView({ items, members, showMember }: { items: Activi
 
       <div className="space-y-8">
         {groups.map(([key, rows]) => {
-          const bought = rows.filter((r) => r.units > 0 && r.amount).reduce((s, r) => s + Math.abs(r.amount ?? 0), 0)
+          const bought = rows.filter((r) => isBuy(r) && r.amount).reduce((s, r) => s + Math.abs(r.amount ?? 0), 0)
           const sold = rows.filter((r) => r.units < 0 && r.amount).reduce((s, r) => s + Math.abs(r.amount ?? 0), 0)
           return (
             <section key={key}>

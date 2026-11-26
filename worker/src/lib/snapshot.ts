@@ -24,13 +24,17 @@ import { BENCHMARK_CODE } from '../market/store'
 import { apiKey, budgetLeft, recordWants, requestStocks, stockData, stocksVersion } from '../market/stocks'
 import { blobKeys, deleteBlobs, getJsonBlob, isUuid } from './blob'
 import { FLAG_GZIP, hmacHex, toBytes, type Vault } from './crypto'
+import { deleteDailyCache } from './daily-cache'
 import { engineApi } from './engine-client'
 import { waitDelay } from './jobs'
 import { cleanName, fieldKey } from './members'
 import { Tenant } from './tenant'
 
-/** Bump to rebuild every snapshot (a change in what the Worker sends to /build). 2: stock data (M11). */
-export const SNAPSHOT_VERSION = 2
+/**
+ * Bump to rebuild every snapshot (a change in what the Worker sends to /build, or in what the engine builds).
+ * 2: stock data (M11). 3: units timelines, estimated SIPs and values at the latest NAV (M12).
+ */
+export const SNAPSHOT_VERSION = 3
 /** Debounce: every trigger's message arrives this much later (§10.2). */
 export const REBUILD_DELAY_S = 10
 /** A claim outlives the engine call (100 s) and matches the batch lease (120 s). */
@@ -237,8 +241,8 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
     await env.BUCKET.put(newKey, await vault.seal(newKey, built.gzip, FLAG_GZIP), { httpMetadata: { contentType: 'application/octet-stream' } })
 
     // 5. Compare-and-set the pointer; read the previous blob and any newer request in the same transaction.
-    const [prevRes, cas] = await db.batch<{ blob_key: string | null; requested_at: number | null }>([
-      db.prepare('SELECT blob_key, requested_at FROM snapshot WHERE household_id = ?1').bind(hid),
+    const [prevRes, cas] = await db.batch<{ blob_key: string | null; requested_at: number | null; inputs_hash: string | null }>([
+      db.prepare('SELECT blob_key, requested_at, inputs_hash FROM snapshot WHERE household_id = ?1').bind(hid),
       db
         .prepare(
           `UPDATE snapshot SET blob_key = ?1, inputs_hash = ?2, market_date = ?3, status = 'ready', building_hash = NULL,
@@ -253,10 +257,11 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
       return done(env, msg, 'superseded')
     }
     const prev = prevRes!.results[0]
-    // 6. The previous blob goes (M12 also drops its daily/ cache entries here).
+    // 6. The previous blob goes, and the daily series cached for its inputs (§10.2 step 7, M12).
     if (prev?.blob_key && prev.blob_key !== newKey) {
       await deleteBlobs(env, hid, [prev.blob_key]).catch((e) => console.error('blob_delete_failed', (e as Error).name, 1))
     }
+    if (prev?.inputs_hash && prev.inputs_hash !== hash) await deleteDailyCache(env, hid, prev.inputs_hash)
     console.log('rebuild_ok', {
       statements: used.length,
       members: members.length,
@@ -343,6 +348,7 @@ async function clearSnapshot(env: Env, msg: RebuildMessage, snap: SnapshotRow, h
   if (!(upd!.meta.changes ?? 0)) return done(env, msg, 'taken') // a build is running; its recheck asks again
   const prev = prevRes!.results[0]?.blob_key
   if (prev) await deleteBlobs(env, hid, [prev]).catch((e) => console.error('blob_delete_failed', (e as Error).name, 1))
+  await deleteDailyCache(env, hid)
   return done(env, msg, 'emptied')
 }
 
