@@ -12,7 +12,8 @@ Code session each. If the two disagree, this file wins for order and scope, and 
 
 Claude updates this table at the end of every milestone. **The rows are in build order; the numbers are IDs, not
 order** (owner, 2026-11-26: M13 moved after M15, and M16 and M17 moved to the end, after M21. Owner, 2026-11-27:
-M22–M33 added from the owner's todo; Claude chose their order by ease and dependencies, see "Order notes").
+M22–M33 added from the owner's todo; Claude chose their order by ease and dependencies, see "Order notes". Owner,
+2026-11-27: M23–M27 and M30 moved after M21, before M16, so the research and the redesign cover every feature).
 
 | # | Milestone | Plan phase | Status | Date | Commit | Notes |
 |---|---|---|---|---|---|---|
@@ -32,19 +33,19 @@ M22–M33 added from the owner's todo; Claude chose their order by ease and depe
 | M14 | Privacy and compliance | 5 | done (lawyer review deferred ~6 months, owner 2026-11-26) | 2026-11-26 | `2d00821`, `9638cfc` + docs | Done-when items pass. **A deleted account leaves no rows, no R2 objects and no DEK:** `test/privacy.test.ts` deletes a household with members, statements, a parked PDF (`tmp/`), a snapshot blob, a SIP change, a pending password, an export quota row, an unused sign-in code and link, the per-address rate-limit row and a second signed-in device, then scans **every table and column** of the app D1 for the user id, household id and email: only `audit_event` remains (ids, event, country, UA hash; kept 400 days for DPDP Rule 6/8(3), plus an `account_deleted` row). `h/` and `tmp/` are empty, the household row (DEK) is gone, the other household is untouched, cookies are cleared, the second device gets 401, the confirmation email is sent. The inactivity erasure passes the same scan. **Export contains all the user's data and nothing else:** members with decrypted names and PANs, every statement's parsed JSON, SIP changes, sessions (IP, UA), consents, sign-in methods, the security log; no other household's values, no `dek_wrapped`/`pan_hmac`/`blob_key`/`content_hash`/`sip_key`/token, 3 a day (429 `export_limit`). 12 new tests; Worker 283 total (282 pass + the opt-in live one skipped); engine 70 pass (6 private skipped, no engine change). Typecheck and lint clean. **Consent gating:** `requireSession()` gates by default (403 `consent_required`); `/me`, `/consent`, export and delete opt out. A consented request makes **0** consent queries (cookie cache, tested); consent from another device counts at once (one D1 check). The test sign-in helper accepts the notice. Web: consent screen (18+ box), `/privacy`, `/terms` ("Not investment advice"), `/security`, Settings → Download my data / Delete account (typed `DELETE`; past 10 min the dialog signs out and back in, then reopens), legal footer on every page incl. /login, "deleted" notice on /login, tax disclaimer in the fund dialog. Headless at 360 px and 1280 px, dark and light: 124 checks, 0 page errors (no overflow, 44 px targets, footer above the bottom nav). `docs/INCIDENT_RESPONSE.md` written; README Privacy rewritten. ✅ VERIFY (plan §12): the fixed 3-year inactivity period of Rule 8 + Third Schedule binds only large e-commerce, social media and gaming platforms; others erase when the purpose is no longer served, so any period ≥ the law's is a policy choice. **Owner, mid-milestone: inactivity is 3 years** (not 12 months); notice email, erasure ≥ 48 h later unless the user signs in or uses the app (the daily session refresh stamps `last_active_at`, tested). Source: DSCI FAQ and the MeitY/PIB summary; the gazette text wasn't readable, so the lawyer confirms. **Cleanup cron** (`0 21 * * *`) also does the earlier Later items: `rate_limit` (M5), `quota` (M6), finished `parse_job` after 7 days (M8), `nav_run` after 90 days (M9), `stock_match` unwanted 90 days with their holdings (M11), SIP skips older than the newest statement (M12), plus expired sessions/verifications, `tracked_scheme` unseen 90 days, `audit_event` > 400 days. Migration `app/0008_privacy.sql` (`household.inactivity_notice_at`, two indexes) reaches staging with the next merge. `scripts/auth-smoke.ts` and `upload-smoke.ts` now accept the notice (auth-smoke also checks the 403 before it). **Placeholders (owner):** legal entity name, grievance officer name and email, jurisdiction in `web/src/lib/legal.ts` (`placeholders: false` removes the draft banner), and the contacts in `docs/INCIDENT_RESPONSE.md`. Later: lawyer review of the pages, the notice and the incident plan (M17), incl. CERT-In's 180-day log retention; staging after the merge: `auth-smoke.ts` and `upload-smoke.ts`, and one export + delete by hand; a deleted account's other devices keep a valid cookie cache ≤ 5 min (data routes find nothing; `/me` answers 401); re-sign-in through the emailed link lands on `/`, not back in Settings (Google and the code keep `next`); `PAN_PEPPER` rotation needs a re-hash migration (INCIDENT_RESPONSE §4); `/api/me` `limits`/`usage` and Settings fair-use usage still unbuilt; the tax-harvest and health-check panels need the inline disclaimer when they're built |
 | M15 | Installable app (PWA) | 5b | done (device checks wait for the owner after the next staging deploy) | 2026-11-27 | `fce43c9` + docs | Local Done-when items pass. **Installable:** CDP `Page.getInstallabilityErrors` empty in a normal profile, and Chrome for Testing fired a real `beforeinstallprompt` on the built app. Manifest parses with 0 errors. `wrangler dev` serves the manifest as `application/manifest+json` and `sw.js` with `no-cache` (`web/public/_headers`). **No API data cached:** after visiting every tab, Settings and Members, Cache Storage holds the 33-entry app shell, no `/api/` entry and no IndexedDB. **Prompt rules:** `web/src/lib/install.test.ts` has 26 unit tests. A headless run of the built app with its SW and a mock API passes 33/33 checks: not before sign-in, not on first arrival, not when launched from the app, not within 14 days of a dismissal, not after 3; shows on a later day; Install calls the browser prompt; appinstalled → toast; the iPhone sheet in both themes, the Android sheet and the desktop card; webview → no auto prompt; Settings → Install; offline → shell + offline panel, then reload when back; theme-color follows the toggle; launch and install counters reach `/api/metrics`. Worker 286 pass + 1 skipped (4 new metrics tests). Web build, lint (no new warnings) and typecheck pass. ✅ VERIFY: Chrome criteria, iOS 26 Share wording (⋯ → Share), iOS cookie split; see plan §13A. Changes: real theme colours `#0A0C14` / `#F2F3F7` (plan had others); status-bar style `default`; CSP lines wait for M16 (there is no CSP yet); pages code-split (login now loads 346 KB, not 918 KB; the dashboard chunk is 505 KB, mostly recharts). **Owner, after the next deploy to staging:** install on Android Chrome (+ both shortcuts), desktop Chrome and Edge, iPhone Safari (email-code sign-in inside the app; check safe areas and status bar in both themes) and macOS Safari; check DevTools → Application → Cache Storage. Later: split recharts out of the dashboard chunk (M16) |
 | M22 | Reject disposable email addresses | 1b | done (ships to staging with the next merge) | 2026-11-27 | `c9e607e` | 9 new tests (295 pass + 1 opt-in skipped). `test/disposable.test.ts` covers a listed domain, a listed subdomain, mixed case (all `400 disposable_email`, Turnstile not called, nothing queued, log has the code only), no rate-limit rows used on refusal, an existing user on a listed domain (still emailed), an unlisted domain, and the test sink. The list is `disposable-email-domains-js` 2.4.0 (CC0, 10,455 domains). `/login` copy checked headless at 360 px and 1280 px against local `wrangler dev`: the message shows, no overflow, 0 page errors. One run of the full suite had a timing flake in `tenant.test.ts` ("newest first"); it passed alone and on the next full run |
-| M23 | Competitor and market research | 9 | todo | | | |
-| M24 | Premium design refresh, logo and dashboard redesign | 9 | todo | | | |
 | M13 | QR device login | 4 | todo | | | |
-| M25 | Landing page and SEO foundation | 9 | todo | | | |
-| M26 | Blog | 9 | todo | | | |
-| M27 | FIRE calculator | 9 | todo | | | |
-| M30 | Social marketing playbook (Reddit, LinkedIn, X) | 9 | todo | | | |
 | M18 | AMC disclosure scraper | 7 | todo | | | |
 | M19 | Manual assets: FD, PPF, EPF | 8 | todo | | | |
 | M29 | Gold and silver (physical, SGB) | 8 | todo | | | |
 | M20 | Stock and ETF prices | 8 | todo | | | |
 | M28 | Benchmark score for funds and stocks | 8 | todo | | | |
 | M21 | Stock gains: buy prices and corporate actions | 8 | todo | | | |
+| M23 | Competitor and market research | 9 | todo | | | |
+| M24 | Premium design refresh, logo and dashboard redesign | 9 | todo | | | |
+| M25 | Landing page and SEO foundation | 9 | todo | | | |
+| M26 | Blog | 9 | todo | | | |
+| M27 | FIRE calculator | 9 | todo | | | |
+| M30 | Social marketing playbook (Reddit, LinkedIn, X) | 9 | todo | | | |
 | M16 | Hardening and load tests | 6 | todo | | | |
 | M31 | Cost per user and pricing study | 6 | todo | | | |
 | M17 | Production launch | 6 | todo | | | |
@@ -407,8 +408,11 @@ in the first session), then OK on the final look.
 - **Design system v2:** gold accent palette with contrast checked (WCAG AA) in dark and light, type scale, surfaces
   (glass/elevation), components and motion, written into plan §13 as the new reference. Update the `CLAUDE.md` hard
   rule to point at it.
-- **Dashboard redesign** from M23's findings, in the new system, with the same data and no feature changes.
-- Restyle every existing screen: login, consent, members, settings, legal pages, dialogs, toasts, install sheets.
+- **Dashboard redesign** from M23's findings, in the new system, with the same data and no feature changes. It covers
+  every asset type built by then (mutual funds, stocks, ETFs, FD/PPF/EPF, gold and silver), not only mutual funds.
+- Restyle every existing screen: login, consent, members, settings, legal pages, dialogs, toasts, install sheets,
+  and the screens added by M13 (link device), M19 (FD/PPF/EPF), M29 (gold/silver), M20 (stocks and ETFs), M28
+  (benchmark score) and M21 (stock gains, corporate actions).
 - Regenerate the M15 store screenshots from demo data.
 
 **Done when:** every screen is checked headless at 360 px and 1280 px, dark and light, with 0 page errors, no overflow
@@ -710,8 +714,9 @@ every action is audited.
   - **M22–M33 (owner's todo, 2026-11-27; order chosen by Claude for ease and dependencies):**
     - M22 (disposable emails) is the smallest, so it goes right after M15.
     - M23 (research) comes before M24 (redesign), because the redesign and the landing copy use its findings.
-    - M24 comes right after M15 (owner: M15 first, so its icons and screenshots are redone in M24). It comes before
-      M13 and every later milestone, so new screens are built once, in the new design.
+    - **Owner, 2026-11-27:** M23–M27 and M30 come after M21 and before M16, so the research and the redesign see every
+      feature. M13 (QR login) and M18–M21 are built in the current design, and M24 restyles their screens along with
+      the rest. M15's icons and screenshots are still redone in M24.
     - M25 (landing + SEO) builds the prerendered public pages that M26 (blog) and M27 (`/fire`) reuse. M30 (social)
       follows them, so the posts can link to real pages. All of these come before launch (owner).
     - M29 (gold/silver) reuses M19's manual-asset model. M28 (score) needs M20's stock prices, so it comes after M20.
