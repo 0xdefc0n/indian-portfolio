@@ -10,7 +10,11 @@ export const LIMITS = {
   failedParsesPerHour: 10,
   openJobsPerHousehold: 10,
   exportsPerDay: 3, // plan §9.2: GET /api/account/export
+  metricEventsPerDay: 30, // plan §13A.6: POST /api/metrics (a normal day sends a handful)
 } as const
+
+/** Product counters: caps what one account can add to the shared daily totals. */
+export const metricQuota = (userId: string): QuotaSpec => ({ subject: `user:${userId}`, metric: 'metric', period: 'day', limit: LIMITS.metricEventsPerDay })
 
 /** Data exports (DPDP access right): a few a day is plenty, and each one decrypts every statement. */
 export const exportQuota = (userId: string): QuotaSpec => ({ subject: `user:${userId}`, metric: 'export', period: 'day', limit: LIMITS.exportsPerDay })

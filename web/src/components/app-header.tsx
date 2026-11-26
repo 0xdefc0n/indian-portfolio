@@ -16,7 +16,7 @@ const mark = (
 /** onHome: the dashboard resets its tab instead of navigating; other pages link back to "/". */
 export function AppHeader({ me, onHome, nav, actions }: { me: Me; onHome?: () => void; nav?: React.ReactNode; actions?: React.ReactNode }) {
   return (
-    <header className="sticky top-0 z-20 bg-background/80 backdrop-blur-xl">
+    <header className="sticky top-0 z-20 bg-background/80 pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)] backdrop-blur-xl">
       <div className="mx-auto flex h-[68px] max-w-[1240px] items-center justify-between gap-5 px-4 sm:px-7">
         <div className="flex min-w-0 items-center gap-6">
           {onHome ? (

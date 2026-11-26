@@ -1,6 +1,6 @@
 // /settings (plan §13 item 7). Devices arrive with QR login (M13). Download my data and Delete account are the
 // DPDP access and erasure rights (plan §12, M14).
-import { ChevronRightIcon, DownloadIcon, Loader2Icon, LogOutIcon, Trash2Icon } from "lucide-react"
+import { ChevronRightIcon, DownloadIcon, Loader2Icon, LogOutIcon, SmartphoneIcon, Trash2Icon } from "lucide-react"
 import { useTheme } from "next-themes"
 import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Segmented } from "@/components/ui/segmented"
 import { api, ApiFailure, auth, type Me, SignedOut } from "@/lib/api"
+import { installFromMenu, useInstall } from "@/lib/pwa"
 
 const CONFIRM_WORD = "DELETE"
 
@@ -115,6 +116,7 @@ export function SettingsPage({ me }: { me: Me }) {
   // ?delete=1: back from the re-sign-in the delete dialog asked for
   const [deleting, setDeleting] = useState(() => new URLSearchParams(window.location.search).get("delete") === "1")
   const [exporting, setExporting] = useState(false)
+  const install = useInstall()
 
   async function downloadData() {
     setExporting(true)
@@ -147,6 +149,19 @@ export function SettingsPage({ me }: { me: Me }) {
             <Row label="Email">{me.user.email}</Row>
           </dl>
           <Button variant="outline" className="mt-4 h-11" onClick={signOut}><LogOutIcon /> Sign out</Button>
+        </Panel>
+
+        <Panel title="Install app">
+          {install.action === "installed" ? (
+            <p className="text-sm text-muted-foreground">PocketFolio is installed on this device. Open it from your home screen, Dock or Start menu.</p>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground">Quick access from your home screen or desktop.</p>
+              <Button variant="outline" className="mt-4 h-11" onClick={() => void installFromMenu(install.action)}>
+                <SmartphoneIcon /> Install app
+              </Button>
+            </>
+          )}
         </Panel>
 
         <Panel title="Family members">

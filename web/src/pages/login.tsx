@@ -1,5 +1,5 @@
 // /login and /login/verify (plan §13 item 1, §13A.5). Google is the primary button: it sends no email (§7.3).
-import { ArrowLeftIcon, Loader2Icon, MailIcon } from "lucide-react"
+import { ArrowLeftIcon, Loader2Icon, MailIcon, SmartphoneIcon } from "lucide-react"
 import { type FormEvent, useEffect, useState } from "react"
 
 import { Link } from "wouter"
@@ -9,11 +9,12 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { api, auth, safeNext } from "@/lib/api"
+import { isStandalone, returningUser } from "@/lib/install"
+import { installFromMenu, useInstall } from "@/lib/pwa"
 import { useTurnstile } from "@/lib/turnstile"
 
 /** Installed app (PWA). iOS keeps its cookies apart from Safari, so the emailed link would sign in the wrong place. */
-const standalone = () =>
-  window.matchMedia?.("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone === true
+const standalone = isStandalone
 
 const LINK_ERRORS: Record<string, string> = {
   google: "Google sign-in didn't finish. Try again.",
@@ -185,7 +186,23 @@ export function LoginPage() {
         <Link href="/terms" className="text-primary underline-offset-4 hover:underline">Terms</Link> and the{" "}
         <Link href="/privacy" className="text-primary underline-offset-4 hover:underline">Privacy policy</Link>.
       </p>
+      <GetTheApp />
     </Shell>
+  )
+}
+
+/** "Get the app", for people who have used PocketFolio on this browser before and aren't in the app already. */
+function GetTheApp() {
+  const install = useInstall()
+  const [show] = useState(() => returningUser() && !isStandalone())
+  if (!show || install.action === "installed") return null
+  return (
+    <button
+      className="mt-2 -mb-2 flex min-h-11 items-center gap-1.5 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+      onClick={() => void installFromMenu(install.action)}
+    >
+      <SmartphoneIcon className="size-3.5" /> Get the app
+    </button>
   )
 }
 

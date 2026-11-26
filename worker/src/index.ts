@@ -17,6 +17,7 @@ import { authRoutes } from './routes/auth'
 import { jobRoutes } from './routes/jobs'
 import { marketRoutes } from './routes/market'
 import { memberRoutes } from './routes/members'
+import { metricRoutes } from './routes/metrics'
 import { portfolioRoutes } from './routes/portfolio'
 import { sipRoutes } from './routes/sips'
 import { statementRoutes } from './routes/statements'
@@ -87,6 +88,7 @@ app.route('/', statementRoutes)
 app.route('/', jobRoutes)
 app.route('/', portfolioRoutes)
 app.route('/', sipRoutes)
+app.route('/', metricRoutes)
 
 app.notFound((c) => c.json({ ok: false, code: 'not_found' }, 404))
 

@@ -408,6 +408,14 @@ export async function waitForPortfolio(opts: { maxMs?: number; signal?: AbortSig
   return null
 }
 
+export type Metric =
+  | "install_prompt_shown" | "install_accepted" | "install_dismissed" | "app_installed" | "launch_standalone" | "launch_shortcut"
+const sentMetrics = new Set<Metric>()
+
+/** No network, as opposed to an HTTP error answer: fetch() rejects with a TypeError whose message differs by browser. */
+export const isOffline = (e: unknown) =>
+  !navigator.onLine || (e instanceof TypeError && /fetch|network|load failed/i.test(e.message))
+
 export const api = {
   /** The snapshot JSON (sent gzip as stored) plus the stale/building flags from its headers. */
   portfolio: async (): Promise<Portfolio> => {
@@ -448,6 +456,15 @@ export const api = {
   /** Delete the account and everything in it (crypto-shred). Needs a sign-in from the last 10 minutes. */
   deleteAccount: () => call<{ ok: true }>("/api/account", { ...json({ confirm: "DELETE" }), method: "DELETE" }),
   config: () => call<AppConfig>("/api/config"),
+  /**
+   * An anonymous product counter (plan §13A.6). Fire and forget: never an error on screen and never a redirect to
+   * /login (signed out, the Worker answers 401 and nothing is counted). Each metric is sent once per page load.
+   */
+  metric: (name: Metric) => {
+    if (sentMetrics.has(name)) return
+    sentMetrics.add(name)
+    fetch("/api/metrics", { ...json({ metric: name }), keepalive: true }).catch(() => undefined)
+  },
   requestStatement: (body: { pan: string; email: string; from_date: string; to_date: string; password: string }) =>
     call<StatementRequestResult>("/api/kfintech/request", json(body)),
   /**

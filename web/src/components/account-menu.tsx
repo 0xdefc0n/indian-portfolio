@@ -1,5 +1,6 @@
-// Avatar menu in the header (plan §13 item 8): Members, Settings, Sign out.
-import { LogOutIcon, SettingsIcon, UsersIcon } from "lucide-react"
+// Avatar menu in the header (plan §13 item 8): Members, Settings, Install PocketFolio (when this browser can, §13A.2),
+// Sign out.
+import { DownloadIcon, LogOutIcon, SettingsIcon, UsersIcon } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 import { useLocation } from "wouter"
@@ -7,11 +8,13 @@ import { useLocation } from "wouter"
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { installFromMenu, useInstall } from "@/lib/pwa"
 import { auth, type Me } from "@/lib/api"
 
 export function AccountMenu({ me }: { me: Me }) {
   const [broken, setBroken] = useState(false)
   const [, navigate] = useLocation()
+  const install = useInstall()
   const label = me.user.name || me.user.email
   const initial = label.trim().charAt(0).toUpperCase() || "?"
 
@@ -48,6 +51,11 @@ export function AccountMenu({ me }: { me: Me }) {
         <DropdownMenuItem onSelect={() => navigate("/settings")} className="py-2">
           <SettingsIcon /> Settings
         </DropdownMenuItem>
+        {install.installable && (
+          <DropdownMenuItem onSelect={() => void installFromMenu(install.action)} className="py-2">
+            <DownloadIcon /> Install PocketFolio
+          </DropdownMenuItem>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={signOut} className="py-2">
           <LogOutIcon /> Sign out
