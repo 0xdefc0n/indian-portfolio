@@ -8,7 +8,7 @@ Design: plan §4, §5, §14 and §15 ([docs/MULTI_USER_LAUNCH_PLAN.md](../docs/M
 | Path | What |
 |---|---|
 | `wrangler.jsonc` | Every binding from plan §15.1. Resource IDs are local placeholders until M4. |
-| `src/index.ts` | Hono app at `/api` (`/health`, `/config`, `/me`, `/members`, `/statements`, `/jobs`, the empty `/portfolio` until M10), `scheduled()` (tmp-sweep today), and `queue()` (pf-email, pf-parse) |
+| `src/index.ts` | Hono app at `/api` (`/health`, `/config`, `/me`, `/members`, `/statements`, `/jobs`, `/market/status`, the empty `/portfolio` until M10), `scheduled()` (tmp-sweep, nav-ingest ×4, nav-repair), and `queue()` (pf-email, pf-parse, pf-market). Export only handlers and classes from it: workerd refuses any other export |
 | `src/auth.ts` | Better Auth options, created per request (plan §7.1): Google, magic link + email code, cookie cache with `householdId` in the session, hashed tokens, D1 rate limits |
 | `src/routes/auth.ts` | `/api/auth/*` allow-list, `POST /api/login/email` (Turnstile, limits, one email with link + code), the staging-only email sink reader |
 | `src/middleware/session.ts` | `requireSession()`: sets `c.var.user` / `c.var.householdId`, 401 otherwise; 0 D1 queries with a warm cookie cache |
@@ -20,6 +20,9 @@ Design: plan §4, §5, §14 and §15 ([docs/MULTI_USER_LAUNCH_PLAN.md](../docs/M
 | `src/lib/members.ts`, `src/routes/members.ts` | `GET/PATCH/DELETE /api/members`: list (one D1 batch), rename (sealed name), delete (rows, then h/ and tmp/ blobs); `memberInsert` for M7 |
 | `src/lib/statements.ts`, `src/routes/statements.ts` | `POST /api/statements` (plan §10.1 A–C: checks, candidate passwords, pdf.js pre-check, D19 member from the statement, engine `/parse`, `storeStatement` in one batch, `tracked_scheme` upsert) and `DELETE /api/statements/:id`. With no free slot the verified PDF is parked (`202`) |
 | `src/lib/jobs.ts`, `src/routes/jobs.ts` | Queued path (plan §10.1 D, M8): `parkUpload` (sealed PDF in `tmp/`, `parse_job`, upload quota), the pf-parse consumer (slot waits re-send the message and aren't attempts; ≤ 3 engine attempts; the PDF is deleted on every outcome), `GET /api/jobs`, `GET/DELETE /api/jobs/:id`, and the hourly `tmp-sweep` |
+| `src/market/amfi.ts` | Pure parsers (plan §10.4.4): AMFI's daily file and history report (by header name), mfapi, YYYYMMDD dates, the ±20% anomaly rule |
+| `src/market/store.ts` | NAV store writes: rows as one JSON array per statement (`json_each`), the scheme upsert that skips unchanged rows, `market_day` and finality, tracked ISIN → code, R2 series `market/nav/{code}.json` |
+| `src/market/jobs.ts`, `src/routes/market.ts` | nav-ingest, nav-backfill (mfapi, then AMFI history in 90-day chunks), nav-repair, the pf-market consumer, `GET /api/market/status` (public, edge-cached 5 min). `src/market/amc-ids.ts`: AMFI's `mf=` ids |
 | `src/lib/quota.ts`, `src/lib/limits.ts` | Fair-use counters: all-or-nothing increment-with-limit in one batch, IST windows; the §11 limit values |
 | `src/lib/audit.ts`, `src/lib/errors.ts` | `audit_event` rows (no PII) joined to the caller's batch; `ApiError` → `{ ok: false, code }` |
 | `src/lib/rate-limit.ts`, `src/lib/turnstile.ts` | One-UPSERT fixed-window limits (HMACed keys); Turnstile siteverify |
@@ -29,6 +32,8 @@ Design: plan §4, §5, §14 and §15 ([docs/MULTI_USER_LAUNCH_PLAN.md](../docs/M
 | `src/lib/pdfcheck.ts` | Upload pre-check with pdf.js (plan §10.1 A5): candidate passwords, statement type, holder PAN, page count. pdf.js loads by dynamic import on first use |
 | `test/pdfcheck*.test.ts` | Pre-check on synthetic PDFs (`test/helpers/pdf-fixture.ts` writes them, encrypted or not) and on private statements |
 | `test/statements*.test.ts` | Upload on synthetic PDFs with a fake engine (`test/helpers/upload.ts`), and on private statements through the real engine container (direct and queued) |
+| `test/amfi.test.ts`, `test/nav.test.ts` | Parsers on excerpts of the real public files (`test/fixtures/amfi/`, kept byte for byte), and the NAV jobs with AMFI and mfapi mocked. `test/no-market-network.ts` stops any test from reaching those hosts |
+| `scripts/nav-check.ts` | Staging NAV store check after a night of runs (read-only D1 API queries; counts only): `node scripts/nav-check.ts` |
 | `test/jobs.test.ts` | Queued path with the real `EnginePool` forced to 0 free slots: park, consumer, cancel, failures, retries, caps, tmp-sweep, and one run through the real pf-parse queue |
 | `scripts/measure-pdfcheck.ts` | Measures the pre-check's time and memory inside workerd (`wrangler dev` with `scripts/wrangler.measure.jsonc`, never deployed) |
 | `migrations/app`, `migrations/market` | D1 migrations. `app/0001_auth.sql` is generated: `npx auth generate --config scripts/auth-schema.config.ts --output <file>` |
@@ -52,6 +57,7 @@ npm test                          # vitest in workerd (@cloudflare/vitest-plugin
 npm run typecheck                 # wrangler types --check + tsc
 npm run lint
 node scripts/measure-pdfcheck.ts  # pre-check time + memory in workerd (prints pdf<N>, counts and numbers only)
+npx wrangler dev --test-scheduled # then: curl 'localhost:8787/cdn-cgi/handler/scheduled?cron=30+17+*+*+*' runs nav-ingest on the real AMFI file
 ```
 Private statements: `npm test` also runs `test/pdfcheck.private.test.ts` and `test/statements.private.test.ts` when PDFs exist in `../data/` or
 `../engine/tests/private/` (or `$PRIVATE_DATA_DIR`). `test/global-setup.ts` asks the Python engine (`uv`) what it parses

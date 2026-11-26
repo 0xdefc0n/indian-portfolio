@@ -1,0 +1,148 @@
+Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;Net Asset Value;Date
+ 
+Open Ended Schemes(Children’s Fund - Childrens' Fund)
+ 
+Axis Mutual Fund
+ 
+135762;INF846K01WO1;-;Axis Children's Fund;Direct Plan;Growth Option;31.6224;25-Nov-2026
+135765;INF846K01WP8;-;Axis Children's Fund;Direct Plan;IDCW Option;29.1299;25-Nov-2026
+135759;INF846K01WJ1;-;Axis Children's Fund;Regular Plan;Growth Option;27.4904;25-Nov-2026
+ 
+Open Ended Schemes(Debt Scheme - Banking and PSU Fund)
+ 
+Franklin Templeton Mutual Fund
+ 
+129008;INF090I01KR8;-;Franklin India Banking & PSU Debt Fund;Direct Plan;Growth;25.4459;25-Nov-2026
+129006;INF090I01KO5;-;Franklin India Banking & PSU Debt Fund;Regular Plan;Growth;24.2577;25-Nov-2026
+129009;INF090I01KS6;INF090I01KT4;Franklin India Banking & PSU Debt Fund;Direct Plan;IDCW;11.5145;25-Nov-2026
+ 
+HDFC Mutual Fund
+ 
+128628;INF179KA1JC4;-;HDFC Banking and PSU Debt Fund;Regular Plan;Growth Option;24.453;25-Nov-2026
+128629;INF179KA1IZ7;-;HDFC Banking and PSU Debt Fund;Direct Plan;Growth Option;25.5929;25-Nov-2026
+128627;INF179KA1JD2;INF179KA1JE0;HDFC Banking and PSU Debt Fund;Regular Plan;IDCW Option;10.1408;25-Nov-2026
+ 
+ITI Mutual Fund
+ 
+148534;INF00XX01861;-;ITI Banking & PSU Debt Fund;Direct Plan;Growth Option;14.3043;25-Nov-2026
+148536;INF00XX01879;INF00XX01887;ITI Banking & PSU Debt Fund;Direct Plan;IDCW Option;14.3026;25-Nov-2026
+148535;INF00XX01838;-;ITI Banking & PSU Debt Fund;Regular Plan;Growth Option;13.8353;25-Nov-2026
+ 
+Kotak Mahindra Mutual Fund
+ 
+123690;INF174K01FO3;-;Kotak Banking and PSU Debt Fund;Regular Plan;Growth;69.9328;25-Nov-2026
+123691;INF174K01FQ8;INF174K01FP0;Kotak Banking and PSU Debt Fund;Regular Plan;Payout of Income Distribution cum capital withdrawal option- Direct;13.139;25-Nov-2026
+123689;INF174K01KI5;INF174K01KJ3;Kotak Banking and PSU Debt Fund;Direct Plan;Annual Dividend;17.1427;15-Sep-2017
+ 
+Open Ended Schemes(Debt Scheme - Corporate Bond Fund)
+ 
+Aditya Birla Sun Life Mutual Fund
+ 
+119533;INF209K01S38;-;Aditya Birla Sun Life Corporate Bond Fund;Direct Plan;GROWTH;122.2279;25-Nov-2026
+103178;INF209K01785;-;Aditya Birla Sun Life Corporate Bond Fund;Regular Plan;GROWTH;119.8743;25-Nov-2026
+124832;INF209KA1KT0;-;Aditya Birla Sun Life Corporate Bond Fund;Direct Plan;IDCW Payout;10.0701;25-Nov-2026
+ 
+Bandhan Mutual Fund
+ 
+139201;INF194KA1T34;INF194KA1T42;BANDHAN Corporate Bond Fund;Direct Plan;Annual IDCW;10.6277;25-Nov-2026
+135916;INF194KA1M23;-;BANDHAN Corporate Bond Fund;Direct Plan;Growth;21.3321;25-Nov-2026
+139200;INF194KA1T00;INF194KA1T18;BANDHAN Corporate Bond Fund;Direct Plan;Half Yearly IDCW;11.5650;25-Nov-2026
+ 
+DSP Mutual Fund
+ 
+144646;INF740KA1KE8;-;DSP Corporate Bond Fund;Direct Plan;Growth;17.6718;25-Nov-2026
+144647;INF740KA1KF5;INF740KA1KG3;DSP Corporate Bond Fund;Direct Plan;IDCW;11.7457;25-Nov-2026
+144651;INF740KA1KH1;INF740KA1KI9;DSP Corporate Bond Fund;Direct Plan;Monthly IDCW;10.6778;25-Nov-2026
+ 
+HDFC Mutual Fund
+ 
+113070;INF179K01DC2;-;HDFC Corporate Bond Fund;Regular Plan;Growth Option;34.4415;25-Nov-2026
+118987;INF179K01XD8;-;HDFC Corporate Bond Fund;Direct Plan;Growth Option;35.3178;25-Nov-2026
+132848;INF179KA1D33;INF179KA1D25;HDFC Corporate Bond Fund;Regular Plan;IDCW Option;20.8498;25-Nov-2026
+ 
+ICICI Prudential Mutual Fund
+ 
+130947;INF109KA1I84;-;ICICI Prudential Corporate Bond Fund;;;14.9782;24-Apr-2020
+111988;INF109K01CR9;-;ICICI Prudential Corporate Bond Fund;;;10.1065;16-Sep-2022
+120695;INF109K013B8;-;ICICI Prudential Corporate Bond Fund;;;10.1008;16-Sep-2022
+ 
+Nippon India Mutual Fund
+ 
+109472;-;INF204K01EG7;Nippon India Corporate Bond Fund;Regular Plan;DAILY IDCW Option;17.0959;25-Nov-2026
+118808;-;INF204K01C23;Nippon India Corporate Bond Fund;Direct Plan;DAILY IDCW Option;17.0959;25-Nov-2026
+125266;INF204KA1EO9;INF204KA1EP6;Nippon India Corporate Bond Fund;Direct Plan;IDCW Option;21.4148;25-Nov-2026
+ 
+PGIM India Mutual Fund
+ 
+138317;INF223J01CY6;INF223J01CZ3;PGIM India Corporate Bond Fund;Regular Plan;Regular IDCW;10.3149;25-Nov-2026
+138329;INF223J01OM6;-;PGIM India Corporate Bond Fund;Direct Plan;Direct IDCW;15.989;25-Nov-2026
+138330;INF223J01OO2;-;PGIM India Corporate Bond Fund;Direct Plan;Direct Growth;51.3474;25-Nov-2026
+ 
+SBI Mutual Fund
+ 
+146215;INF200KA1YR4;-;SBI Corporate Bond Fund;Direct Plan;Growth;17.1191;25-Nov-2026
+146212;INF200KA1YS2;INF200KA1YT0;SBI Corporate Bond Fund;Direct Plan;IDCW;16.1587;25-Nov-2026
+146216;INF200KA1YU8;INF200KA1YV6;SBI Corporate Bond Fund;Direct Plan;IDCW;16.6422;25-Nov-2026
+ 
+Sundaram Mutual Fund
+ 
+119628;-;INF903J01PD9;Sundaram Corporate Bond Fund;Direct Plan;IDCW (Income Distribution CUM Capital Withdrawal);13.0091;28-Jun-2024
+119621;INF903J01NR4;-;Sundaram Corporate Bond Fund;Direct Plan;GROWTH;44.3734;25-Nov-2026
+119624;INF903J01OW2;INF903J01OY8;Sundaram Corporate Bond Fund;Direct Plan;IDCW (Income Distribution CUM Capital Withdrawal);17.7706;27-Jun-2025
+ 
+Tata Mutual Fund
+ 
+149361;INF277KA1224;-;Tata Corporate Bond Fund;Direct Plan;Growth Option;13.5004;25-Nov-2026
+149364;INF277KA1240;-;Tata Corporate Bond Fund;Direct Plan;IDCW Monthly Payout Option;13.5004;25-Nov-2026
+149357;-;INF277KA1273;Tata Corporate Bond Fund;Direct Plan;IDCW Monthly Reinvestment Option;13.5004;25-Nov-2026
+ 
+Trust Mutual Fund
+ 
+151320;INF0GCD01560;-;TRUSTMF CORPORATE BOND FUND;Direct Plan;Growth;1284.4450;25-Nov-2026
+151321;INF0GCD01586;INF0GCD01578;TRUSTMF CORPORATE BOND FUND;Direct Plan;Monthly IDCW;1186.3757;25-Nov-2026
+151322;INF0GCD01537;-;TRUSTMF CORPORATE BOND FUND;Regular Plan;Growth;1264.9434;25-Nov-2026
+ 
+Union Mutual Fund
+ 
+143241;INF582M01DU5;-;Union Corporate Bond Fund;Direct Plan;Growth Option;16.5897;25-Nov-2026
+143242;INF582M01DW1;INF582M01DV3;Union Corporate Bond Fund;Direct Plan;IDCW Option;16.5897;25-Nov-2026
+143239;INF582M01DY7;-;Union Corporate Bond Fund;Regular Plan;Growth Option;16.1532;25-Nov-2026
+ 
+UTI Mutual Fund
+ 
+148085;INF789F1AOW2;-;UTI - Bond Fund ( Segregated - 17022020 );;;6.8146;27-Jan-2022
+148086;INF789F1APF4;-;UTI - Bond Fund ( Segregated - 17022020 );;;7.3484;27-Jan-2022
+148076;INF789F1APK4;INF789F1APL2;UTI - Bond Fund ( Segregated - 17022020 );;;1.504;27-Jan-2022
+ 
+Open Ended Schemes(Debt Scheme - Gilt Fund)
+ 
+ICICI Prudential Mutual Fund
+ 
+120607;INF109K012D6;INF109K013D4;ICICI Prudential Gilt Fund;;;12.2962;25-May-2018
+120608;INF109K014D2;-;ICICI Prudential Gilt Fund;;;44.6880;25-May-2018
+130956;INF109KA1I50;-;ICICI Prudential Gilt Fund;;;12.8615;27-Mar-2018
+100370;INF109K01JW4;INF109K01JV6;ICICI Prudential Gilt Fund;;;12.1349;25-May-2018
+100371;INF109K01JX2;-;ICICI Prudential Gilt Fund;;;43.6350;25-May-2018
+100372;INF109K01JZ7;INF109K01JY0;ICICI Prudential Gilt Fund;;;11.2589;25-May-2018
+ 
+Nippon India Mutual Fund
+ 
+133264;INF204KA1YU4;-;Nippon India Gilt Fund;Regular Plan;Bonus Option;13.0522;02-Jul-2018
+ 
+PGIM India Mutual Fund
+ 
+138476;INF223J01VM1;-;PGIM India Gilt Fund;;;12.8877;03-Apr-2018
+138475;INF223J01VL3;-;PGIM India Gilt Fund;;;12.6178;05-Jul-2018
+ 
+Open Ended Schemes(Equity Scheme - Mid Cap Fund)
+ 
+Axis Mutual Fund
+ 
+120505;INF846K01EH3;-;Axis Midcap Fund;Direct Plan;Growth Option;144.71;25-Nov-2026
+ 
+Open Ended Schemes(Other Scheme - Index Funds)
+ 
+UTI Mutual Fund
+ 
+120716;INF789F01XA0;-;UTI Nifty 50 Index Fund;Direct Plan;Growth;181.9059;25-Nov-2026
+ 

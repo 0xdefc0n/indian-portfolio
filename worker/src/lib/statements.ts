@@ -8,6 +8,8 @@ import { deleteBlobs, putJsonBlob } from './blob'
 import { type Bytes, hmacHex, type Vault } from './crypto'
 import { engineApi, type EngineParse, type ParsedStatement } from './engine-client'
 import { parkUpload, type QueuedUpload } from './jobs'
+import { type MarketMessage, marketQueue } from '../market/jobs'
+import { pendingBackfillStatement, resolveTrackedStatement } from '../market/store'
 import { ApiError, notFound } from './errors'
 import { failQuota, LIMITS, uploadQuota } from './limits'
 import { cleanName, fieldKey, maskPan, memberInsert, normalizePan, panHmac } from './members'
@@ -267,7 +269,19 @@ export function statementFacts(parsed: Extract<EngineParse, { ok: true }>) {
   const holdings = Array.isArray(st.holdings) ? st.holdings : []
   const warnings = Array.isArray(st.warnings) ? st.warnings.length : 0
   const name = cleanName(st.holder_name)
-  return { kind, asOf, periodFrom, holdings, warnings, name }
+  return { kind, asOf, periodFrom, holdings, warnings, name, firstTxn: firstTransactionDates(st.transactions) }
+}
+
+/** The earliest transaction date per ISIN (YYYYMMDD): how far back a scheme's NAV backfill must reach. */
+export function firstTransactionDates(transactions: unknown): Map<string, number> {
+  const out = new Map<string, number>()
+  if (!Array.isArray(transactions)) return out
+  for (const t of transactions as Array<Record<string, unknown>>) {
+    const isin = typeof t?.isin === 'string' ? t.isin.toUpperCase() : ''
+    const date = typeof t?.date === 'string' && ISO_DAY.test(t.date) ? Number(t.date.replaceAll('-', '')) : 0
+    if (isin && date && date < (out.get(isin) ?? Infinity)) out.set(isin, date)
+  }
+  return out
 }
 
 /**
@@ -355,7 +369,7 @@ export async function storeStatement(t: Tenant, vault: Vault, s: StoreInput): Pr
   const trimmed = ((results[trimAt]?.results ?? []) as { blob_key: string }[]).map((r) => r.blob_key)
   if (trimmed.length) await deleteBlobs(env, t.householdId, trimmed).catch((e) => console.error('blob_delete_failed', (e as Error).name, trimmed.length))
 
-  await trackSchemes(env, facts.holdings, now).catch((e) => console.error('tracked_scheme_failed', (e as Error).name))
+  await trackSchemes(env, facts.holdings, now, facts.firstTxn).catch((e) => console.error('tracked_scheme_failed', (e as Error).name))
 
   const created = newMember?.id === memberId
   let name: string | null
@@ -396,17 +410,25 @@ export function schemeRows(holdings: Array<Record<string, unknown>>): SchemeRow[
 
 /**
  * Multi-row upsert: one statement per 30 schemes, all in one MARKET batch. Rows that haven't changed and were seen in
- * the last day are skipped by the WHERE, so a busy day doesn't rewrite the same rows.
+ * the last day are skipped by the WHERE, so a busy day doesn't rewrite the same rows. In the same batch (M9): ISINs
+ * without a code get theirs from `scheme`, and codes never backfilled are marked pending and sent to nav-backfill
+ * once, with the earliest transaction date for its ISINs (a date only). Returns the tracked rows written.
  */
-export async function trackSchemes(env: { MARKET: D1Database }, holdings: Array<Record<string, unknown>>, now = Date.now()): Promise<number> {
+export async function trackSchemes(
+  env: { MARKET: D1Database; Q_MARKET: Queue },
+  holdings: Array<Record<string, unknown>>,
+  now = Date.now(),
+  firstTxn: Map<string, number> = new Map(),
+): Promise<number> {
   const rows = schemeRows(holdings)
   if (!rows.length) return 0
+  const db = env.MARKET
   const stmts: D1PreparedStatement[] = []
   for (let i = 0; i < rows.length; i += ROWS_PER_STATEMENT) {
     const chunk = rows.slice(i, i + ROWS_PER_STATEMENT)
     const values = chunk.map((_, j) => `(?${j * 3 + 2}, ?${j * 3 + 3}, ?${j * 3 + 4}, ?1)`).join(', ')
     stmts.push(
-      env.MARKET.prepare(
+      db.prepare(
         `INSERT INTO tracked_scheme (isin, amfi_code, amc, last_seen_at) VALUES ${values}
          ON CONFLICT (isin) DO UPDATE SET
            amfi_code = COALESCE(excluded.amfi_code, tracked_scheme.amfi_code),
@@ -418,8 +440,24 @@ export async function trackSchemes(env: { MARKET: D1Database }, holdings: Array<
       ).bind(now, ...chunk.flatMap((r) => [r.isin, r.amfi_code, r.amc])),
     )
   }
-  const res = await env.MARKET.batch(stmts)
-  return res.reduce((n, r) => n + (r.meta.changes ?? 0), 0)
+  const isins = rows.map((r) => r.isin)
+  const res = await db.batch<{ amfi_code: number; isin?: string }>([
+    ...stmts,
+    resolveTrackedStatement(db, isins),
+    pendingBackfillStatement(db, now, isins),
+    db.prepare('SELECT isin, amfi_code FROM tracked_scheme WHERE amfi_code IS NOT NULL AND isin IN (SELECT value FROM json_each(?1))').bind(JSON.stringify(isins)),
+  ])
+  const pending = new Set((res.at(-2)?.results ?? []).map((r) => r.amfi_code))
+  if (pending.size) {
+    const from = new Map<number, number>()
+    for (const r of res.at(-1)?.results ?? []) {
+      const d = firstTxn.get(r.isin!)
+      if (pending.has(r.amfi_code) && d && d < (from.get(r.amfi_code) ?? Infinity)) from.set(r.amfi_code, d)
+    }
+    // A lost send leaves the row pending: nav-ingest sends it again after 6 h.
+    await marketQueue.sendBatch(env, [...pending].map((code): MarketMessage => ({ type: 'backfill', code, ...(from.has(code) ? { from: from.get(code) } : {}) })))
+  }
+  return res.slice(0, stmts.length).reduce((n, r) => n + (r.meta.changes ?? 0), 0)
 }
 
 // ─── DELETE /api/statements/:id ─────────────────────────────────────────────────────────────────────────────────
