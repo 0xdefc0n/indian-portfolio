@@ -3,6 +3,7 @@
 // and a date, nothing else. Logs carry counts, dates and error class names, never scheme codes: a backfill logged
 // right after an upload would tie that household to a fund it holds (§0.1).
 import { prebuild } from '../lib/snapshot'
+import { runStocks } from './stocks'
 import { amcId } from './amc-ids'
 import { addDays, AmfiFormatError, anomalies, istToday, type NavRow, parseAmfiNav, parseMfapi, type Ymd, ymdToAmfi, ymdToIso } from './amfi'
 import {
@@ -46,6 +47,7 @@ export type MarketMessage =
   | { type: 'backfill'; code: number; from?: Ymd }
   | { type: 'series'; codes: number[] }
   | { type: 'repair'; date: Ymd }
+  | { type: 'stocks' } // the BharatStock job (src/market/stocks.ts, M11)
 
 /** pf-market sends, through one object so tests can capture them instead of the real queue. */
 export const marketQueue = {
@@ -346,6 +348,13 @@ export async function handleMarketBatch(batch: MessageBatch<MarketMessage>, env:
         await writeSeries(env, body.codes.filter((c) => Number.isSafeInteger(c) && c > 0).slice(0, SERIES_CODES_PER_MESSAGE))
       } else if (body?.type === 'repair' && validYmd(body.date)) {
         await runRepair(env, body.date)
+      } else if (body?.type === 'stocks') {
+        // Another run holds the lock: it runs one more pass if this was asked after it started. Try again in a
+        // minute anyway, in case it was just finishing.
+        if ((await runStocks(env)).status === 'busy' && msg.attempts < MARKET_MAX_ATTEMPTS) {
+          msg.retry({ delaySeconds: 60 })
+          continue
+        }
       }
       msg.ack()
     } catch (err) {

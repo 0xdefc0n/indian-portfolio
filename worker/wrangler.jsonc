@@ -38,10 +38,10 @@
     ]
   },
 
-  // nav-ingest ×4 (23:00, 02:00, 07:00, 10:00 IST), snapshot-prebuild fallback + stocks (10th–20th), nav-repair (Sun),
-  // cleanup, tmp-sweep (hourly). "0 5 * * *" and "0 5 10-20 * *" both fire on the 10th–20th: dispatch on event.cron.
+  // nav-ingest ×4 (23:00, 02:00, 07:00, 10:00 IST), snapshot-prebuild fallback, nav-repair (Sun), stocks (BharatStock,
+  // daily 09:30 IST, M11; the monthly AMC scrape comes back in M18), cleanup, tmp-sweep (hourly). Dispatch on event.cron.
   "triggers": {
-    "crons": ["30 17 * * *", "30 20 * * *", "30 1 * * *", "30 4 * * *", "0 5 * * *", "0 3 * * SUN", "0 5 10-20 * *", "0 21 * * *", "15 * * * *"]
+    "crons": ["30 17 * * *", "30 20 * * *", "30 1 * * *", "30 4 * * *", "0 5 * * *", "0 3 * * SUN", "0 4 * * *", "0 21 * * *", "15 * * * *"]
   },
 
   "ratelimits": [
@@ -56,7 +56,8 @@
     "ENGINE_FAST_MAX": "60",
     "ENGINE_BATCH_MAX": "60",
     "TMP_MAX_OBJECTS": "50000",
-    "EMAIL_FROM": "login@pocketfolio.in"
+    "EMAIL_FROM": "login@pocketfolio.in",
+    "BHARATSTOCK_DAILY_LIMIT": "50"
   },
   // Names only; values come from .dev.vars locally and `wrangler secret put` in the cloud (§15.2).
   // Each milestone adds the secrets it starts using (PAN_PEPPER: M6). EMAIL_SINK_KEY turns on the test email sink (src/lib/email.ts):
@@ -125,7 +126,8 @@
         "ENGINE_FAST_MAX": "60",
         "ENGINE_BATCH_MAX": "60",
         "TMP_MAX_OBJECTS": "50000",
-        "EMAIL_FROM": "login@pocketfolio.in"
+        "EMAIL_FROM": "login@pocketfolio.in",
+        "BHARATSTOCK_DAILY_LIMIT": "50"
       },
       "secrets": { "required": ["ENGINE_SHARED_SECRET", "BETTER_AUTH_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "TURNSTILE_SECRET", "DATA_KEK_V1", "PAN_PEPPER", "EMAIL_SINK_KEY"] },
       "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["login@pocketfolio.in"] }],
@@ -178,7 +180,8 @@
         "ENGINE_FAST_MAX": "60",
         "ENGINE_BATCH_MAX": "60",
         "TMP_MAX_OBJECTS": "50000",
-        "EMAIL_FROM": "login@pocketfolio.in"
+        "EMAIL_FROM": "login@pocketfolio.in",
+        "BHARATSTOCK_DAILY_LIMIT": "50"
       },
       "secrets": { "required": ["ENGINE_SHARED_SECRET", "BETTER_AUTH_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "TURNSTILE_SECRET", "DATA_KEK_V1", "PAN_PEPPER"] },
       "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["login@pocketfolio.in"] }],

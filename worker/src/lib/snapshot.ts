@@ -21,6 +21,7 @@
 import { marketStatus, type MarketStatus } from '../routes/market'
 import { istToday, ymdToIso } from '../market/amfi'
 import { BENCHMARK_CODE } from '../market/store'
+import { apiKey, budgetLeft, recordWants, requestStocks, stockData, stocksVersion } from '../market/stocks'
 import { blobKeys, deleteBlobs, getJsonBlob, isUuid } from './blob'
 import { FLAG_GZIP, hmacHex, toBytes, type Vault } from './crypto'
 import { engineApi } from './engine-client'
@@ -28,8 +29,8 @@ import { waitDelay } from './jobs'
 import { cleanName, fieldKey } from './members'
 import { Tenant } from './tenant'
 
-/** Bump to rebuild every snapshot (a change in what the Worker sends to /build). */
-export const SNAPSHOT_VERSION = 1
+/** Bump to rebuild every snapshot (a change in what the Worker sends to /build). 2: stock data (M11). */
+export const SNAPSHOT_VERSION = 2
 /** Debounce: every trigger's message arrives this much later (§10.2). */
 export const REBUILD_DELAY_S = 10
 /** A claim outlives the engine call (100 s) and matches the batch lease (120 s). */
@@ -38,7 +39,10 @@ export const CLAIM_MS = 120_000
 export const LAZY_REPEAT_MS = 10 * 60_000
 /** After a failed build, a stale read waits this long before asking again. */
 export const FAILED_BACKOFF_MS = 10 * 60_000
-/** While a held fund's NAV history is still being backfilled, build again this often, at most MAX_FOLLOWUPS times. */
+/**
+ * While a held fund's NAV history is still being backfilled, or its stocks are still being fetched, build again this
+ * often, at most MAX_FOLLOWUPS times.
+ */
 export const FOLLOWUP_DELAY_S = 120
 export const MAX_FOLLOWUPS = 10
 /** Builds that fail (engine crash, NAV store down) are tried this often in all. */
@@ -47,7 +51,7 @@ export const MAX_BUILD_ATTEMPTS = 3
 export const PREBUILD_ACTIVE_MS = 7 * 86_400_000
 export const PREBUILD_SPREAD_S = 1_800
 const PREBUILD_PAGE = 1_000
-/** The prebuild fallback, at the latest (wrangler.jsonc; also fires with the stocks cron's days, dispatched apart). */
+/** The prebuild fallback, at the latest (wrangler.jsonc). */
 export const PREBUILD_CRON = '0 5 * * *'
 
 export type RebuildMessage = {
@@ -119,7 +123,8 @@ export function usedStatements(rows: StatementRow[]): StatementRow[] {
   return [...out, ...rta.values()].sort((a, b) => a.member_id.localeCompare(b.member_id) || a.as_of.localeCompare(b.as_of) || a.id.localeCompare(b.id))
 }
 
-export type MarketInputs = { marketDate: string; navKey: string }
+/** `stocks`: stock_state.version, so a build after the stocks job stored something isn't skipped as current. */
+export type MarketInputs = { marketDate: string; navKey: string; stocks?: number }
 
 /** The market day a build uses, and the key the engine caches NAV series by (it changes as the night's rows land). */
 export function marketInputs(status: MarketStatus, now = Date.now()): MarketInputs {
@@ -131,12 +136,13 @@ const hex = (b: ArrayLike<number> | null) => (b ? Array.from(toBytes(b), (x) => 
 
 /**
  * What the snapshot depends on, as an opaque 32-hex HMAC: the statements used, each member's (sealed) name, the market
- * day and SNAPSHOT_VERSION. Keyed with PAN_PEPPER, so it reveals nothing.
+ * day, the stock data version and SNAPSHOT_VERSION. Keyed with PAN_PEPPER, so it reveals nothing.
  */
 export async function inputsHash(env: { PAN_PEPPER: string }, market: MarketInputs, statements: StatementRow[], members: MemberRow[]): Promise<string> {
   const doc = JSON.stringify({
     v: SNAPSHOT_VERSION,
     nav: market.navKey,
+    st: market.stocks ?? 0,
     s: statements.map((s) => s.id).sort(),
     m: members.map((m) => [m.id, hex(m.display_name_enc)]).sort(),
   })
@@ -184,7 +190,8 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
   if (!household || !snap) return done(env, msg, 'gone')
   const loadedAt = now
   // Fresh, not the 5-minute edge copy: right after a day turns final, prebuild messages must see the new nav_key.
-  const market = marketInputs(await marketStatus(env), now)
+  const [status, stocks] = await Promise.all([marketStatus(env), stocksVersion(env)])
+  const market = { ...marketInputs(status, now), stocks }
   const used = usedStatements(sRes!.results as StatementRow[])
   const members = mRes!.results as MemberRow[]
   const hash = await inputsHash(env, market, used, members)
@@ -258,11 +265,13 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
       nav_hits: built.navHits,
       nav_misses: built.navMisses,
       backfilling: request.refresh.length,
+      stock_funds: built.stocksWant?.length ?? 0,
       ms: Date.now() - started,
     })
     if ((prev?.requested_at ?? 0) > loadedAt) await rebuildQueue.send(env, { household_id: hid })
+    const stocksFollow = await afterBuildStocks(env, built.stocksWant ?? [], request.stocksWaiting, now)
     const followups = msg.followups ?? 0
-    if (request.refresh.length && followups < MAX_FOLLOWUPS) {
+    if ((request.refresh.length || stocksFollow) && followups < MAX_FOLLOWUPS) {
       return { outcome: 'built', requeue: { msg: { household_id: hid, force: true, followups: followups + 1 }, delay: FOLLOWUP_DELAY_S } }
     }
     return { outcome: 'built' }
@@ -294,6 +303,25 @@ async function done(env: Env, msg: RebuildMessage, outcome: string): Promise<Reb
   return { outcome }
 }
 
+/**
+ * Stocks (M11): remember the funds the engine said the stocks view needs, and if some of them still wait for the
+ * BharatStock job (new, or never fetched) and today's budget isn't spent, ask for a run. True: build again later to
+ * pick up what it stores. Never throws: the snapshot itself is already stored.
+ */
+async function afterBuildStocks(env: Env, want: [string, string][], waiting: boolean, now: number): Promise<boolean> {
+  if (!apiKey(env)) return false
+  try {
+    const fresh = await recordWants(env, want, now)
+    if (!fresh && !waiting) return false
+    if ((await budgetLeft(env, now)) <= 0) return false
+    await requestStocks(env, now)
+    return true
+  } catch (err) {
+    console.error('stocks_request_failed', (err as Error).name)
+    return false
+  }
+}
+
 /** No statements left: the snapshot becomes empty (onboarding) and its blob goes. */
 async function clearSnapshot(env: Env, msg: RebuildMessage, snap: SnapshotRow, hash: string, market: MarketInputs, loadedAt: number): Promise<RebuildOutcome> {
   const db = env.DB
@@ -322,8 +350,9 @@ type BuildItem = { member_id: string; name: string | null; data: Record<string, 
 
 /**
  * The /build body: the decrypted statements (with each member's name, or null when it's still the holder name the
- * engine would use), the market day, ISIN → AMFI codes for funds the statements don't code (CDSL), and the codes
- * whose NAV history is still being backfilled (`refresh`: the engine reads them fresh, and we build again later).
+ * engine would use), the market day, ISIN → AMFI codes for funds the statements don't code (CDSL), the codes
+ * whose NAV history is still being backfilled (`refresh`: the engine reads them fresh, and we build again later), and
+ * the stored stock data for the held funds (M11).
  */
 async function buildRequest(env: Env, vault: Vault, used: StatementRow[], members: MemberRow[], market: MarketInputs, now: number) {
   const names = new Map<string, string | null>()
@@ -363,13 +392,14 @@ async function buildRequest(env: Env, vault: Vault, used: StatementRow[], member
     if (r.isin) isinToCode[r.isin] = String(r.amfi_code)
     if (r.status === 'pending') refresh.add(String(r.amfi_code))
   }
+  const stocks = await stockData(env, [...isins], now)
   const body = JSON.stringify({
     statements: items,
-    market: { market_date: market.marketDate, nav_key: market.navKey, isin_to_code: isinToCode, refresh: [...refresh], stocks: null },
+    market: { market_date: market.marketDate, nav_key: market.navKey, isin_to_code: isinToCode, refresh: [...refresh], stocks: stocks.data },
     today: ymdToIso(istToday(now)),
     format: 'gzip',
   })
-  return { body, refresh: [...refresh] }
+  return { body, refresh: [...refresh], stocksWaiting: stocks.waiting }
 }
 
 // ─── snapshot-prebuild (§10.3) ──────────────────────────────────────────────────────────────────────────────────

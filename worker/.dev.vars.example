@@ -21,7 +21,10 @@ PAN_PEPPER=
 # Worker -> engine (M2)
 ENGINE_SHARED_SECRET=
 
-# Market data (M11). The engine reads NAVs through MarketGateway (M10), so it needs no R2 keys.
+# Market data. The engine reads NAVs through MarketGateway (M10), so it needs no R2 keys.
+# Stocks inside funds (M11): optional; empty turns the stocks view off. The daily budget is the wrangler var
+# BHARATSTOCK_DAILY_LIMIT (50). Tests never use this value (vitest.config.ts sets a test key), except the opt-in
+# BHARATSTOCK_LIVE=1 check.
 BHARATSTOCK_API_KEY=                   # owner
 
 # Deploy (M4), also stored as GitHub Actions secrets

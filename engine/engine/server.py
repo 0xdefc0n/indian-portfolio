@@ -11,6 +11,9 @@ POST /build   JSON {statements, market, today, format?} → the portfolio snapsh
               format "gzip": the body is the gzip-compressed snapshot JSON itself (application/x-snapshot+gzip, no
               Content-Encoding), with the metrics in X-Engine-* headers. The Worker seals those bytes as they are and
               never parses the snapshot (plan §10.2 "stream, don't parse").
+              market.stocks: stock data the Worker loaded (stocks.py), or null. The funds the stocks view needs data
+              for come back as X-Engine-Stocks-Want (base64url JSON [[isin, name], ...]; `stocks_want` in the JSON
+              metrics), so the Worker's BharatStock job can fetch them (plan §10.3.1, M11). Public scheme ids only.
 GET  /health  {version, isin_db} (no auth, no data)
 
 One job at a time per process: a second concurrent /parse or /build gets 503 `busy` straight away. EnginePool
@@ -33,7 +36,7 @@ from datetime import date
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
-from . import VERSION, navstore
+from . import VERSION, navstore, stocks
 from .parse import parse_pdf, peak_rss_mb
 from .portfolio import build_portfolio, market_requirements
 
@@ -126,7 +129,7 @@ async def build(request: Request):
         except (ValueError, KeyError, TypeError):
             return _error(400, "bad_request", "Expected JSON {statements, market?, today?}")
         try:
-            result = await asyncio.to_thread(_build, statements, market, today, req.get("format") == "gzip")
+            result, want = await asyncio.to_thread(_build, statements, market, today, req.get("format") == "gzip")
         except navstore.NavStoreError as e:
             log.warning("nav store failed: %s", e)
             return _error(502, "nav_store_error", "Could not read NAVs")
@@ -135,20 +138,22 @@ async def build(request: Request):
             return _error(500, "build_error", "Could not build the portfolio")
         del req, statements
         if isinstance(result, bytes):
-            return Response(result, media_type="application/x-snapshot+gzip", headers=_metric_headers())
-        return JSONResponse({"ok": True, "snapshot": result, "metrics": _metrics()})
+            return Response(result, media_type="application/x-snapshot+gzip", headers=_metric_headers(want))
+        return JSONResponse({"ok": True, "snapshot": result, "metrics": {**_metrics(), "stocks_want": want}})
 
 
-def _build(statements: list, market: dict, today: date | None, gz: bool) -> dict | bytes:
+def _build(statements: list, market: dict, today: date | None, gz: bool) -> tuple[dict | bytes, list[list[str]]]:
     """The CPU part of /build (a thread). NAVs come from the NAV store unless the request carries them."""
     if market.get("market_date") and market.get("navs") is None and navstore.store_url():
         need = market_requirements(statements, market.get("isin_to_code") or {})
         refresh = {str(c) for c in market.get("refresh") or []}
         market["navs"] = navstore.load(need["codes"], str(market.get("nav_key") or market["market_date"]), refresh=refresh)
     snapshot = build_portfolio(statements, market, today)
+    want = stocks.wanted(snapshot["holdings"], market.get("stocks"))
     if not gz:
-        return snapshot
-    return gzip.compress(json.dumps(snapshot, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode(), compresslevel=6, mtime=0)
+        return snapshot, want
+    body = json.dumps(snapshot, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()
+    return gzip.compress(body, compresslevel=6, mtime=0), want
 
 
 def _metrics() -> dict:
@@ -156,7 +161,13 @@ def _metrics() -> dict:
     return {"peak_rss_mb": peak_rss_mb(), "nav_cache": {"series": len(c), "points": c.points, "hits": c.hits, "misses": c.misses}}
 
 
-def _metric_headers() -> dict:
+def _metric_headers(want: list[list[str]]) -> dict:
     m = _metrics()
     return {"X-Engine-Peak-Rss-Mb": str(m["peak_rss_mb"]), "X-Engine-Nav-Hits": str(m["nav_cache"]["hits"]),
-            "X-Engine-Nav-Misses": str(m["nav_cache"]["misses"])}
+            "X-Engine-Nav-Misses": str(m["nav_cache"]["misses"]), "X-Engine-Stocks-Want": encode_want(want)}
+
+
+def encode_want(want: list[list[str]]) -> str:
+    """base64url (no padding) of the compact JSON, so any scheme name fits in a header."""
+    raw = json.dumps(want, separators=(",", ":"), ensure_ascii=False).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")

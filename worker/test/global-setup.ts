@@ -23,6 +23,8 @@ declare module 'vitest' {
     privatePdfsSkipReason: string | null
     /** test/helpers/portfolio_expect.py's JSON (expected snapshots + NAV data), or null. Never printed. */
     privatePortfolio: string | null
+    /** BHARATSTOCK_LIVE=1 only: the real key and a synthetic statement for test/stocks.live.test.ts. Never printed. */
+    stocksLive: string | null
   }
 }
 
@@ -62,6 +64,21 @@ export default function setup(project: TestProject) {
     }
   }
   project.provide('privatePortfolio', portfolio)
+  project.provide('stocksLive', stocksLive())
   project.provide('privatePdfs', pdfs)
   project.provide('privatePdfsSkipReason', skip)
+}
+
+/**
+ * The M11 live check (opt-in: BHARATSTOCK_LIVE=1 npx vitest run test/stocks.live.test.ts). The engine's synthetic
+ * KFintech statement with its made-up flexi cap fund renamed to a real public fund, so the real BharatStock API has a
+ * portfolio to match. No personal data: the holder, PAN and amounts are the synthetic fixture's.
+ */
+function stocksLive(): string | null {
+  const key = process.env.BHARATSTOCK_LIVE === '1' ? devVar('BHARATSTOCK_API_KEY') : undefined
+  if (!key) return null
+  const code = 'import json; from tests.fixtures import synthetic; print(json.dumps(synthetic.statements()[1]["data"]))'
+  const raw = execFileSync('uv', ['run', '--directory', join(ROOT_DIR, 'engine'), 'python', '-c', code], { stdio: ['ignore', 'pipe', 'ignore'] }).toString()
+  const statement = raw.replaceAll('INF000S01FC1', 'INF879O01027').replaceAll('SYNTH FLEXI CAP FUND', 'PARAG PARIKH FLEXI CAP FUND')
+  return JSON.stringify({ key, statement: JSON.parse(statement) })
 }

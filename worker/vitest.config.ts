@@ -29,6 +29,7 @@ export default defineConfig(async () => {
             DATA_KEK_V1: '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff',
             PAN_PEPPER: 'test-only-pan-pepper-0123456789abcdef',
             EMAIL_SINK_KEY: 'test-only-email-sink-key-0123456789abcdef',
+            BHARATSTOCK_API_KEY: 'test-only-bharatstock-key', // never the real key from .dev.vars; fetches are mocked
             TEST_APP_MIGRATIONS: appMigrations,
             TEST_MARKET_MIGRATIONS: marketMigrations,
           },

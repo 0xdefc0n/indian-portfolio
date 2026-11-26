@@ -68,12 +68,12 @@ export function StockExposure({ holdings, total, members, showMember, data }: {
   }, [holdings, data])
 
   if (!data.enabled) {
-    return <p className="text-sm text-muted-foreground">Add a BharatStock API key to .env to see the stocks inside your funds.</p>
+    return <p className="text-sm text-muted-foreground">Stocks inside funds aren't available right now.</p>
   }
   if (!rows.length) {
     return (
       <p className="text-sm text-muted-foreground">
-        {data.pending || data.refreshing ? "Fetching fund portfolios. Reload in a minute." : "No stock-level data for these funds yet."}
+        {data.pending || data.refreshing ? "Fetching fund portfolios. This takes a few minutes." : "No stock-level data for these funds yet."}
       </p>
     )
   }

@@ -5,6 +5,7 @@ import { vi } from 'vitest'
 import { blobKeys, gunzip, gzip, putJsonBlob } from '../../src/lib/blob'
 import { engineApi, type EngineBuild, type EngineLease, releaseLease } from '../../src/lib/engine-client'
 import { type RebuildMessage, runRebuild } from '../../src/lib/snapshot'
+import type { StockData } from '../../src/market/stocks'
 import type { Household } from './tenant'
 
 type Recorded = { msg: RebuildMessage; delay: number }
@@ -27,7 +28,7 @@ export async function deliverRebuilds(msgs: Recorded[]) {
 
 export type BuildBody = {
   statements: { member_id: string; name: string | null; data: Record<string, unknown> }[]
-  market: { market_date: string; nav_key: string; isin_to_code: Record<string, string>; refresh: string[]; stocks: null }
+  market: { market_date: string; nav_key: string; isin_to_code: Record<string, string>; refresh: string[]; stocks: StockData }
   today: string
   format: 'gzip'
 }
@@ -64,9 +65,10 @@ export function fakeBuild(opts: { gate?: (req: BuildBody, n: number) => Promise<
   return calls
 }
 
-export async function okBuild(snapshot: unknown): Promise<EngineBuild> {
+/** `stocksWant`: the funds the fake engine says the stocks view needs (X-Engine-Stocks-Want). */
+export async function okBuild(snapshot: unknown, stocksWant: [string, string][] = []): Promise<EngineBuild> {
   const bytes = new TextEncoder().encode(JSON.stringify(snapshot)) as Uint8Array<ArrayBuffer>
-  return { ok: true, gzip: await gzip(bytes), peakRssMb: 50, navHits: 0, navMisses: 0 }
+  return { ok: true, gzip: await gzip(bytes), peakRssMb: 50, navHits: 0, navMisses: 0, stocksWant }
 }
 
 export async function gunzipJson<T = unknown>(bytes: Uint8Array<ArrayBuffer>): Promise<T> {

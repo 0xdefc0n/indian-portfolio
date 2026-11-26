@@ -1103,7 +1103,7 @@ Engine `/parse` timeout: 60 s. On timeout return `parse_timeout`, and count it i
 |---|---|---|
 | `nav-ingest`, `nav-backfill`, `nav-repair` | see §10.4 | Official AMFI NAVs for every scheme into D1, several times a night. This replaces the old per-scheme mfapi refresh. |
 | `snapshot-prebuild` | triggered when a market day becomes final (§10.4), at the latest `0 5 * * *` | Enqueue a rebuild for households with `last_active_at` in the last 7 days, with `sendBatch` (100 per call). The `rebuild` queue's `max_concurrency` and the `EngineBatch` cap set the drain rate, so this is the nightly burst handled at a steady pace. The per-message delay is spread over 0–30 min to smooth the wake-ups. |
-| `stocks-monthly` | `0 5 10-20 * *` | §10.3.1 |
+| `stocks-monthly` | `0 5 10-20 * *` | §10.3.1. ✅ M11: until the AMC scrapers ship (M18) this cron is replaced by a daily BharatStock run, `stocks` at `0 4 * * *` (09:30 IST: after BharatStock's UTC day resets, before the 10:00 IST final NAV run and prebuild). M18 adds the monthly scrape cron back. |
 | `cleanup` | `0 21 * * *` | Expire pending passwords and old quota windows. Drop `tracked_scheme` rows unseen for 90 days. Delete finished `parse_job` rows older than 7 days and expired Better Auth `session` / `verification` rows. Send DPDP inactivity notices and do erasures (§12). |
 | `tmp-sweep` | `15 * * * *` (hourly) | Parked PDFs past `expires_at`: delete the R2 object, set `expired`. Re-enqueue `queued` jobs whose message was lost (no change for 15 min). Counts only in logs. ✅ M8: also deletes leftover PDFs of finished jobs and recounts the parked PDFs for `EnginePool` (§10.1 D, as built). |
 
@@ -1145,6 +1145,33 @@ website (typically one Excel file per month, one sheet per scheme). We scrape **
   Write each AMC's findings in a comment at the top of its adapter file.
 - **Snapshot.** The `stocks` section of the portfolio is built in the engine from these blobs (same shape as today's
   `stocks.snapshot`). `refreshing` becomes `true` when a tracked equity ISIN has no data yet.
+- ✅ **M11, as built (BharatStock only, rollout step 1)** — `worker/src/market/stocks.ts`, migration
+  `market/0003_stocks.sql`:
+  - **Which funds.** The Worker doesn't classify funds. Each `/build` returns the funds its stocks view needs in
+    `X-Engine-Stocks-Want`: base64url JSON `[[isin, display name], …]`, covering the equity holdings plus the funds held
+    inside them (fund-of-funds units, one level deep). The rebuild consumer upserts them into `stock_match`, refreshing
+    `wanted_at` at most daily. Funds not wanted for 90 days drop out. That table is public data only, like `tracked_scheme`.
+    So the match uses the engine's display name, as the old app did, not AMFI's scheme name.
+  - **The job** is one `stocks` message on `pf-market`, single-flight through `job_lock`. A message that finds the lock
+    held is retried in 60 s. A request during a run gets one more pass (up to 3). A message is sent when a build finds
+    a new fund or one still waiting and the budget isn't spent, and also by the daily cron. One message is outstanding
+    at a time; one lost for 15 min is sent again.
+    The job searches each fund once (unmatched ones again after 30 days), fetches per portfolio name (direct and regular
+    plans share one fetch), and refetches when the free coverage list shows a newer month (cached daily in
+    `stock_coverage`). It writes one blob per ISIN and month plus the `fund_portfolio` row, and bumps
+    `stock_state.version`, which is part of every snapshot's inputs hash.
+  - **Budget.** One `quota` unit per paid call (subject `global`, metric `bharatstock`), taken before the call is sent.
+    The window is the **UTC** day, because the provider's day is UTC (`QuotaSpec.utc`). A 429 uses up the rest of the
+    day. Errors: a 4xx marks that one fund failed for a day; a 5xx or network error stops the pass, and the queue retries.
+  - **Builds** load the held funds' `stock_match` + latest `fund_portfolio` row + R2 blob, then one more round for the
+    funds inside them, and pass them as `market.stocks`. A fund still waiting (and budget left) asks for the job and
+    a follow-up build (the same 2-min follow-ups as NAV backfills).
+  - ✅ VERIFY (BharatStock API, 2026-11-26): the response fields match the old app (`scheme_name`, `fund_house`,
+    `portfolio_date`, `pagination.total_pages`, rows with `isin`, `symbol`, `company_name`, `sector`,
+    `instrument_type`, `pct_of_aum`). `page_size` above 100 is a 422. `/v1/mf-coverage` needs no key and lists
+    82 fund houses with `latest_month`.
+  - The key is an optional secret (`BHARATSTOCK_API_KEY`, not in `secrets.required`). Without it the stocks view is
+    off (`enabled: false`) and nothing is fetched.
 
 ---
 
@@ -1771,9 +1798,9 @@ integration accept. Switch only if a later wrangler requires `exports`.
   // max_concurrency of pf-parse / pf-rebuild must equal the EngineFast / EngineBatch pool caps (§14).
   // Slot waits send a fresh delayed message and ack the original (✅ M8, §10.1 D): they don't count as attempts
   // (parse_job.attempts) and can't use up max_retries.
-  "triggers": { "crons": ["30 17 * * *", "30 20 * * *", "30 1 * * *", "30 4 * * *", "0 5 * * *", "0 3 * * SUN", "0 5 10-20 * *", "0 21 * * *", "15 * * * *"] },
+  "triggers": { "crons": ["30 17 * * *", "30 20 * * *", "30 1 * * *", "30 4 * * *", "0 5 * * *", "0 3 * * SUN", "0 4 * * *", "0 21 * * *", "15 * * * *"] },
   // nav-ingest ×4 (23:00, 02:00, 07:00, 10:00 IST), snapshot-prebuild fallback, nav-repair (Sun), stocks, cleanup, tmp-sweep (hourly).
-  // ⚠️ "0 5 * * *" serves both prebuild and stocks on the 10th–20th: dispatch on event.cron in scheduled().
+  // ✅ M11: stocks is a daily BharatStock run at "0 4 * * *" until M18 adds the monthly AMC scrape; dispatch on event.cron.
   "ratelimits": [
     { "name": "RL_USER", "namespace_id": "1001", "simple": { "limit": 120, "period": 60 } },
     { "name": "RL_IP",   "namespace_id": "1002", "simple": { "limit": 300, "period": 60 } }
@@ -1914,6 +1941,7 @@ until those features ship.
 | D1 budget | Dashboard load makes ≤ 3 queries to `DB` when the cookie cache is warm (count in a test wrapper). |
 | E2E (Playwright, staging) | Sign up via magic link (test inbox) → consent → upload a fixture → dashboard renders → settings export → delete account. At 360 px and desktop, in light and dark. |
 | Load (staging) | **Burst:** 2,000 uploads in 2 min from synthetic users (fixture PDFs) → no 5xx and no timeouts. Every upload ends `done` either directly or through the queue, `tmp/` is empty afterwards, and D1 has no "overloaded" errors. Record drain time, peak instances and the container bill. **Nightly:** prebuild for 5,000 synthetic households drains at the configured rate. **Polling:** 2,000 clients following `Retry-After` stay under the IP rate limit. Extrapolate to 10k (§3.5) from these. |
+| Stocks (M11) | Equity funds in a test household get holdings: build → wanted funds → job → `fund_portfolio` + R2 → the follow-up build has them. The global budget stops at the limit (also with parallel callers), continues the next UTC day, and a 429 spends the rest of the day. Direct and regular plans share one fetch. Refetch only on a newer coverage month (an empty newest month falls back to the month before). Fund-of-funds look-through. Single flight. A live check (`BHARATSTOCK_LIVE=1`) runs the real engine and the real API. |
 | NAV ingest | Parses the real AMFI file format (section headers, `N.A.`, `-` ISINs, stale dates). Idempotent re-runs insert 0 rows. Partial nights move `market_day` coverage. Backfill falls back to AMFI history when mfapi fails. |
 | Daily returns | `dailySeries` golden tests: a purchase or redemption mid-window isn't a gain or loss; holiday gaps; partial coverage; IDCW drop flagged; CDSL-only `units_exact=false` note; member filter. |
 | PWA | Eligibility function unit tests (each rule in §13A.2). Lighthouse installability. Manual installs on Android Chrome, desktop Chrome/Edge, iOS Safari and macOS Safari. Cache Storage holds no `/api` responses. |
