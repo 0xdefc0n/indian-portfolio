@@ -5,17 +5,20 @@ import { handleEmailBatch, type EmailJob } from './lib/email'
 import { withEngine } from './lib/engine-client'
 import { ApiError } from './lib/errors'
 import { handleParseBatch, type ParseMessage, TMP_SWEEP_CRON, tmpSweep } from './lib/jobs'
+import { handleRebuildBatch, PREBUILD_CRON, prebuild, type RebuildMessage } from './lib/snapshot'
 import { handleMarketBatch, type MarketMessage, NAV_INGEST_CRONS, NAV_REPAIR_CRON, navIngest, navRepair } from './market/jobs'
 import { requireSession } from './middleware/session'
 import { authRoutes } from './routes/auth'
 import { jobRoutes } from './routes/jobs'
 import { marketRoutes } from './routes/market'
 import { memberRoutes } from './routes/members'
+import { portfolioRoutes } from './routes/portfolio'
 import { statementRoutes } from './routes/statements'
 import type { AppBindings, AppEnv } from './types'
 
 export { EngineBatch, EngineFast } from './engine'
 export { EnginePool } from './engine-pool'
+export { MarketGateway } from './market-gateway'
 
 type EngineHealth = { ok: boolean; version: string; isin_db: string | null; busy: boolean }
 
@@ -71,15 +74,7 @@ app.get('/me', signedIn, async (c) => {
 app.route('/', memberRoutes)
 app.route('/', statementRoutes)
 app.route('/', jobRoutes)
-
-// Until the first build (M10) a household's snapshot row has no blob, so the portfolio is empty. M10 replaces this.
-app.get('/portfolio', signedIn, (c) =>
-  c.json({ members: [], holdings: [], activity: [], sips: [], benchmark: null, stocks: EMPTY_STOCKS, stale: false, building: false }),
-)
-const EMPTY_STOCKS = {
-  enabled: false, funds: {}, stocks: {}, month: null, oldest_month: null, unmatched: [], no_stocks: [], look_through: {},
-  pending: 0, refreshing: false,
-}
+app.route('/', portfolioRoutes)
 
 app.notFound((c) => c.json({ ok: false, code: 'not_found' }, 404))
 
@@ -104,7 +99,7 @@ class EngineUnavailable extends Error {
 export default {
   fetch: app.fetch,
 
-  // Dispatch on event.cron (wrangler.jsonc triggers). Still to come: M10 (prebuild), M11 (stocks), M14 (cleanup).
+  // Dispatch on event.cron (wrangler.jsonc triggers). Still to come: M11 (stocks), M14 (cleanup).
   async scheduled(controller, env, ctx) {
     const cron = controller.cron
     if (cron === TMP_SWEEP_CRON) {
@@ -115,6 +110,11 @@ export default {
       ctx.waitUntil(navIngest(env, { cron, now: controller.scheduledTime }).then(() => undefined))
       return
     }
+    if (cron === PREBUILD_CRON) {
+      // The fallback: the 10:00 IST nav-ingest run normally made the day final and prebuilt already (once per date).
+      ctx.waitUntil(prebuild(env, { now: controller.scheduledTime }).then(() => undefined))
+      return
+    }
     if (cron === NAV_REPAIR_CRON) {
       ctx.waitUntil(navRepair(env, { now: controller.scheduledTime }).then(() => undefined))
       return
@@ -122,12 +122,12 @@ export default {
     console.log('cron_unhandled', controller.cron)
   },
 
-  // Queue names carry an environment suffix (pf-email-staging). The rebuild consumer arrives in M10; until then
-  // retrying keeps a stray message until its consumer exists (then the DLQ).
+  // Queue names carry an environment suffix (pf-email-staging). A queue with no consumer here retries (then the DLQ).
   async queue(batch, env) {
     if (batch.queue.startsWith('pf-email')) return handleEmailBatch(batch as MessageBatch<EmailJob>, env)
     if (batch.queue.startsWith('pf-parse')) return handleParseBatch(batch as MessageBatch<ParseMessage>, env)
     if (batch.queue.startsWith('pf-market')) return handleMarketBatch(batch as MessageBatch<MarketMessage>, env)
+    if (batch.queue.startsWith('pf-rebuild')) return handleRebuildBatch(batch as MessageBatch<RebuildMessage>, env)
     console.log('queue_unhandled', batch.queue, batch.messages.length)
     batch.retryAll({ delaySeconds: 60 })
   },

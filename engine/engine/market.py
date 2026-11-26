@@ -26,11 +26,15 @@ class NavSeries:
         return self.navs[i] if gap <= max_stale_days else None
 
 
-def series_map(navs: dict[str, list] | None) -> dict[str, NavSeries]:
-    """{amfi_code: [[iso_date, nav], ...]} from the request → {amfi_code: NavSeries}, skipping empty series."""
+def series_map(navs: dict[str, list | NavSeries] | None) -> dict[str, NavSeries]:
+    """{amfi_code: [[iso_date, nav], ...] or NavSeries (from the NAV store)} → {amfi_code: NavSeries}, skipping empty
+    series."""
     out = {}
     for code, rows in (navs or {}).items():
-        if rows:
+        if isinstance(rows, NavSeries):
+            if rows.dates:
+                out[str(code)] = rows
+        elif rows:
             out[str(code)] = NavSeries(rows)
     return out
 

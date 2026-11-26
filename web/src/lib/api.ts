@@ -119,6 +119,19 @@ export type Portfolio = {
   sips: Sip[]
   benchmark: { name: string; returns: Returns } | null
   stocks: StockData
+  /** From the X-Snapshot-* headers (plan §10.2): built on an older NAV day, or an update is on its way. */
+  stale: boolean
+  building: boolean
+}
+
+/** GET /api/portfolio/status: whether the dashboard is up to date with the latest statements and NAVs. */
+export type PortfolioStatus = {
+  status: "empty" | "ready" | "building" | "pending" | "failed"
+  building: boolean
+  pending: boolean
+  stale: boolean
+  market_date: string | null
+  built_at: number | null
 }
 
 /** Stocks inside each equity fund (monthly disclosures), keyed by the fund's ISIN. */
@@ -287,8 +300,47 @@ export const auth = {
   signOut: () => call<unknown>("/api/auth/sign-out", json({})),
 }
 
+/** Fetch with the global 401 handler, returning the raw response (for headers). */
+async function raw(url: string): Promise<Response> {
+  const r = await fetch(url)
+  if (r.status === 401) {
+    goToLogin()
+    throw new SignedOut("Signed out")
+  }
+  if (!r.ok) throw await readError(r)
+  return r
+}
+
+const retryAfter = (r: Response) => {
+  const after = Number(r.headers.get("Retry-After"))
+  return Number.isFinite(after) && after > 0 ? after : null
+}
+
+/**
+ * Wait until the dashboard has caught up (no build running or due), polling /api/portfolio/status with backoff and
+ * following Retry-After (§11). Resolves with the last status; gives up after `maxMs` (the build carries on).
+ */
+export async function waitForPortfolio(opts: { maxMs?: number; signal?: AbortSignal } = {}): Promise<PortfolioStatus | null> {
+  const deadline = Date.now() + (opts.maxMs ?? 90_000)
+  let wait = 2
+  while (Date.now() < deadline && !opts.signal?.aborted) {
+    const r = await raw("/api/portfolio/status")
+    const s = (await r.json()) as PortfolioStatus
+    if (!s.building && !s.pending) return s
+    await new Promise((done) => setTimeout(done, 1000 * Math.min(15, Math.max(wait, retryAfter(r) ?? 0))))
+    wait = Math.min(15, wait * 1.5)
+  }
+  return null
+}
+
 export const api = {
-  portfolio: () => call<Portfolio>("/api/portfolio"),
+  /** The snapshot JSON (sent gzip as stored) plus the stale/building flags from its headers. */
+  portfolio: async (): Promise<Portfolio> => {
+    const r = await raw("/api/portfolio")
+    const body = (await r.json()) as Omit<Portfolio, "stale" | "building">
+    return { ...body, stale: r.headers.get("X-Snapshot-Stale") === "1", building: r.headers.get("X-Snapshot-Building") === "1" }
+  },
+  portfolioStatus: () => call<PortfolioStatus>("/api/portfolio/status"),
   members: () => call<{ members: MemberSummary[] }>("/api/members").then((r) => r.members),
   renameMember: (id: string, name: string) =>
     call<{ member: { id: string; name: string } }>(`/api/members/${encodeURIComponent(id)}`, { ...json({ name }), method: "PATCH" }),
@@ -297,24 +349,36 @@ export const api = {
   config: () => call<AppConfig>("/api/config"),
   requestStatement: (body: { pan: string; email: string; from_date: string; to_date: string; password: string }) =>
     call<StatementRequestResult>("/api/kfintech/request", json(body)),
-  /** The file and an optional password only: no PAN and no member (D19). */
-  addStatement: (file: File, password: string) => {
+  /**
+   * The file and an optional password only: no PAN and no member (D19). XHR, not fetch, so the dialog can tell
+   * "uploading" from "reading statement" (`onUploaded` fires once the body is sent).
+   */
+  addStatement: (file: File, password: string, onUploaded?: () => void) => {
     const fd = new FormData()
     fd.append("file", file)
     if (password) fd.append("password", password)
-    return call<AddedStatement | QueuedUpload>("/api/statements", { method: "POST", body: fd })
+    return new Promise<AddedStatement | QueuedUpload>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open("POST", "/api/statements")
+      xhr.upload.onload = () => onUploaded?.()
+      xhr.onerror = () => reject(new ApiFailure("Couldn't reach PocketFolio. Check your connection and try again.", 0, null, {}))
+      xhr.onload = async () => {
+        const r = new Response(xhr.responseText, { status: xhr.status, headers: { "content-type": "application/json" } })
+        if (r.status === 401) {
+          goToLogin()
+          return reject(new SignedOut("Signed out"))
+        }
+        if (!r.ok) return reject(await readError(r))
+        resolve(await r.json())
+      }
+      xhr.send(fd)
+    })
   },
   jobs: () => call<{ jobs: Job[] }>("/api/jobs").then((r) => r.jobs),
   /** One job, and the server's suggested next poll in seconds (Retry-After, §11). */
   job: async (id: string) => {
-    const r = await fetch(`/api/jobs/${encodeURIComponent(id)}`)
-    if (r.status === 401) {
-      goToLogin()
-      throw new SignedOut("Signed out")
-    }
-    if (!r.ok) throw await readError(r)
-    const after = Number(r.headers.get("Retry-After"))
-    return { job: ((await r.json()) as { job: JobDetail }).job, retryAfter: Number.isFinite(after) && after > 0 ? after : null }
+    const r = await raw(`/api/jobs/${encodeURIComponent(id)}`)
+    return { job: ((await r.json()) as { job: JobDetail }).job, retryAfter: retryAfter(r) }
   },
   cancelJob: (id: string) => call<{ ok: true }>(`/api/jobs/${encodeURIComponent(id)}`, { method: "DELETE" }),
   deleteStatement: (id: string) => call<{ ok: true }>(`/api/statements/${encodeURIComponent(id)}`, { method: "DELETE" }),

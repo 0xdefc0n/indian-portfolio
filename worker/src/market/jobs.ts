@@ -2,8 +2,9 @@
 // (Sunday cron, then pf-market). Public market data only. Requests carry no user data: a backfill passes a scheme code
 // and a date, nothing else. Logs carry counts, dates and error class names, never scheme codes: a backfill logged
 // right after an upload would tie that household to a fund it holds (§0.1).
+import { prebuild } from '../lib/snapshot'
 import { amcId } from './amc-ids'
-import { addDays, AmfiFormatError, anomalies, istToday, type NavRow, parseAmfiNav, parseMfapi, type Ymd, ymdToAmfi } from './amfi'
+import { addDays, AmfiFormatError, anomalies, istToday, type NavRow, parseAmfiNav, parseMfapi, type Ymd, ymdToAmfi, ymdToIso } from './amfi'
 import {
   anomalyStatements,
   BENCHMARK_CODE,
@@ -53,10 +54,11 @@ export const marketQueue = {
   },
 }
 
-/** Called once per date when it becomes final. M10 enqueues snapshot-prebuild here (§10.3). */
+/** Called once per date when it becomes final: snapshot-prebuild for the latest full NAV day (§10.3, M10). */
 export const marketHooks = {
-  async onFinal(_env: Env, dates: Ymd[]): Promise<void> {
+  async onFinal(env: Env, dates: Ymd[]): Promise<void> {
     console.log('market_day_final', { dates })
+    await prebuild(env, { finalDates: dates.map(ymdToIso) }).catch((e) => console.error('prebuild_failed', (e as Error).name))
   },
 }
 

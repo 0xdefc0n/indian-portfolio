@@ -154,7 +154,7 @@ describe('sessions', () => {
     expect(sql).toHaveLength(1) // /api/me's own household read
     const empty = await callWith(counted, '/api/portfolio', { jar })
     expect(empty.status).toBe(200)
-    expect(sql).toHaveLength(1) // the portfolio stub reads nothing
+    expect(sql).toHaveLength(2) // the portfolio: one snapshot read (snapshot + household key + statement count)
   })
 
   it('without the cache cookie, the session is read from D1 and the cache cookie is re-issued', async () => {

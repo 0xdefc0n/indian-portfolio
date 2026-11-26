@@ -5,7 +5,12 @@ POST /parse   body: the raw PDF bytes (application/pdf)
               → parse_pdf()'s result plus the engine `version`
               The body is read into memory. Multipart is deliberately not used: Starlette spools uploads over 1 MB
               to a temporary file on disk, and PDFs must never touch disk.
-POST /build   JSON {statements, market, today} → the portfolio snapshot
+POST /build   JSON {statements, market, today, format?} → the portfolio snapshot
+              market.market_date set and no market.navs: the NAV series come from the NAV store (navstore.py),
+              cached by market.nav_key (default: the market date); market.refresh lists codes to always read fresh.
+              format "gzip": the body is the gzip-compressed snapshot JSON itself (application/x-snapshot+gzip, no
+              Content-Encoding), with the metrics in X-Engine-* headers. The Worker seals those bytes as they are and
+              never parses the snapshot (plan §10.2 "stream, don't parse").
 GET  /health  {version, isin_db} (no auth, no data)
 
 One job at a time per process: a second concurrent /parse or /build gets 503 `busy` straight away. EnginePool
@@ -17,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import gzip
 import hmac
 import importlib.metadata
 import json
@@ -25,11 +31,11 @@ import os
 from datetime import date
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
-from . import VERSION
+from . import VERSION, navstore
 from .parse import parse_pdf, peak_rss_mb
-from .portfolio import build_portfolio
+from .portfolio import build_portfolio, market_requirements
 
 MAX_PDF_BYTES = 10 * 1024 * 1024
 MAX_BUILD_BYTES = 64 * 1024 * 1024
@@ -110,13 +116,47 @@ async def build(request: Request):
             return _error(413, "too_large", "Build request too large")
         try:
             req = json.loads(body)
+            del body
             statements = req["statements"]
             today = date.fromisoformat(req["today"]) if req.get("today") else None
+            market = dict(req.get("market") or {})
+            market_date = market.get("market_date")
+            if market_date is not None:
+                date.fromisoformat(market_date)
         except (ValueError, KeyError, TypeError):
             return _error(400, "bad_request", "Expected JSON {statements, market?, today?}")
         try:
-            snapshot = await asyncio.to_thread(build_portfolio, statements, req.get("market") or {}, today)
+            result = await asyncio.to_thread(_build, statements, market, today, req.get("format") == "gzip")
+        except navstore.NavStoreError as e:
+            log.warning("nav store failed: %s", e)
+            return _error(502, "nav_store_error", "Could not read NAVs")
         except Exception as e:  # never log the data, only the class
             log.warning("build failed: %s", type(e).__name__)
             return _error(500, "build_error", "Could not build the portfolio")
-        return JSONResponse({"ok": True, "snapshot": snapshot, "metrics": {"peak_rss_mb": peak_rss_mb()}})
+        del req, statements
+        if isinstance(result, bytes):
+            return Response(result, media_type="application/x-snapshot+gzip", headers=_metric_headers())
+        return JSONResponse({"ok": True, "snapshot": result, "metrics": _metrics()})
+
+
+def _build(statements: list, market: dict, today: date | None, gz: bool) -> dict | bytes:
+    """The CPU part of /build (a thread). NAVs come from the NAV store unless the request carries them."""
+    if market.get("market_date") and market.get("navs") is None and navstore.store_url():
+        need = market_requirements(statements, market.get("isin_to_code") or {})
+        refresh = {str(c) for c in market.get("refresh") or []}
+        market["navs"] = navstore.load(need["codes"], str(market.get("nav_key") or market["market_date"]), refresh=refresh)
+    snapshot = build_portfolio(statements, market, today)
+    if not gz:
+        return snapshot
+    return gzip.compress(json.dumps(snapshot, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode(), compresslevel=6, mtime=0)
+
+
+def _metrics() -> dict:
+    c = navstore.CACHE
+    return {"peak_rss_mb": peak_rss_mb(), "nav_cache": {"series": len(c), "points": c.points, "hits": c.hits, "misses": c.misses}}
+
+
+def _metric_headers() -> dict:
+    m = _metrics()
+    return {"X-Engine-Peak-Rss-Mb": str(m["peak_rss_mb"]), "X-Engine-Nav-Hits": str(m["nav_cache"]["hits"]),
+            "X-Engine-Nav-Misses": str(m["nav_cache"]["misses"])}

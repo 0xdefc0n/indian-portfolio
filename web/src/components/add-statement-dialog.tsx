@@ -1,5 +1,5 @@
-import { ChevronDownIcon, FileUpIcon, Loader2Icon, PlusIcon } from "lucide-react"
-import { type FormEvent, useRef, useState } from "react"
+import { CheckIcon, ChevronDownIcon, FileUpIcon, Loader2Icon, PlusIcon } from "lucide-react"
+import { type FormEvent, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -17,12 +17,13 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { QueuedUpload } from "@/components/jobs"
 import { RequestStatementForm } from "@/components/request-statement-form"
-import { type AddedStatement, ApiFailure, api, type QueuedUpload as Queued, SignedOut } from "@/lib/api"
+import { type AddedStatement, ApiFailure, api, type QueuedUpload as Queued, SignedOut, waitForPortfolio } from "@/lib/api"
+import { cn } from "@/lib/utils"
 
 const PASSWORD_HINT =
   "For a CDSL eCAS this is usually the PAN in capital letters. For CAMS/KFintech it's the password you chose when requesting it."
 
-/** Say whose portfolio it went to (plan §13 item 5). The dashboard update arrives with snapshots (M10). */
+/** Say whose portfolio it went to (plan §13 item 5). */
 function report({ member }: AddedStatement) {
   const name = member.name ?? member.pan_masked
   toast.success("Statement added", {
@@ -31,6 +32,56 @@ function report({ member }: AddedStatement) {
 }
 
 type Problem = { message: string; hint?: string }
+type Phase = "uploading" | "reading" | "updating"
+const STEPS: { id: Phase; label: string }[] = [
+  { id: "uploading", label: "Uploading" },
+  { id: "reading", label: "Reading statement" },
+  { id: "updating", label: "Updating dashboard" },
+]
+
+/** uploading → reading statement → updating dashboard (plan §13 item 5). */
+function Progress({ phase }: { phase: Phase }) {
+  const at = STEPS.findIndex((s) => s.id === phase)
+  return (
+    <ol className="grid gap-3 text-sm" aria-live="polite">
+      {STEPS.map((s, i) => (
+        <li key={s.id} className={cn("flex items-center gap-3", i > at && "text-muted-foreground")}>
+          <span className="grid size-5 place-items-center">
+            {i < at ? <CheckIcon className="size-4 text-gain" /> : i === at ? <Loader2Icon className="size-4 animate-spin text-primary" /> : <span className="size-1.5 rounded-full bg-muted-foreground/50" />}
+          </span>
+          {s.label}{i === at ? "…" : ""}
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+/**
+ * The statement is stored: wait for the dashboard to catch up (GET /api/portfolio/status with backoff and
+ * Retry-After), then report. Closing the dialog doesn't stop the build.
+ */
+function UpdatingDashboard({ added, onDone }: { added: AddedStatement; onDone: () => void }) {
+  const done = useRef(onDone)
+  useEffect(() => {
+    done.current = onDone
+  })
+  useEffect(() => {
+    const ctl = new AbortController()
+    const finish = () => {
+      if (ctl.signal.aborted) return
+      report(added)
+      done.current()
+    }
+    waitForPortfolio({ maxMs: 60_000, signal: ctl.signal }).then(finish, finish) // on a timeout or error, the banner takes over
+    return () => ctl.abort()
+  }, [added])
+  return (
+    <div className="grid gap-4">
+      <Progress phase="updating" />
+      <p className="text-xs text-muted-foreground">You can close this window; we'll finish it for you.</p>
+    </div>
+  )
+}
 
 /**
  * Only the file and an optional password (D19). Members' PANs and pending passwords are tried on the server. Every
@@ -38,6 +89,8 @@ type Problem = { message: string; hint?: string }
  */
 function UploadForm({ onDone, onQueued }: { onDone: () => void; onQueued: () => void }) {
   const [busy, setBusy] = useState(false)
+  const [phase, setPhase] = useState<Phase>("uploading")
+  const [added, setAdded] = useState<AddedStatement | null>(null)
   const [queued, setQueued] = useState<Queued["job"] | null>(null)
   const [problem, setProblem] = useState<Problem | null>(null)
   const [file, setFile] = useState<File | null>(null)
@@ -49,15 +102,16 @@ function UploadForm({ onDone, onQueued }: { onDone: () => void; onQueued: () => 
     if (!file) return
     const password = showPassword ? String(new FormData(e.currentTarget).get("password") ?? "") : ""
     setBusy(true)
+    setPhase("uploading")
     setProblem(null)
     try {
-      const result = await api.addStatement(file, password)
+      const result = await api.addStatement(file, password, () => setPhase("reading"))
       if ("job" in result) {
         setQueued(result.job) // 202: parked until an engine slot is free
         onQueued()
       } else {
-        report(result)
-        onDone()
+        setAdded(result)
+        onQueued() // the members list can show it already; the dashboard follows once rebuilt
       }
     } catch (err) {
       if (err instanceof SignedOut) return
@@ -77,13 +131,15 @@ function UploadForm({ onDone, onQueued }: { onDone: () => void; onQueued: () => 
     }
   }
 
+  if (added) return <UpdatingDashboard added={added} onDone={onDone} />
+
   if (queued)
     return (
       <QueuedUpload
         initial={queued}
-        onDone={(added) => {
-          report(added)
-          onDone()
+        onDone={(stored) => {
+          setQueued(null)
+          setAdded(stored)
         }}
         onFailed={(message) => {
           // The file is already deleted on the server: start again from the form.
@@ -146,10 +202,13 @@ function UploadForm({ onDone, onQueued }: { onDone: () => void; onQueued: () => 
           {problem.hint && <p className="text-xs text-muted-foreground">{problem.hint}</p>}
         </div>
       )}
-      <Button type="submit" className="h-11" disabled={busy || !file}>
-        {busy && <Loader2Icon className="animate-spin" />}
-        {busy ? "Reading statement…" : "Add statement"}
-      </Button>
+      {busy ? (
+        <Progress phase={phase} />
+      ) : (
+        <Button type="submit" className="h-11" disabled={!file}>
+          Add statement
+        </Button>
+      )}
     </form>
   )
 }

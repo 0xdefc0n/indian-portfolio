@@ -30,13 +30,25 @@ export async function marketStatus(env: { MARKET: D1Database }): Promise<MarketS
   }
 }
 
+/**
+ * marketStatus() through the edge cache (per data centre, 5 min), so the dashboard and the rebuild consumer keep D1
+ * out of it. Falls back to D1 when the Cache API isn't there.
+ */
+export async function cachedMarketStatus(env: { MARKET: D1Database; APP_URL: string }, waitUntil?: (p: Promise<unknown>) => void): Promise<MarketStatus> {
+  const key = new Request(new URL('/api/market/status', env.APP_URL).toString())
+  const cache = typeof caches === 'undefined' ? null : caches.default
+  const hit = await cache?.match(key).catch(() => undefined)
+  if (hit) return hit.json<MarketStatus>()
+  const status = await marketStatus(env)
+  const res = Response.json(status, { headers: { 'Cache-Control': `public, max-age=${MARKET_STATUS_MAX_AGE}` } })
+  const put = cache?.put(key, res).catch(() => undefined)
+  if (put && waitUntil) waitUntil(put)
+  else if (put) await put
+  return status
+}
+
 marketRoutes.get('/market/status', async (c) => {
-  // The edge cache (per data centre) keeps D1 out of it; the header lets browsers keep it too.
-  const key = new Request(new URL('/api/market/status', c.req.url).toString())
-  const cache = caches.default
-  const hit = await cache.match(key)
-  if (hit) return hit
-  const res = c.json(await marketStatus(c.env), 200, { 'Cache-Control': `public, max-age=${MARKET_STATUS_MAX_AGE}` })
-  c.executionCtx.waitUntil(cache.put(key, res.clone()))
-  return res
+  // The header lets browsers keep it too.
+  const status = await cachedMarketStatus(c.env, (p) => c.executionCtx.waitUntil(p))
+  return c.json(status, 200, { 'Cache-Control': `public, max-age=${MARKET_STATUS_MAX_AGE}` })
 })
