@@ -34,6 +34,9 @@ describe('GET /api/members', () => {
     const a = await newHousehold('list')
     const m1 = await addMember(a, 'ZZZPZ1234Z', 'Synthetic One')
     const m2 = await addMember(a, 'yyypy 5678 y', null) // normalised; no name yet
+    // Members list oldest first (created_at, then id): two inserts in the same millisecond would fall back to random
+    // ids, so make m1 clearly older.
+    await env.DB.prepare('UPDATE member SET created_at = created_at - 1000 WHERE id = ?1').bind(m1).run()
     const older = await addStatement(a, m1, { kind: 'CAMS', asOf: '2026-09-30' })
     const newer = await addStatement(a, m1, { kind: 'CDSL', asOf: '2026-10-31' })
     const members = await list(a.jar)
