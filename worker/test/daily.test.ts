@@ -303,6 +303,19 @@ describe('GET /api/portfolio/daily', () => {
     expect(hits[18]!).toBeLessThan(50)
   })
 
+  it('a cached call comes from the edge cache (R2 untouched), with Server-Timing', async () => {
+    await setMarketDay(20261118)
+    const { h } = await dailyHousehold('daily-edge')
+    const first = await daily(h)
+    expect(first.headers.get('server-timing')).toMatch(/daily;desc="computed"/)
+    const [key] = await dailyKeys(h)
+    await env.BUCKET.delete(key!) // only the edge copy is left
+    const second = await daily(h)
+    expect(second.headers.get('x-daily-cache')).toBe('hit')
+    expect(second.headers.get('server-timing')).toMatch(/^db;dur=\d+, key;dur=\d+, daily;desc="edge";dur=\d+, total;dur=\d+$/)
+    expect((await second.json<ReturnType<typeof dailySeries>>()).today).toMatchObject({ change: -2.5 })
+  })
+
   it('member filter, and another household\'s member is a 404', async () => {
     await setMarketDay(20261118)
     const { h, m2 } = await dailyHousehold('daily-member')

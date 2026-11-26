@@ -70,6 +70,7 @@ portfolioRoutes.get('/portfolio/status', signedIn, async (c) => {
 // GET /api/portfolio/daily?days=30&member=all (plan §10.5.3, M12). Cache first: one D1 read (the snapshot row) and one
 // R2 read when cached. The dashboard asks for it after /api/portfolio and never waits on it.
 portfolioRoutes.get('/portfolio/daily', signedIn, async (c) => {
+  const t0 = Date.now()
   const hid = c.var.householdId
   const rawDays = c.req.query('days') ?? '30'
   const days = /^\d{1,3}$/.test(rawDays) ? Number(rawDays) : NaN
@@ -79,24 +80,29 @@ portfolioRoutes.get('/portfolio/daily', signedIn, async (c) => {
   const noStore = { 'Cache-Control': 'private, no-store' }
 
   const [row, market] = await Promise.all([readSnapshotRow(c.env, hid), cachedMarketStatus(c.env, (p) => c.executionCtx.waitUntil(p))])
+  const t1 = Date.now()
   const usable = row?.blob_key && row.inputs_hash && row.statements > 0 && row.blob_key.startsWith(`${blobKeys.householdPrefix(hid)}snapshot/`)
   if (!row || !usable) {
     if (member !== 'all') await tenant(c).assertMember(member)
     return c.json(EMPTY_DAILY, 200, noStore)
   }
   const t = tenant(c)
-  const { result, cache } = await dailyFor(c.env, {
+  const vault = await t.vaultFromRow(row)
+  const t2 = Date.now()
+  const { result, cache, source } = await dailyFor(c.env, {
     householdId: hid,
-    vault: await t.vaultFromRow(row),
+    vault,
     snapshotKey: row.blob_key!,
     inputsHash: row.inputs_hash!,
     market,
     member,
     days,
     checkMember: () => t.assertMember(member),
-    // the write is awaited (a miss is the slow path anyway), so the next call is sure to hit
+    waitUntil: (p) => c.executionCtx.waitUntil(p),
   })
-  return c.json(result, 200, { ...noStore, 'X-Daily-Cache': cache })
+  // Durations only (no data): where the time goes, for the M12/M16 measurements.
+  const timing = `db;dur=${t1 - t0}, key;dur=${t2 - t1}, daily;desc="${source}";dur=${Date.now() - t2}, total;dur=${Date.now() - t0}`
+  return c.json(result, 200, { ...noStore, 'X-Daily-Cache': cache, 'Server-Timing': timing })
 })
 
 function flags(stale: boolean, building: boolean): Record<string, string> {
