@@ -75,7 +75,7 @@ function EmptyState({ onAdded }: { onAdded: () => void }) {
       </div>
       <h1 className="text-2xl font-semibold tracking-tight">Add your first statement</h1>
       <p className="mt-3 text-muted-foreground">
-        Upload a family member's CDSL consolidated statement, or fetch it with an OTP. Add one per member to see everyone together.
+        Upload a family member's CDSL or CAMS/KFintech statement. We'll file it under the right person. Add one per member to see everyone together.
       </p>
       <div className="mt-8">
         <AddStatementDialog onAdded={onAdded} trigger={<Button size="lg">Add statement</Button>} />

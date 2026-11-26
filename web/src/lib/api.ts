@@ -135,11 +135,10 @@ export type StockData = {
   refreshing: boolean
 }
 
-export type SaveResult = {
-  saved: string[]
-  failed: { file: string; error: string }[]
-  parsed?: { ok: boolean; error?: string; holdings?: number }[]
-  msg?: string
+/** POST /api/statements, direct path (plan §10.1 C8). The member comes from the statement itself (D19). */
+export type AddedStatement = {
+  statement: { id: string; kind: StatementKind; as_of: string; holdings_count: number; warnings_count: number }
+  member: { id: string; name: string | null; pan_masked: string; created: boolean }
 }
 
 export type StatementRequestResult =
@@ -156,19 +155,52 @@ const MESSAGES: Record<string, string> = {
   TOO_MANY_ATTEMPTS: "Too many tries with that code. Send a new one.",
   invalid_name: "Enter a name of 1 to 60 characters.",
   not_found: "That's no longer here. Reload to see the latest.",
+  // Uploads (plan §10.1 A–C, §11)
+  bad_request: "Choose a statement PDF to upload.",
+  not_pdf: "That file isn't a PDF. Upload the statement PDF as you received it.",
+  file_too_large: "That file is over 10 MB. Upload the statement PDF as you received it.",
+  password_required: "This statement is password-protected. Enter its password.",
+  unrecognised: "Upload a CDSL or CAMS/KFintech consolidated statement.",
+  too_large: "That statement has more than 300 pages. Request one for a shorter period.",
+  pan_mismatch: "This statement's PAN doesn't match the PAN that opened it. Check that it's the right file.",
+  member_limit: "Your family portfolio already has 10 members. Remove one in Members to add someone new.",
+  already_added: "This statement has already been added.",
+  already_processing: "This statement is already being processed.",
+  upload_limit: "You've reached the upload limit for now. Try again later.",
+  too_many_failures: "Too many uploads didn't work in the last hour. Try again later.",
+  jobs_limit: "Finish the uploads in progress first.",
+  parse_error: "We couldn't read this statement. Download it again, or try the other statement type.",
+  multi_pan: "This statement covers more than one PAN. Upload one statement per member.",
+  precheck_disagree: "We couldn't read this statement. Try again, or try the other statement type.",
+  parse_timeout: "Reading this statement took too long. Try again in a minute.",
+  busy: "We're reading a lot of statements right now. Try again in a few seconds.",
+  engine_unavailable: "We can't read statements right now. Try again in a minute.",
 }
 
-async function readError(r: Response): Promise<string> {
-  const data = await r.json().catch(() => ({}))
-  if (typeof data.code === "string") return MESSAGES[data.code] ?? `Something went wrong (${data.code}).`
-  let d = data.detail
-  if (Array.isArray(d)) return d.map((e: { msg: string }) => e.msg.replace(/^Value error, /, "")).join("; ")
-  if (d && typeof d === "object") {
-    const reasons = (d.failed || []).map((f: { error: string }) => f.error)
-    d = [d.msg, ...new Set(reasons)].join(" — ")
+/** A refused API call: `code` is the Worker's stable error code, `data` the rest of its JSON body. */
+export class ApiFailure extends Error {
+  name = "ApiFailure"
+  readonly status: number
+  readonly code: string | null
+  readonly data: Record<string, unknown>
+  constructor(message: string, status: number, code: string | null, data: Record<string, unknown>) {
+    super(message)
+    this.status = status
+    this.code = code
+    this.data = data
   }
-  if (r.status === 429) return MESSAGES.rate_limited
-  return d || data.message || `Request failed (${r.status})`
+}
+
+async function readError(r: Response): Promise<ApiFailure> {
+  const data: Record<string, unknown> = await r.json().catch(() => ({}))
+  const code = typeof data.code === "string" ? data.code : null
+  return new ApiFailure(messageFor(r.status, code, data), r.status, code, data)
+}
+
+function messageFor(status: number, code: string | null, data: Record<string, unknown>): string {
+  if (code) return MESSAGES[code] ?? `Something went wrong (${code}).`
+  if (status === 429) return MESSAGES.rate_limited
+  return typeof data.message === "string" ? data.message : `Request failed (${status})`
 }
 
 /** Only same-site paths: never send people to another origin after sign-in. */
@@ -192,7 +224,7 @@ async function call<T>(url: string, init?: RequestInit): Promise<T> {
     goToLogin()
     throw new SignedOut("Signed out")
   }
-  if (!r.ok) throw new Error(await readError(r))
+  if (!r.ok) throw await readError(r)
   return r.json()
 }
 
@@ -242,14 +274,12 @@ export const api = {
   config: () => call<AppConfig>("/api/config"),
   requestStatement: (body: { pan: string; email: string; from_date: string; to_date: string; password: string }) =>
     call<StatementRequestResult>("/api/kfintech/request", json(body)),
-  upload: (pan: string, password: string, file: File) => {
+  /** The file and an optional password only: no PAN and no member (D19). */
+  addStatement: (file: File, password: string) => {
     const fd = new FormData()
-    fd.append("pan", pan)
-    fd.append("password", password)
     fd.append("file", file)
-    return call<SaveResult>("/api/upload", { method: "POST", body: fd })
+    if (password) fd.append("password", password)
+    return call<AddedStatement>("/api/statements", { method: "POST", body: fd })
   },
-  requestOtp: (pan: string, bo_id: string, dob: string) =>
-    call<{ session_id: string; msg: string }>("/api/cdsl/request-otp", json({ pan, bo_id, dob })),
-  verifyOtp: (session_id: string, otp: string) => call<SaveResult>("/api/cdsl/verify", json({ session_id, otp })),
+  deleteStatement: (id: string) => call<{ ok: true }>(`/api/statements/${encodeURIComponent(id)}`, { method: "DELETE" }),
 }

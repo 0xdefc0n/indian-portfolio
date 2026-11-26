@@ -1,6 +1,6 @@
-// Members of a household (plan §6 member, §9.2). A member is created from a statement in M7 (D19); M6 has the
-// row builder, list, rename and delete. PANs are stored three ways: an HMAC for lookups, the sealed PAN (it is the
-// default PDF password) and a masked copy for display. Names are sealed.
+// Members of a household (plan §6 member, §9.2). A member is created from a statement (D19, lib/statements.ts);
+// here are the row builder, list, rename and delete. PANs are stored three ways: an HMAC for lookups, the sealed PAN
+// (it is the default PDF password) and a masked copy for display. Names are sealed.
 import { deleteBlobs } from './blob'
 import { hmacHex, type Vault } from './crypto'
 import type { Tenant } from './tenant'
@@ -20,10 +20,11 @@ export const maskPan = (pan: string) => `${pan.slice(0, 2)}••••••${p
 /** HMAC-SHA256(PAN_PEPPER, PAN), the household-scoped lookup key. Same PAN → same value in every household. */
 export const panHmac = (env: { PAN_PEPPER: string }, pan: string) => hmacHex(env.PAN_PEPPER, `pan:${pan}`)
 
-/** AAD names for a member's sealed fields. */
+/** AAD names for sealed columns: a member's fields, and a pending KFintech password (keyed by PAN, D9/D19). */
 export const fieldKey = {
   pan: (memberId: string) => `member/${memberId}/pan`,
   name: (memberId: string) => `member/${memberId}/name`,
+  pendingPassword: (hmac: string) => `pending/${hmac}/password`,
 }
 
 /** A display name we accept from a rename: trimmed, 1–60 characters, no control characters. */
@@ -35,22 +36,30 @@ export function cleanName(input: unknown): string | null {
 }
 
 /**
- * The INSERT for a new member (used by storeStatement in M7, and by tests). Returns the id so the caller can file
+ * The INSERT for a new member (used by storeStatement, and by tests). Returns the id so the caller can file
  * statements under it in the same batch.
+ *
+ * With `maxMembers` (storeStatement) the insert is race-safe instead: it adds nothing when the household already
+ * has that many members or already has this PAN (a concurrent upload won), so the caller looks the member up by
+ * pan_hmac and a missing member means the household is full.
  */
 export async function memberInsert(
   t: Tenant,
   vault: Vault,
-  input: { pan: string; name: string | null; id?: string; now?: number },
+  input: { pan: string; name: string | null; id?: string; now?: number; maxMembers?: number },
 ): Promise<{ id: string; stmt: D1PreparedStatement }> {
   const pan = normalizePan(input.pan)
   if (!pan) throw new TypeError('not a PAN')
   const id = input.id ?? crypto.randomUUID()
   const name = input.name ? cleanName(input.name) : null
-  const stmt = t.env.DB.prepare(
-    `INSERT INTO member (id, household_id, pan_hmac, pan_enc, pan_masked, display_name_enc, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-  ).bind(
+  const sql =
+    input.maxMembers === undefined
+      ? `INSERT INTO member (id, household_id, pan_hmac, pan_enc, pan_masked, display_name_enc, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`
+      : `INSERT INTO member (id, household_id, pan_hmac, pan_enc, pan_masked, display_name_enc, created_at)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE (SELECT COUNT(*) FROM member WHERE household_id = ?2) < ${Math.trunc(input.maxMembers)}
+         ON CONFLICT (household_id, pan_hmac) DO NOTHING`
+  const stmt = t.env.DB.prepare(sql).bind(
     id,
     t.householdId,
     await panHmac(t.env, pan),

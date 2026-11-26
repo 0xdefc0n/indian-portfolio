@@ -1,14 +1,14 @@
-// /members (plan §13 item 6): everyone whose statements are in the household. Rename and delete here; members
-// themselves are created from statements (D19). Deleting a single statement arrives with M7.
+// /members (plan §13 item 6): everyone whose statements are in the household. Rename, delete a member or one
+// statement, and add statements here; members themselves are created from statements (D19).
 import { FileTextIcon, Loader2Icon, PencilIcon, Trash2Icon, UsersIcon } from "lucide-react"
 import { type FormEvent, useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
-import { Link } from "wouter"
 
+import { AddStatementDialog } from "@/components/add-statement-dialog"
 import { PageShell } from "@/components/app-header"
 import { PageTitle } from "@/components/panel"
 import { Badge } from "@/components/ui/badge"
-import { Button, buttonVariants } from "@/components/ui/button"
+import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -18,6 +18,7 @@ import { day } from "@/lib/format"
 
 const KIND_LABEL: Record<StatementKind, string> = { CDSL: "CDSL eCAS", CAMS: "CAMS", KFINTECH: "KFintech" }
 const displayName = (m: MemberSummary) => m.name ?? "Unnamed member"
+type Statement = MemberSummary["statements"][number]
 
 function RenameDialog({ member, onClose, onDone }: { member: MemberSummary | null; onClose: () => void; onDone: () => void }) {
   const [busy, setBusy] = useState(false)
@@ -108,7 +109,58 @@ function DeleteDialog({ member, onClose, onDone }: { member: MemberSummary | nul
   )
 }
 
-function MemberCard({ member, onRename, onDelete }: { member: MemberSummary; onRename: () => void; onDelete: () => void }) {
+function DeleteStatementDialog({ target, onClose, onDone }: {
+  target: { member: MemberSummary; statement: Statement } | null
+  onClose: () => void
+  onDone: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function confirm() {
+    if (!target) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api.deleteStatement(target.statement.id)
+      toast.success("Statement deleted")
+      onDone()
+    } catch (err) {
+      if (!(err instanceof SignedOut)) setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={target != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Delete this statement?</DialogTitle>
+          <DialogDescription>
+            {target ? `${KIND_LABEL[target.statement.kind]} as of ${day(target.statement.as_of)} for ${displayName(target.member)}. ` : ""}
+            Their other statements stay. This can't be undone.
+          </DialogDescription>
+        </DialogHeader>
+        {error && <p className="text-sm text-loss" role="alert">{error}</p>}
+        <DialogFooter>
+          <Button type="button" variant="outline" className="h-11" onClick={onClose}>Cancel</Button>
+          <Button type="button" variant="destructive" className="h-11" disabled={busy} onClick={confirm}>
+            {busy && <Loader2Icon className="animate-spin" />}
+            Delete statement
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function MemberCard({ member, onRename, onDelete, onDeleteStatement }: {
+  member: MemberSummary
+  onRename: () => void
+  onDelete: () => void
+  onDeleteStatement: (s: Statement) => void
+}) {
   const name = displayName(member)
   return (
     <section className="flex min-w-0 flex-col rounded-[22px] bg-surface p-5 ring-1 ring-border sm:p-6">
@@ -125,13 +177,19 @@ function MemberCard({ member, onRename, onDelete }: { member: MemberSummary; onR
       {member.statements.length ? (
         <ul className="divide-y divide-border">
           {member.statements.map((s) => (
-            <li key={s.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
+            <li key={s.id} className="flex items-center justify-between gap-3 py-1 text-sm">
               <span className="flex min-w-0 items-center gap-2.5">
                 <FileTextIcon className="hidden size-4 shrink-0 text-muted-foreground sm:block" />
                 <Badge variant="secondary">{KIND_LABEL[s.kind]}</Badge>
-                <span className="truncate text-muted-foreground">as of {day(s.as_of)}</span>
+                <span className="truncate text-muted-foreground"><span className="hidden sm:inline">as of </span>{day(s.as_of)}</span>
               </span>
-              <span className="shrink-0 text-muted-foreground">{s.holdings_count} fund{s.holdings_count === 1 ? "" : "s"}</span>
+              <span className="flex shrink-0 items-center gap-1 text-muted-foreground">
+                {s.holdings_count} holding{s.holdings_count === 1 ? "" : "s"}
+                <Button variant="ghost" size="icon" className="-mr-2 size-11" aria-label={`Delete ${KIND_LABEL[s.kind]} statement as of ${day(s.as_of)}`}
+                  onClick={() => onDeleteStatement(s)}>
+                  <Trash2Icon />
+                </Button>
+              </span>
             </li>
           ))}
         </ul>
@@ -142,7 +200,7 @@ function MemberCard({ member, onRename, onDelete }: { member: MemberSummary; onR
   )
 }
 
-function EmptyMembers() {
+function EmptyMembers({ onAdded }: { onAdded: () => void }) {
   return (
     <div className="mx-auto mt-16 max-w-md text-center">
       <div className="mx-auto mb-6 grid size-14 place-items-center rounded-2xl bg-surface ring-1 ring-border">
@@ -152,7 +210,9 @@ function EmptyMembers() {
       <p className="mt-3 text-muted-foreground">
         Members appear when you add a statement. Add any family member's statement and we'll file it under the right person automatically.
       </p>
-      <Link href="/" className={buttonVariants({ size: "lg", className: "mt-8 h-11 px-4" })}>Add a statement</Link>
+      <div className="mt-8">
+        <AddStatementDialog onAdded={onAdded} trigger={<Button size="lg" className="h-11 px-4">Add a statement</Button>} />
+      </div>
     </div>
   )
 }
@@ -162,6 +222,7 @@ export function MembersPage({ me }: { me: Me }) {
   const [error, setError] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<MemberSummary | null>(null)
   const [deleting, setDeleting] = useState<MemberSummary | null>(null)
+  const [deletingStatement, setDeletingStatement] = useState<{ member: MemberSummary; statement: Statement } | null>(null)
 
   const load = useCallback(() => {
     api.members().then(
@@ -174,7 +235,10 @@ export function MembersPage({ me }: { me: Me }) {
   const n = members?.length ?? 0
   return (
     <PageShell me={me}>
-      <PageTitle title="Members" detail={members && n ? `${n} ${n === 1 ? "person" : "people"} in your family portfolio` : undefined} />
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <PageTitle title="Members" detail={members && n ? `${n} ${n === 1 ? "person" : "people"} in your family portfolio` : undefined} />
+        {members && n > 0 && <AddStatementDialog onAdded={load} />}
+      </div>
       {error && (
         <p className="rounded-xl bg-surface p-4 text-sm text-loss ring-1 ring-border" role="alert">
           Couldn't load members: {error}. Reload to try again.
@@ -186,16 +250,19 @@ export function MembersPage({ me }: { me: Me }) {
           <Skeleton className="h-44 rounded-[22px]" />
         </div>
       )}
-      {members && n === 0 && <EmptyMembers />}
+      {members && n === 0 && <EmptyMembers onAdded={load} />}
       {members && n > 0 && (
         <div className="grid gap-4 md:grid-cols-2">
           {members.map((m) => (
-            <MemberCard key={m.id} member={m} onRename={() => setRenaming(m)} onDelete={() => setDeleting(m)} />
+            <MemberCard key={m.id} member={m} onRename={() => setRenaming(m)} onDelete={() => setDeleting(m)}
+              onDeleteStatement={(statement) => setDeletingStatement({ member: m, statement })} />
           ))}
         </div>
       )}
       <RenameDialog key={`r-${renaming?.id}`} member={renaming} onClose={() => setRenaming(null)} onDone={() => { setRenaming(null); load() }} />
       <DeleteDialog key={`d-${deleting?.id}`} member={deleting} onClose={() => setDeleting(null)} onDone={() => { setDeleting(null); load() }} />
+      <DeleteStatementDialog key={`s-${deletingStatement?.statement.id}`} target={deletingStatement} onClose={() => setDeletingStatement(null)}
+        onDone={() => { setDeletingStatement(null); load() }} />
     </PageShell>
   )
 }

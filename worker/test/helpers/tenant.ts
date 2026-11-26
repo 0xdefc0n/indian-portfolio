@@ -8,9 +8,11 @@ import { Jar, signInWithCode, sinkAddress } from './auth'
 
 export type Household = { jar: Jar; email: string; userId: string; householdId: string; tenant: Tenant }
 
+let households = 0
+
 export async function newHousehold(tag = 'h'): Promise<Household> {
   const email = sinkAddress(tag)
-  const jar = await signInWithCode(email)
+  const jar = await signInWithCode(email, undefined, `198.51.100.${1 + (households++ % 250)}`)
   const row = await env.DB.prepare('SELECT u.id AS user_id, h.id AS household_id FROM user u JOIN household h ON h.owner_user_id = u.id WHERE u.email = ?1')
     .bind(email)
     .first<{ user_id: string; household_id: string }>()

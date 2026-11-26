@@ -7,6 +7,7 @@ import { ApiError } from './lib/errors'
 import { requireSession } from './middleware/session'
 import { authRoutes } from './routes/auth'
 import { memberRoutes } from './routes/members'
+import { statementRoutes } from './routes/statements'
 import type { AppBindings, AppEnv } from './types'
 
 export { EngineBatch, EngineFast } from './engine'
@@ -63,6 +64,7 @@ app.get('/me', signedIn, async (c) => {
 })
 
 app.route('/', memberRoutes)
+app.route('/', statementRoutes)
 
 // Until the first build (M10) a household's snapshot row has no blob, so the portfolio is empty. M10 replaces this.
 app.get('/portfolio', signedIn, (c) =>
@@ -77,7 +79,10 @@ app.notFound((c) => c.json({ ok: false, code: 'not_found' }, 404))
 
 // Privacy (§0.1): log the error class only, never messages that could carry request data.
 app.onError((err, c) => {
-  if (err instanceof ApiError) return c.json({ ok: false, code: err.code, ...err.extra }, err.status)
+  if (err instanceof ApiError) {
+    if (typeof err.extra.retry_after === 'number') c.header('Retry-After', String(err.extra.retry_after))
+    return c.json({ ok: false, code: err.code, ...err.extra }, err.status)
+  }
   console.error('api_error', err.name)
   if (err instanceof EngineUnavailable || err.name === 'EngineStartError') {
     return c.json({ ok: false, code: 'engine_unavailable' }, 502)

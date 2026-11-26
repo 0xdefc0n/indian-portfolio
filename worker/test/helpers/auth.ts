@@ -69,9 +69,11 @@ export async function requestLoginEmail(email: string) {
   throw new Error('no email in the sink')
 }
 
-export async function signInWithCode(email: string, jar = new Jar()) {
+/** `ip` gives the sign-in its own client address, so files that create many households stay under the per-IP limit. */
+export async function signInWithCode(email: string, jar = new Jar(), ip?: string) {
   const mail = await requestLoginEmail(email)
-  const res = await call('/api/auth/sign-in/email-otp', { body: { email, otp: mail.otp }, jar })
+  const headers = ip ? { 'cf-connecting-ip': ip } : undefined
+  const res = await call('/api/auth/sign-in/email-otp', { body: { email, otp: mail.otp }, jar, headers })
   if (res.status !== 200) throw new Error(`sign-in/email-otp ${res.status}`)
   return jar
 }

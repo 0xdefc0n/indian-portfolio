@@ -824,11 +824,11 @@ export async function assertMember(c, memberId: string) {
 | `GET /api/members` | ✅ | list `{id, name, pan_masked, statements: [{id, kind, as_of, holdings_count}]}` | ✅ M6: returns `{ members: [...] }`; `name` is null until a statement or a rename sets it. One D1 batch |
 | `PATCH /api/members/:id` | ✅ | rename (display override) | ✅ M6: `{ name }`, 1–60 characters; replaces the sealed `display_name_enc` (a later statement doesn't overwrite it, M7) |
 | `DELETE /api/members/:id` | ✅ | delete member + their statements + blobs; enqueue rebuild | confirm in UI |
-| `POST /api/statements` | ✅ | multipart `file`, `password?` **only**: no PAN, no member (D19). The member comes from the statement |  §10.1. `201 {statement}` (direct path) or `202 {job: {id, position, eta_s}}` (queued path) |
+| `POST /api/statements` | ✅ | multipart `file`, `password?` **only**: no PAN, no member (D19). The member comes from the statement |  §10.1. `201 {statement}` (direct path) or `202 {job: {id, position, eta_s}}` (queued path). ✅ M7: `201 { statement: {id, kind, as_of, holdings_count, warnings_count}, member: {id, name, pan_masked, created} }`; `503 busy` until M8 |
 | `GET /api/jobs` | ✅ | the household's open and recently finished parse jobs: `[{id, status, position, eta_s, error_code, statement_id}]` | drives the "Processing" list; no PDF data |
 | `GET /api/jobs/:id` | ✅ | one job's status | polled with backoff; `Retry-After` header set to the suggested next poll |
 | `DELETE /api/jobs/:id` | ✅ | cancel: delete the parked PDF and the job | |
-| `DELETE /api/statements/:id` | ✅ | delete one statement; enqueue rebuild | |
+| `DELETE /api/statements/:id` | ✅ | delete one statement; enqueue rebuild | ✅ M7: row (`RETURNING blob_key`) + audit in one batch, then the blob; 404 for other households. The rebuild is enqueued from M10 |
 | `GET /api/portfolio` | ✅ | snapshot JSON (same shape as today's `Portfolio` type, with stable member IDs) + `{ stale, building }` | §10.2 |
 | `GET /api/portfolio/status` | ✅ | `{ status, built_at, market_date }` for polling after upload | one indexed D1 read; polled with backoff (1 → 10 s), `Retry-After` set |
 | `GET /api/portfolio/daily?days=30&member=all` | ✅ | daily returns (§10.5): `{ as_of, coverage, today, series }` | `days` ≤ 366; `member` is `all` or a member ID, checked with `assertMember` |
@@ -930,6 +930,38 @@ tab (owner decision, 2026-11-25).
 8. **Respond.** Enqueue a debounced `rebuild(household_id)` (§10.2) and return
    `201 { statement: {id, kind, as_of, holdings_count, warnings_count} }`.
 9. **Nothing to clean up.** The bytes were never written.
+
+✅ M7 (2026-11-26), as built in `src/lib/statements.ts` + `src/routes/statements.ts`:
+- **One D1 round trip before the pre-check:** the household key, members, unexpired pending passwords, the duplicate
+  check (stored or open job), open jobs and the three quota counters, all in one batch. Then one store batch.
+- **Refusals** (all `{ ok: false, code }`, nothing stored): `413 file_too_large` (also refused from `Content-Length`
+  before buffering), `422 not_pdf`, `409 already_added` / `already_processing`, `422 password_required` with
+  `typed: true|false` (the SPA picks the message), `unrecognised`, `too_large`, `pan_mismatch` (the member PAN that
+  opened the file differs from the PAN printed in it), `member_limit`, `parse_error`, `multi_pan`, `precheck_disagree`,
+  `504 parse_timeout`, `429 upload_limit` / `too_many_failures` / `jobs_limit` with `retry_after` and `Retry-After`.
+- **Until M8, a busy pool answers `503 busy` with `Retry-After`** (the queued path replaces this).
+- A typed PAN in lower case is also tried upper-cased. If the PDF has no single labelled PAN but a member's PAN opened
+  it, that PAN is the pre-check PAN.
+- **Failed parses** (`parse_fail`, 10 per hour) count wrong typed passwords, unrecognised files and parser failures.
+  The first "this statement needs a password" prompt (nothing typed) doesn't count.
+- **Race-safe store:** the member insert is `INSERT … SELECT … WHERE (member count) < 10 ON CONFLICT DO NOTHING`, and
+  the statement row takes `member_id` from a `pan_hmac` subquery. A full household fails the batch on the NOT NULL
+  `member_id` (`member_limit`), a concurrent duplicate on the UNIQUE `content_hash` (`409`), and the upload quota on its
+  NOT NULL trick (`429`). Any of these deletes the already-written blob again. The upload quota is also read early,
+  so the engine isn't used for an upload that would be refused.
+- A statement for an existing member without a name sets the holder's name; a rename is never overwritten.
+- **24 per member:** after the insert, the same batch deletes the oldest statements of the arriving kind until the
+  member has 24 (`DELETE … RETURNING blob_key`), then their blobs.
+- **Blob:** `{ format: 1, kind, parser_version, statement }`, gzip then sealed. The engine's `/parse` now returns its
+  `version` (stored as `parser_version`).
+- **`tracked_scheme`:** fund ISINs (`INF…`) only, 30 rows per statement (D1's 100-parameter limit), all in one `MARKET`
+  batch. Rows unchanged and seen within the last day are skipped by the upsert's `WHERE`; a CDSL statement (no AMFI
+  code) never erases a known code. A failure here is logged and doesn't fail the upload.
+- The engine call retries a refused connection or an engine `503` up to 3 times, 1 s apart (the process restarts every
+  200 requests), and gives up after 60 s with `parse_timeout`.
+- Tests: `test/statements.test.ts` (31, synthetic PDFs, fake engine) and `test/statements.private.test.ts` (4 private
+  statements through the real engine container: stored sealed, nothing in `tmp/`, duplicate refused, re-filed by the
+  member PAN with no password).
 
 **D. Queued path (all slots busy; only reached after every check in A passed):**
 5. **Park.** Encrypt the PDF with the household DEK (no gzip; PDFs are already compressed) and put it at

@@ -47,6 +47,7 @@ def test_parse_raw_body(client):
     assert client.post("/parse", content=pdf, headers={**h, "X-Pdf-Password": _pw("nope")}).json()["code"] == "wrong_password"
     r = client.post("/parse", content=pdf, headers={**h, "X-Pdf-Password": _pw("s3cret p@ss")}).json()
     assert r["code"] == "unrecognised"  # opened, but a blank page isn't a statement
+    assert r["version"] == server.VERSION  # the Worker stores it as statement.parser_version
     r = client.post("/parse", content=pdf, headers={**h, "X-Pdf-Password": _pw("nope"), "X-Statement-Kind": "CDSL"}).json()
     assert r["code"] == "precheck_disagree"
     assert client.post("/parse", content=b"not a pdf", headers=h).json()["code"] == "unrecognised"

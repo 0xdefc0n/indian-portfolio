@@ -54,6 +54,14 @@ export async function takeQuota(env: { DB: D1Database }, specs: QuotaSpec[], now
   } catch (err) {
     if (!isQuotaRefusal(err)) throw err
   }
+  return refusal(env, specs, now)
+}
+
+/**
+ * Which counter refused, after a batch holding quotaStatement()s was rolled back by one of them (one extra read, only
+ * on the refusal path), and how long until its window resets.
+ */
+export async function refusal(env: { DB: D1Database }, specs: QuotaSpec[], now = Date.now()): Promise<QuotaResult & { ok: false }> {
   const counts = await quotaCounts(env, specs, now)
   const full = specs.find((s, i) => counts[i]! >= s.limit) ?? specs[0]!
   return { ok: false, ...full, retryAfter: secondsLeft(full.period, now) }

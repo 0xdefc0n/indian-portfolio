@@ -6,6 +6,7 @@ import { defineConfig } from 'vitest/config'
 // Secrets below are test-only values; they override anything in .dev.vars.
 export default defineConfig(async () => {
   const appMigrations = await readD1Migrations('./migrations/app')
+  const marketMigrations = await readD1Migrations('./migrations/market')
   return {
     test: {
       // Node-side: loads private statements (git-ignored) and the engine's view of them for pdfcheck.private.test.ts.
@@ -29,6 +30,7 @@ export default defineConfig(async () => {
             PAN_PEPPER: 'test-only-pan-pepper-0123456789abcdef',
             EMAIL_SINK_KEY: 'test-only-email-sink-key-0123456789abcdef',
             TEST_APP_MIGRATIONS: appMigrations,
+            TEST_MARKET_MIGRATIONS: marketMigrations,
           },
         },
       }),
