@@ -4,10 +4,12 @@ import { Hono } from 'hono'
 import { handleEmailBatch, type EmailJob } from './lib/email'
 import { withEngine } from './lib/engine-client'
 import { ApiError } from './lib/errors'
-import { handleParseBatch, type ParseMessage, tmpSweep } from './lib/jobs'
+import { handleParseBatch, type ParseMessage, TMP_SWEEP_CRON, tmpSweep } from './lib/jobs'
+import { handleMarketBatch, type MarketMessage, NAV_INGEST_CRONS, NAV_REPAIR_CRON, navIngest, navRepair } from './market/jobs'
 import { requireSession } from './middleware/session'
 import { authRoutes } from './routes/auth'
 import { jobRoutes } from './routes/jobs'
+import { marketRoutes } from './routes/market'
 import { memberRoutes } from './routes/members'
 import { statementRoutes } from './routes/statements'
 import type { AppBindings, AppEnv } from './types'
@@ -38,6 +40,7 @@ app.get('/health', async (c) => {
 
 // ─── Public ──────────────────────────────────────────────────────────────────────────────────────────────────────
 app.route('/', authRoutes)
+app.route('/', marketRoutes)
 
 const KFINTECH_FORM_URL = 'https://mfs.kfintech.com/investor/General/ConsolidatedAccountStatement'
 app.get('/config', (c) =>
@@ -93,8 +96,6 @@ app.onError((err, c) => {
   return c.json({ ok: false, code: 'internal' }, 500)
 })
 
-/** tmp-sweep (§10.3): hourly at :15. */
-export const TMP_SWEEP_CRON = '15 * * * *'
 
 class EngineUnavailable extends Error {
   override name = 'EngineUnavailable'
@@ -103,21 +104,30 @@ class EngineUnavailable extends Error {
 export default {
   fetch: app.fetch,
 
-  // Dispatch on event.cron (wrangler.jsonc triggers). Still to come: M9 (nav-*), M10 (prebuild), M11 (stocks),
-  // M14 (cleanup).
+  // Dispatch on event.cron (wrangler.jsonc triggers). Still to come: M10 (prebuild), M11 (stocks), M14 (cleanup).
   async scheduled(controller, env, ctx) {
-    if (controller.cron === TMP_SWEEP_CRON) {
+    const cron = controller.cron
+    if (cron === TMP_SWEEP_CRON) {
       ctx.waitUntil(tmpSweep(env).then(() => undefined))
+      return
+    }
+    if (NAV_INGEST_CRONS.includes(cron)) {
+      ctx.waitUntil(navIngest(env, { cron, now: controller.scheduledTime }).then(() => undefined))
+      return
+    }
+    if (cron === NAV_REPAIR_CRON) {
+      ctx.waitUntil(navRepair(env, { now: controller.scheduledTime }).then(() => undefined))
       return
     }
     console.log('cron_unhandled', controller.cron)
   },
 
-  // Queue names carry an environment suffix (pf-email-staging). Consumers for market (M9) and rebuild (M10) arrive
-  // later; until then retrying keeps a stray message until its consumer exists (then the DLQ).
+  // Queue names carry an environment suffix (pf-email-staging). The rebuild consumer arrives in M10; until then
+  // retrying keeps a stray message until its consumer exists (then the DLQ).
   async queue(batch, env) {
     if (batch.queue.startsWith('pf-email')) return handleEmailBatch(batch as MessageBatch<EmailJob>, env)
     if (batch.queue.startsWith('pf-parse')) return handleParseBatch(batch as MessageBatch<ParseMessage>, env)
+    if (batch.queue.startsWith('pf-market')) return handleMarketBatch(batch as MessageBatch<MarketMessage>, env)
     console.log('queue_unhandled', batch.queue, batch.messages.length)
     batch.retryAll({ delaySeconds: 60 })
   },

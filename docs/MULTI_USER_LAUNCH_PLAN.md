@@ -960,6 +960,8 @@ tab (owner decision, 2026-11-25).
 - **`tracked_scheme`:** fund ISINs (`INF…`) only, 30 rows per statement (D1's 100-parameter limit), all in one `MARKET`
   batch. Rows unchanged and seen within the last day are skipped by the upsert's `WHERE`; a CDSL statement (no AMFI
   code) never erases a known code. A failure here is logged and doesn't fail the upload.
+  ✅ M9: the same batch gives CDSL ISINs their code from `scheme`, and marks codes never backfilled `pending`; those
+  are sent to nav-backfill once, with the earliest transaction date for their ISINs (§10.4.3).
 - The engine call retries a refused connection or an engine `503` up to 3 times, 1 s apart (the process restarts every
   200 requests), and gives up after 60 s with `parse_timeout`.
 - Tests: `test/statements.test.ts` (31, synthetic PDFs, fake engine) and `test/statements.private.test.ts` (4 private
@@ -1140,9 +1142,20 @@ returns and the Nifty comparison. The rest of this section is *public market dat
 
 | Source | What it gives | Observed | Use |
 |---|---|---|---|
-| **AMFI daily file** `https://www.amfiindia.com/spages/NAVAll.txt` | The latest NAV of every open scheme. Semicolon separated, 8 columns: `Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;Net Asset Value;Date`. Category and AMC header lines and blank lines appear in between. | 1.5 MB, 14,481 scheme rows, 1 `N.A.` NAV, stale dates for wound-up schemes. **It fills in gradually overnight.** At 23:24 IST on 24-Nov only 714 rows had 24-Nov and 8,098 still had 23-Nov. | **Primary**, for daily ingest |
-| **AMFI NAV history report** `https://portal.amfiindia.com/DownloadNAVHistoryReport_Po.aspx?frmdt=DD-Mon-YYYY&todt=DD-Mon-YYYY` (add `&mf=<AMC id>&tp=1` for one AMC) | Historical NAVs. The column order differs: `Scheme Code;NAV Name;Plan;Option;ISIN Div Payout/ISIN Growth;ISIN Div Reinvestment;Net Asset Value;Date` | All schemes for one day: 8,841 rows, 1.2 MB, 2.2 s. One AMC for 3.5 months: 15,936 rows, 2 MB, 3.6 s | **Repair and fallback backfill.** ⚠️ VERIFY the maximum date range per request and the list of AMC ids (`mf=`) |
+| **AMFI daily file** `https://www.amfiindia.com/spages/NAVAll.txt` (✅ M9: now a 302 to `https://portal.amfiindia.com/spages/NAVAll.txt`, which the Worker fetches directly) | The latest NAV of every open scheme. Semicolon separated, 8 columns: `Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;Net Asset Value;Date`. Category and AMC header lines and blank lines appear in between. | 1.5 MB, 14,481 scheme rows, 1 `N.A.` NAV, stale dates for wound-up schemes. **It fills in gradually overnight.** At 23:24 IST on 24-Nov only 714 rows had 24-Nov and 8,098 still had 23-Nov. | **Primary**, for daily ingest |
+| **AMFI NAV history report** `https://portal.amfiindia.com/DownloadNAVHistoryReport_Po.aspx?frmdt=DD-Mon-YYYY&todt=DD-Mon-YYYY` (add `&mf=<AMC id>&tp=1` for one AMC) | Historical NAVs. The column order differs: `Scheme Code;NAV Name;Plan;Option;ISIN Div Payout/ISIN Growth;ISIN Div Reinvestment;Net Asset Value;Date` | All schemes for one day: 8,841 rows, 1.2 MB, 2.2 s. One AMC for 3.5 months: 15,936 rows, 2 MB, 3.6 s | **Repair and fallback backfill.** ✅ M9: **range limit between 107 days (works) and 153 days (refused)**, so 90-day chunks. A refused range answers **200 with an HTML page**, so the parser rejects any body without the report header. Data from 2019 is served. **83 AMC ids** read from the fund-house list in `https://www.amfiindia.com/net-asset-value/nav-history`, kept in `worker/src/market/amc-ids.ts`; 55 of the 56 AMC lines in NAVAll match by name (`IL&FS Mutual Fund (IDF)` has no id). Without `tp=1` the report also has close-ended and interval schemes |
 | **mfapi.in** `https://api.mfapi.in/mf/{code}` | The full history of one scheme in one call | ~130 KB per scheme | **Backfill** when a scheme is first tracked. It's a community API, so keep fetches gentle: ≤ 4 concurrent, generic UA |
+
+✅ M9 findings (2026-11-26, live fetches):
+- **24-Nov-2026 was a market holiday** (Guru Nanak Jayanti), and 21-Nov a Saturday. On those dates only the daily-NAV
+  funds (overnight, liquid) publish: 714 and 606 rows in the history report, against 8,273 for 25-Nov (1.1 MB, 1.8 s).
+  So the "714 rows at 23:24 IST on 24-Nov" observation above was the holiday, not a slow night. Finality (§10.4.3) and
+  `/api/market/status` treat a date with under half the recent busiest day's rows as a non-business day.
+- NAVAll.txt on 26-Nov: 14,481 rows, 8,783 dated 25-Nov, 837 distinct dates (wound-up schemes keep their last one).
+  **241 rows have a NAV of `0`** (no `N.A.` that day); they are dropped like `N.A.`. Empty ISINs are `-` in NAVAll and
+  empty in the history report. Lines are CRLF, and "blank" lines can hold one space.
+- mfapi answers an **unknown code with 200 and `data: []`**, so an empty answer also falls back to AMFI's history.
+  Its history skips holidays (no 24-Nov row).
 
 Every source keys rows by **AMFI scheme code** and includes **ISINs**. So demat-only (CDSL) holdings map straight to a
 code through the ISIN, and mfapi's scheme list is no longer needed.
@@ -1202,6 +1215,14 @@ CREATE TABLE nav_backfill (
   - 3,000 tracked schemes × ~3,000 days is about 9M rows, about 400 MB.
   - It's a one-off write that fits within the included quota.
 - `tracked_scheme` (§6) gains an `amfi_code` resolved from `scheme` by ISIN when a statement is stored.
+- ✅ M9, as built in `migrations/market/0002_nav.sql`: the four tables above, plus `nav_anomaly` (the ±20% side table,
+  §10.4.4) and `nav_run` (one row per scheduled fetch, for the "fetched nothing twice" alert). `scheme.latest_nav` and
+  `latest_date` are nullable (a scheme whose NAV is dropped is still listed, for ISIN lookups).
+- ✅ M9: **rows go in as one JSON array per statement, read with `json_each(?1)`**, instead of 30 bound rows: 2,000 NAV
+  rows or 400 scheme rows per statement, one or two bound parameters each. Checked on the real staging D1: one
+  statement took a 52 KB NAV array and a 98 KB worst-case scheme array (the 400 longest names) in 0.7 ms. A whole
+  night's file is then one `batch()` (one transaction, one query toward the 1,000 per invocation), so the
+  "split through the queue near 1,000 queries" step isn't needed.
 
 #### 10.4.3 Jobs
 
@@ -1213,6 +1234,40 @@ CREATE TABLE nav_backfill (
 
 Scheduled runs handle failures this way: retry with backoff, log `error_class`, and raise an alert when a run fetches
 nothing two times in a row.
+
+✅ M9, as built in `worker/src/market/` (`amfi.ts` parsers, `store.ts` D1/R2 writes, `jobs.ts` jobs and the `pf-market`
+consumer):
+- **nav-ingest:** one fetch (3 tries, 2 s then 8 s backoff on network errors, 429 and 5xx), then one batch: anomalies
+  against `scheme.latest_*`, NAV rows (`ON CONFLICT DO NOTHING RETURNING`, so the inserted rows are known exactly),
+  the scheme upsert, tracked ISINs resolved to codes, and `nav_backfill` rows marked `pending` for tracked codes (plus
+  the benchmark) that have none. A second batch updates `market_day` for the dates that got rows, makes dates final,
+  and reads the tracked set. Then `pf-market` messages: backfills, and series rewrites (20 codes each).
+  Measured under `wrangler dev` on the real file: first run 14,240 rows inserted, 14,481 schemes, 1.8 s wall
+  (≈0.9 s is the fetch); a re-run inserted 0 rows and rewrote 0 schemes in 0.8 s.
+- **market_day** only keeps dates within 45 days (older dates come from wound-up schemes). `schemes_updated` adds the
+  rows each ingest or repair stored; `tracked_*` is recounted exactly when a date gets rows. A tracked scheme whose
+  latest NAV is over 14 days older than the date (wound up, merged) doesn't count toward its total, so it can't hold a
+  date back. **Final:** `tracked_updated ≥ 98%` of `tracked_total` (with `tracked_total > 0`), or the 10:00 IST run,
+  which makes every non-final date up to the file's latest final. `UPDATE … WHERE final = 0 RETURNING` hands each date
+  to `marketHooks.onFinal` exactly once; M10 enqueues `snapshot-prebuild` there.
+- **The tracked set** (used by series, backfill and coverage): `tracked_scheme` codes seen in the last 90 days, plus
+  benchmark `120716`.
+- **nav-backfill:** sent once per code when an upload first tracks it (with the earliest transaction date for its
+  ISINs, a date only) or by nav-ingest (no date: 5 years back). mfapi first (2 tries); an error or an empty answer falls
+  back to AMFI's report for the scheme's AMC (`mf=` from `amc-ids.ts`) in 90-day chunks from that date (not before
+  1-Apr-2006). A chunk with no report is skipped. Rows and anomalies (found over the whole series) go in one batch with
+  `nav_backfill` → `done`. Then the R2 series. A failure retries with backoff (60 s doubling, ≤ 15 min); the 5th attempt
+  marks it `failed` and acks (no DLQ). nav-ingest re-sends `pending` rows untouched for 6 h (a lost message);
+  nav-repair re-sends `failed` ones after 7 days.
+- **nav-repair** (Sunday): looks 45 calendar days back. A date is "full" when it has at least half the window's busiest
+  day's rows. One `repair` message per full date where a live tracked scheme (one with an earlier NAV) has none, and
+  per weekday with no `market_day` row at all (every run missed it; a holiday found this way gets a low row and isn't
+  asked again). A repair stores AMFI's all-scheme report for that one day like an ingest, without the scheme upsert.
+- **R2 series** `market/nav/{amfi_code}.json` = `{ amfi_code, dates: ["YYYY-MM-DD", …], navs: [...] }`, oldest first,
+  rebuilt in full from D1 (ISO dates, as the engine's `NavSeries` takes them). Read from the primary
+  (`withSession("first-primary")`), since the rows were just written.
+- **Logs** carry counts, dates, sources and error classes, never scheme codes: a backfill logged right after an upload
+  would tie that household to a fund it holds (§0.1). The alert is the log line `nav_fetch_alert` (M16 alerts on it).
 
 #### 10.4.4 Parsing rules (`worker/src/market/amfi.ts`, pure and unit-tested)
 - **Lines:**
@@ -1750,7 +1805,11 @@ integration accept. Switch only if a later wrangler requires `exports`.
   name, class_name, scheduling_policy, images, observability and ssh are allowed. Expect the fallback, and check real
   placement on staging.
 - **D1 read replication:** enable on `pocketfolio-market` only (Settings → Enable read replication) and read through
-  `MARKET.withSession(…)` (⚠️ VERIFY the session-constraint argument names). Leave it off on `pocketfolio-app`, so auth
+  `MARKET.withSession(…)` (✅ M9: the argument is `"first-primary"`, `"first-unconstrained"` or a bookmark string, per
+  `worker-configuration.d.ts` for compatibility date 2026-11-01. Replication was turned on for `pocketfolio-market-staging`
+  on 2026-11-26 through the D1 API, `PATCH …/d1/database/{id}` with `{"read_replication":{"mode":"auto"}}`, which also
+  needs doing for production in M17. Read-only paths use `"first-unconstrained"` (`/api/market/status`, nav-repair's
+  scan); the series writer uses `"first-primary"`.) Leave it off on `pocketfolio-app`, so auth
   reads always see their own writes.
 
 ### 15.2 Secrets (`wrangler secret put`)

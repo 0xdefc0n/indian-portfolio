@@ -496,6 +496,9 @@ export async function cancelJob(t: Tenant, jobId: string): Promise<boolean> {
 
 export type SweepResult = { expired: number; leftovers: number; resent: number; parked: number }
 
+/** tmp-sweep (§10.3): hourly at :15. Not exported from src/index.ts: workerd refuses non-handler exports there. */
+export const TMP_SWEEP_CRON = '15 * * * *'
+
 /**
  * 1. Open jobs past expires_at: delete the PDF, mark 'expired'.
  * 2. Finished jobs whose PDF delete failed earlier: delete it now.

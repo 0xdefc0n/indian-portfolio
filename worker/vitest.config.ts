@@ -11,7 +11,7 @@ export default defineConfig(async () => {
     test: {
       // Node-side: loads private statements (git-ignored) and the engine's view of them for pdfcheck.private.test.ts.
       globalSetup: ['./test/global-setup.ts'],
-      setupFiles: ['./test/apply-migrations.ts'],
+      setupFiles: ['./test/apply-migrations.ts', './test/no-market-network.ts'],
     },
     plugins: [
       cloudflareTest({

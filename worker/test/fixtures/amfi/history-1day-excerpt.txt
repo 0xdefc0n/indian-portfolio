@@ -1,0 +1,269 @@
+Scheme Code;NAV Name;Plan;Option;ISIN Div Payout/ISIN Growth;ISIN Div Reinvestment;Net Asset Value;Date
+
+Open Ended Schemes ( Equity Scheme - Multi Cap Fund )
+
+
+Aditya Birla Sun Life Mutual Fund
+148921;Aditya Birla Sun Life Multi-Cap Fund-Direct Growth;Direct Plan;GROWTH;INF209KB1Y49;;23.27;25-Nov-2026
+148920;Aditya Birla Sun Life Multi-Cap Fund-Direct IDCW Payout;Direct Plan;IDCW Payout;INF209KB1Y56;;19.15;25-Nov-2026
+
+Bajaj Finserv Mutual Fund
+153309;BAJAJ FINSERV MULTI CAP FUND - DIRECT - GROWTH;Direct Plan;Growth;INF0QA701AV7;;12.718;25-Nov-2026
+153306;BAJAJ FINSERV MULTI CAP FUND - DIRECT - IDCW;Direct Plan;IDCW;INF0QA701AW5;INF0QA701AX3;12.718;25-Nov-2026
+
+Bandhan Mutual Fund
+149303;BANDHAN MULTI CAP FUND - GROWTH - DIRECT PLAN;Direct Plan;Growth;INF194KB1CL0;;19.419;25-Nov-2026
+149305;BANDHAN MULTI CAP FUND - GROWTH - REGULAR PLAN;Regular Plan;Growth;INF194KB1CI6;;18.012;25-Nov-2026
+
+Bank of India Mutual Fund
+151443;Bank of India Multi Cap Fund Direct Plan - Growth;Direct Plan;Growth;INF761K01FR0;;21.41;25-Nov-2026
+151444;Bank of India Multi Cap Fund Direct Plan - IDCW;Direct Plan;IDCW;INF761K01FQ2;INF761K01FS8;21.38;25-Nov-2026
+
+Baroda BNP Paribas Mutual Fund
+119354;Baroda BNP Paribas MULTI CAP FUND - Direct Plan - Growth Option;Direct Plan;Growth Option;INF955L01AG0;;343.1223;25-Nov-2026
+119353;Baroda BNP Paribas MULTI CAP FUND - Direct Plan - IDCW Option;Direct Plan;IDCW Option;INF955L01AE5;;55.6029;25-Nov-2026
+
+Edelweiss Mutual Fund
+152094;Edelweiss Multi Cap Fund - Direct Plan - Growth;Direct Plan;Growth;INF754K01SD8;;16.9636;25-Nov-2026
+152093;Edelweiss Multi Cap Fund - Direct Plan - IDCW;Direct Plan;IDCW;INF754K01SA4;INF754K01SB2;16.439;25-Nov-2026
+
+Franklin Templeton Mutual Fund
+152739;Franklin India Multi Cap Fund - Direct - Growth;Direct Plan;Growth;INF090I01XA7;;11.1891;25-Nov-2026
+152737;Franklin India Multi Cap Fund - Direct - IDCW;Direct Plan;IDCW;INF090I01XB5;INF090I01XC3;11.1891;25-Nov-2026
+
+HDFC Mutual Fund
+149366;HDFC Multi Cap Fund - Growth Option;Regular Plan;Growth Option;INF179KC1BV9;;19.175;25-Nov-2026
+149368;HDFC Multi Cap Fund - Growth Option - Direct Plan;Direct Plan;Growth Option;INF179KC1BS5;;20.286;25-Nov-2026
+
+ITI Mutual Fund
+147183;ITI Multi Cap Fund - Direct Plan - Growth Option;Direct Plan;Growth Option;INF00XX01168;;30.9722;25-Nov-2026
+147186;ITI Multi Cap Fund - Direct Plan - IDCW Option;Direct Plan;IDCW Option;INF00XX01176;INF00XX01184;27.4006;25-Nov-2026
+
+LIC Mutual Fund
+150659;LIC MF Multi Cap Fund-Direct Plan-Growth;Direct Plan;Growth;INF767K01RK7;;20.074;25-Nov-2026
+150660;LIC MF Multi Cap Fund-Direct Plan-IDCW;Direct Plan;IDCW;INF767K01RL5;INF767K01RM3;20.074;25-Nov-2026
+
+Motilal Oswal Mutual Fund
+152650;Motilal Oswal Multi Cap Fund Regular Plan Growth;;;INF247L01CO2;;15.5315;25-Nov-2026
+152649;Motilal Oswal Multi Cap Fund Regular Plan IDCW;;;INF247L01CJ2;INF247L01CK0;15.2982;25-Nov-2026
+
+PGIM India Mutual Fund
+152815;PGIM India Multi Cap Fund - Direct Plan - Growth Option;Direct Plan;Direct Growth;INF663L01Z03;;11.47;25-Nov-2026
+152817;PGIM India Multi Cap Fund - Direct Plan - IDCW Option;Direct Plan;Direct IDCW;INF663L01Z11;INF663L01Z29;11.47;25-Nov-2026
+
+quant Mutual Fund
+100631;quant Multi Cap Fund-GROWTH OPTION - Regular Plan;Regular Plan;Growth Option;INF966L01234;;658.9583;25-Nov-2026
+120823;quant Multi Cap Fund-GROWTH OPTION-Direct Plan;Direct Plan;Growth Option;INF966L01614;;729.0372;25-Nov-2026
+
+SBI Mutual Fund
+149887;SBI Multicap Fund- Direct Plan - Income Distribution cum Capital Withdrawal Option (IDCW);Direct Plan;IDCW;INF200KA19E0;INF200KA10F6;18.1280;25-Nov-2026
+149882;SBI Multicap Fund- Direct Plan- Growth option;Direct Plan;Growth;INF200KA18E2;;18.1279;25-Nov-2026
+
+Sundaram Mutual Fund
+149668;Sundaram Multi Cap Fund (Formerly Known as Principal Multi Cap Growth Fund) - Direct Plan - Income Distribution CUM Capital Withdrawal Option (IDCW);Direct Plan;IDCW (Income Distribution CUM Capital Withdrawal);INF173K01FN7;INF173K01FO5;82.1833;25-Nov-2026
+149666;Sundaram Multi Cap Fund (Formerly Known as Principal Multi Cap Growth Fund)- Income Distribution CUM Capital Withdrawal Option (IDCW);Regular Plan;IDCW (Income Distribution CUM Capital Withdrawal);INF173K01957;INF173K01965;60.0465;25-Nov-2026
+
+Tata Mutual Fund
+151232;Tata Multicap Fund - Direct Plan - Growth;Direct Plan;Growth Option;INF277KA1679;;16.5075;25-Nov-2026
+151234;Tata Multicap Fund - Direct Plan - IDCW Payout;Direct Plan;IDCW Payout Option;INF277KA1695;;16.5075;25-Nov-2026
+
+Trust Mutual Fund
+153644;TRUSTMF MULTI CAP FUND -DIRECT PLAN-GROWTH;Direct Plan;Growth;INF0GCD01834;;12.32;25-Nov-2026
+153645;TRUSTMF MULTI CAP FUND -REGULAR PLAN-GROWTH;Regular Plan;Growth;INF0GCD01842;;12.02;25-Nov-2026
+
+Union Mutual Fund
+150858;Union Multicap Fund - Direct Plan - Growth Option;Direct Plan;Growth Option;INF582M01IO7;;18.95;25-Nov-2026
+150857;Union Multicap Fund - Direct Plan - IDCW Option;Direct Plan;IDCW Option;INF582M01IP4;INF582M01IQ2;18.95;25-Nov-2026
+
+Open Ended Schemes ( Equity Scheme - Large Cap Fund )
+
+
+Aditya Birla Sun Life Mutual Fund
+119528;Aditya Birla Sun Life Large Cap Fund - Growth - Direct Plan;Direct Plan;GROWTH;INF209K01YY7;;612.23;25-Nov-2026
+119527;Aditya Birla Sun Life Large Cap Fund-DIRECT - IDCW;;;INF209K01YX9;INF209K01YW1;91.59;25-Nov-2026
+
+Bajaj Finserv Mutual Fund
+152783;BAJAJ FINSERV LARGE CAP FUND - DIRECT PLAN - GROWTH;Direct Plan;Growth;INF0QA701896;;11.078;25-Nov-2026
+152781;BAJAJ FINSERV LARGE CAP FUND - DIRECT PLAN - IDCW;Direct Plan;IDCW;INF0QA701904;INF0QA701912;11.078;25-Nov-2026
+
+Bandhan Mutual Fund
+108799;BANDHAN Large Cap Fund - Regular Plan - Growth;Regular Plan;Growth;INF194K01516;;83.722;25-Nov-2026
+108800;BANDHAN Large Cap Fund - Regular Plan - IDCW;Regular Plan;IDCW;INF194K01490;INF194K01508;23.078;25-Nov-2026
+
+Bank of India Mutual Fund
+148980;BANK OF INDIA Large Cap Fund Direct Plan Growth;Direct Plan;Growth;INF761K01FL3;;18.57;25-Nov-2026
+148981;BANK OF INDIA Large Cap Fund Direct Plan IDCW;Direct Plan;IDCW;INF761K01FK5;INF761K01FM1;18.53;25-Nov-2026
+
+Baroda BNP Paribas Mutual Fund
+150187;BARODA BNP PARIBAS LARGE CAP Fund - Direct Plan - Growth Option;Direct Plan;Growth Option;INF251K01HN7;;273.9987;25-Nov-2026
+150188;BARODA BNP PARIBAS LARGE CAP Fund - Direct Plan - IDCW Option;Direct Plan;IDCW Option;INF251K01HL1;INF251K01HM9;27.8422;25-Nov-2026
+
+DSP Mutual Fund
+119250;DSP Large Cap Fund - Direct Plan - Growth;Direct Plan;Growth;INF740K01PR3;;544.3110;25-Nov-2026
+119249;DSP Large Cap Fund - Direct Plan - IDCW;Direct Plan;IDCW;INF740K01PS1;INF740K01PT9;29.0870;25-Nov-2026
+
+Edelweiss Mutual Fund
+118616;Edelweiss Large Cap Fund - Direct Plan - IDCW Option;Direct Plan;IDCW;INF754K01BT0;INF754K01BU8;41.04;25-Nov-2026
+118617;Edelweiss Large Cap Fund - Direct Plan-Growth option;Direct Plan;Growth;INF754K01BW4;;103.97;25-Nov-2026
+
+Franklin Templeton Mutual Fund
+118462;Franklin India Large Cap Fund - Direct - IDCW;Direct Plan;IDCW;INF090I01FO5;INF090I01FP2;53.7281;25-Nov-2026
+100470;Franklin India Large Cap Fund - IDCW;Regular Plan;IDCW;INF090I01155;INF090I01163;45.9000;25-Nov-2026
+
+HDFC Mutual Fund
+119018;HDFC Large Cap Fund - Growth Option - Direct Plan;Direct Plan;Growth Option;INF179K01YV8;;1299.207;25-Nov-2026
+102000;HDFC Large Cap Fund - Growth Option - Regular Plan;Regular Plan;Growth Option;INF179K01BE2;;1191.906;25-Nov-2026
+
+ICICI Prudential Mutual Fund
+120585;ICICI Prudential Large Cap Fund (erstwhile Bluechip Fund)  - Direct Plan - IDCW;Direct Plan;IDCW;INF109K014L5;INF109K015L2;64.03;25-Nov-2026
+108466;ICICI Prudential Large Cap Fund (erstwhile Bluechip Fund)  - Growth;Regular Plan;Growth;INF109K01BL4;;114.42;25-Nov-2026
+
+ITI Mutual Fund
+148353;ITI Large Cap Fund - Direct Plan - Growth Option;Direct Plan;Growth Option;INF00XX01804;;20.9066;25-Nov-2026
+148352;ITI Large Cap Fund - Direct Plan - IDCW Option;Direct Plan;IDCW Option;INF00XX01812;INF00XX01820;19.8419;25-Nov-2026
+
+Kotak Mahindra Mutual Fund
+120152;Kotak Large Cap  Fund - Growth - Direct;Direct Plan;Growth;INF174K01KW6;;694.947;25-Nov-2026
+114458;Kotak Large Cap Fund - Growth;Regular Plan;Growth;INF174K01153;;595.243;25-Nov-2026
+
+LIC Mutual Fund
+120267;LIC MF Large Cap Fund-Direct Plan-Growth;Direct Plan;Growth;INF767K01EJ7;;65.8643;25-Nov-2026
+120268;LIC MF Large Cap Fund-Direct Plan-IDCW;Direct Plan;IDCW;INF767K01EI9;INF767K01EK5;41.4747;25-Nov-2026
+
+Motilal Oswal Mutual Fund
+152354;Motilal Oswal Large Cap Direct Plan Growth;;;INF247L01CE3;;15.0930;25-Nov-2026
+152351;Motilal Oswal Large Cap Direct Plan IDCW;;;INF247L01CF0;INF247L01CG8;13.6044;25-Nov-2026
+
+Nippon India Mutual Fund
+106235;Nippon India Large Cap  Fund- Growth Plan -Growth Option;Regular Plan;Growth Option;INF204K01562;;95.1328;25-Nov-2026
+118634;NIPPON INDIA LARGE CAP FUND - DIRECT Plan - IDCW Option;Direct Plan;IDCW Option;INF204K01XG7;INF204K01XH5;42.6652;25-Nov-2026
+
+PGIM India Mutual Fund
+138313;PGIM India Large Cap Fund - Direct Plan - Dividend;Direct Plan;Direct IDCW;INF663L01GS2;INF663L01GT0;27.94;25-Nov-2026
+138312;PGIM India Large Cap Fund - Direct Plan - Growth;Direct Plan;Direct Growth;INF663L01GR4;;431.96;25-Nov-2026
+
+PPFAS Mutual Fund
+154155;Parag Parikh Large Cap Fund - Direct Plan - Growth;Direct Plan;Growth;INF879O01332;;10.2347;25-Nov-2026
+154156;Parag Parikh Large Cap Fund - Direct Plan - IDCW;Direct Plan;Monthly IDCW Payout;;INF879O01357;10.2347;25-Nov-2026
+
+quant Mutual Fund
+150440;quant Large Cap Fund - Growth Option - Direct Plan;Direct Plan;Growth Option;INF966L01AT0;;17.1561;25-Nov-2026
+150441;quant Large Cap Fund - Growth Option - Regular Plan;Regular Plan;Growth Option;INF966L01AW4;;16.0496;25-Nov-2026
+
+SBI Mutual Fund
+119585;SBI Large Cap Fund - Direct Plan - Income Distribution cum Capital Withdrawal Option (IDCW);Direct Plan;IDCW;INF200K01QV8;INF200K01QW6;71.1225;25-Nov-2026
+103616;SBI Large Cap Fund - Regular Plan - Income Distribution cum Capital Withdrawal Option (IDCW);Regular Plan;IDCW;INF200K01164;INF200K01172;55.7806;25-Nov-2026
+
+Sundaram Mutual Fund
+148509;Sundaram Large Cap Fund (Formerly Known as Sundaram Blue Chip  Fund)  Direct Plan - Reinvestment of Income Distribution cum Capital Withdrawal (IDCW);Direct Plan;IDCW (Income Distribution CUM Capital Withdrawal);;INF903JA1JE6;16.7230;25-Nov-2026
+148505;Sundaram Large Cap Fund (Formerly Known as Sundaram Blue Chip Fund)  Regular Plan - Payout of Income Distribution cum Capital Withdrawal (IDCW);Regular Plan;IDCW (Income Distribution CUM Capital Withdrawal);INF903JA1JA4;;15.2928;25-Nov-2026
+
+Tata Mutual Fund
+119160;Tata Large Cap Fund -Direct Plan Growth Option;Direct Plan;Growth Option;INF277K01QZ7;;621.6084;25-Nov-2026
+100475;Tata Large Cap Fund -Regular Plan - Growth Option;Regular Plan;Growth Option;INF277K01931;;534.1251;25-Nov-2026
+
+Taurus Mutual Fund
+118870;Taurus Large Cap Fund - Direct Plan - Growth;Direct Plan;Growth;INF044D01BX3;;196.49;25-Nov-2026
+118871;Taurus Large Cap Fund - Direct Plan - Payout of Income Distribution cum Capital Withdrawal option;Direct Plan;Income Distribution cum Capital Withdrawal;INF044D01BY1;INF044D01BZ8;75.22;25-Nov-2026
+
+Union Mutual Fund
+141248;Union Largecap Fund - Direct Plan - Growth Option;Direct Plan;Growth Option;INF582M01CU7;;26.48;25-Nov-2026
+141249;Union Largecap Fund - Direct Plan - IDCW Option;Direct Plan;IDCW Option;INF582M01CV5;INF582M01CW3;26.48;25-Nov-2026
+
+UTI Mutual Fund
+120656;UTI Large Cap Fund - Direct Plan - Growth Option;Direct Plan;Growth;INF789F01US8;;315.1475;25-Nov-2026
+120657;UTI Large Cap Fund - Direct Plan - IDCW;Direct Plan;IDCW;INF789F01UQ2;INF789F01UR0;65.3151;25-Nov-2026
+
+Open Ended Schemes ( Equity Scheme - Large & Mid Cap Fund )
+
+
+Abakkus Mutual Fund
+154477;Abakkus Large & Mid Cap Fund - Direct  Plan - Growth;Direct Plan;Growth;INF2JJD01193;;10.0190;25-Nov-2026
+154478;Abakkus Large & Mid Cap Fund - Regular Plan - Growth;Regular Plan;Growth;INF2JJD01201;;9.9730;25-Nov-2026
+
+Aditya Birla Sun Life Mutual Fund
+119436;Aditya Birla Sun Life Large & Mid Cap Fund - Growth - Direct Plan;Direct Plan;GROWTH;INF209K01VH8;;1085.50;25-Nov-2026
+100033;Aditya Birla Sun Life Large & Mid Cap Fund - Regular Growth;Regular Plan;GROWTH;INF209K01165;;965.81;25-Nov-2026
+
+Bandhan Mutual Fund
+118419;Bandhan Large & Mid Cap Fund - Direct Plan - Growth;Direct Plan;Growth;INF194K01V89;;170.444;25-Nov-2026
+118420;Bandhan Large & Mid Cap Fund - Direct Plan - IDCW;Direct Plan;IDCW;INF194K01V97;INF194K01W05;37.917;25-Nov-2026
+
+Bank of India Mutual Fund
+119349;BANK OF INDIA Large & Mid Cap Fund Direct  Plan- Quarterly IDCW;Direct Plan;Quarterly IDCW;INF761K01678;INF761K01660;31.48;25-Nov-2026
+119300;BANK OF INDIA Large & Mid Cap Fund Direct Plan- Bonus;Direct Plan;Bonus;INF761K01629;;58.54;25-Nov-2026
+
+Baroda BNP Paribas Mutual Fund
+148474;Baroda BNP Paribas Large and Mid Cap Fund- Direct Plan -Growth Option;Direct Plan;Growth Option;INF955L01JU2;;31.1337;25-Nov-2026
+148475;Baroda BNP Paribas Large and Mid Cap Fund-Direct Plan-IDCW Option;Direct Plan;IDCW Option;INF955L01JV0;INF955L01JW8;21.8323;25-Nov-2026
+
+DSP Mutual Fund
+119218;DSP Large & Mid Cap Fund - Direct Plan - Growth;Direct Plan;Growth;INF740K01PL6;;725.6790;25-Nov-2026
+119219;DSP Large & Mid Cap Fund - Direct Plan - IDCW;Direct Plan;IDCW;INF740K01PM4;INF740K01PN2;108.2340;25-Nov-2026
+
+Edelweiss Mutual Fund
+140175;Edelweiss Large & Mid Cap Fund - Direct Plan - Growth Option;Direct Plan;Growth;INF843K01AL0;;110.426;25-Nov-2026
+140172;Edelweiss Large & Mid Cap Fund - Regular Plan - Growth Option;Regular Plan;Growth;INF843K01047;;92.124;25-Nov-2026
+
+Franklin Templeton Mutual Fund
+118510;Franklin India Large & Mid Cap Fund - Direct - Growth;Direct Plan;Growth;INF090I01IN1;;215.3439;25-Nov-2026
+118509;Franklin India Large & Mid cap Fund - Direct - IDCW;Direct Plan;IDCW;INF090I01IL5;INF090I01IM3;23.3039;25-Nov-2026
+
+ICICI Prudential Mutual Fund
+120596;ICICI Prudential Large & Mid Cap Fund - Direct Plan - Growth;Direct Plan;Growth;INF109K011O5;;1129.12;25-Nov-2026
+120597;ICICI Prudential Large & Mid Cap Fund - Direct Plan - IDCW;Direct Plan;IDCW;INF109K019N0;INF109K010O7;49.96;25-Nov-2026
+
+ITI Mutual Fund
+152821;ITI Large & Midcap Fund - Direct Plan - Growth;Direct Plan;Growth Option;INF00XX01DA4;;10.5873;25-Nov-2026
+152823;ITI Large & Midcap Fund - Direct Plan - IDCW Option;Direct Plan;IDCW Option;INF00XX01DB2;INF00XX01DC0;10.5873;25-Nov-2026
+
+LIC Mutual Fund
+133710;LIC MF Large & Mid Cap Fund-Direct Plan-Growth;Direct Plan;Growth;INF767K01NE9;;46.3242;25-Nov-2026
+133709;LIC MF Large & Mid Cap Fund-Direct Plan-IDCW;Direct Plan;IDCW;INF767K01ND1;INF767K01NF6;36.7524;25-Nov-2026
+
+Motilal Oswal Mutual Fund
+147704;Motilal Oswal Large and Midcap Fund - Direct Plan Growth;Direct Plan;Growth;INF247L01999;;40.1556;25-Nov-2026
+147701;Motilal Oswal Large and Midcap Fund - Regular Plan Growth;Regular Plan;Growth;INF247L01965;;36.3311;25-Nov-2026
+
+Navi Mutual Fund
+141414;Navi Large & Midcap Fund - Direct Annual IDCW Payout;Direct Plan;Annual IDCW Payout;INF959L01CR5;INF959L01CS3;44.8116;25-Nov-2026
+141415;Navi Large & Midcap Fund - Direct Half Yearly IDCW Payout;Direct Plan;Half Yearly IDCW Payout;INF959L01CP9;INF959L01CQ7;44.851;25-Nov-2026
+
+Nippon India Mutual Fund
+118676;NIPPON INDIA VISION LARGE & MID CAP  FUND - DIRECT Plan - IDCW Option;Direct Plan;IDCW Option;INF204K01F04;INF204K01F12;71.3792;25-Nov-2026
+118675;Nippon India Vision Large & Mid Cap Fund - Direct Plan Growth Plan - Bonus Option;Direct Plan;Bonus Option;INF204K01E96;;276.2149;25-Nov-2026
+
+PGIM India Mutual Fund
+152382;PGIM India Large and Midcap Fund - Direct Plan - Growth Option;Direct Plan;Direct Growth;INF663L01Y12;;13.87;25-Nov-2026
+152384;PGIM India Large and Midcap Fund - Direct Plan - IDCW option;Direct Plan;Direct IDCW;INF663L01Y20;INF663L01Y38;12.59;25-Nov-2026
+
+quant Mutual Fund
+104513;quant Large & Mid Cap Fund - Growth Option;Regular Plan;Growth Option;INF966L01341;;127.0557;25-Nov-2026
+120826;quant Large & Mid Cap Fund - Growth Option-Direct Plan;Direct Plan;Growth Option;INF966L01648;;141.3962;25-Nov-2026
+
+Sundaram Mutual Fund
+119565;Sundaram Large and Midcap Direct Plan - Income Distribution cum Capital Withdrawal (IDCW);Direct Plan;IDCW (Income Distribution CUM Capital Withdrawal);INF903J01PP3;INF903J01PQ1;33.3972;25-Nov-2026
+119566;Sundaram Large and Midcap Fund Direct Plan - Growth;Direct Plan;GROWTH;INF903J01PR9;;103.9655;25-Nov-2026
+
+Tata Mutual Fund
+119202;Tata Large & MId Cap Fund -Direct Plan- Growth Option;Direct Plan;Growth Option;INF277K01MK8;;572.2973;25-Nov-2026
+119201;Tata Large & Mid Cap Fund Direct Plan - Payout of IDCW Option;Direct Plan;Payout of IDCW Option;INF277K01MI2;INF277K01MJ0;105.7629;25-Nov-2026
+
+The Wealth Company Mutual Fund
+154381;The Wealth Company Large & Mid Cap Fund Direct Growth;Direct Plan;Growth;INF2F0001594;;10.2789;25-Nov-2026
+154380;The Wealth Company Large & Mid Cap Fund Direct IDCW;Direct Plan;IDCW;INF2F0001602;INF2F0001610;10.2782;25-Nov-2026
+
+Union Mutual Fund
+147750;Union Large & Midcap Fund - Direct Plan - Growth Option;Direct Plan;Growth Option;INF582M01GA0;;30.39;25-Nov-2026
+147751;Union Large & Midcap Fund - Direct Plan - IDCW Option;Direct Plan;IDCW Option;INF582M01GC6;INF582M01GB8;30.39;25-Nov-2026
+
+UTI Mutual Fund
+120665;UTI Large & Mid Cap Fund - Direct Plan - Growth Option;Direct Plan;Growth;INF789F01UG3;;204.7801;25-Nov-2026
+120664;UTI Large & Mid Cap Fund - Direct Plan - IDCW;Direct Plan;IDCW;INF789F01UE8;INF789F01UF5;100.6308;25-Nov-2026
+
+Open Ended Schemes ( Other Scheme - Index Funds )
+
+
+UTI Mutual Fund
+120716;UTI Nifty 50 Index Fund - Growth Option- Direct;Direct Plan;Growth;INF789F01XA0;;181.9059;25-Nov-2026
+
