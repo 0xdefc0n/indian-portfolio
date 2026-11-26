@@ -24,9 +24,12 @@ npm run dev                                        # wrangler dev; builds and st
 Open http://localhost:8787 and sign in (locally, emails are logged by `wrangler dev` instead of sent).
 For the dashboard with hot reload, also run `npm run dev` in `web/` and open http://localhost:5173 (Vite proxies
 `/api` to :8787). To load NAVs locally, run nav-ingest once: `npx wrangler dev --test-scheduled`, then
-`curl 'localhost:8787/cdn-cgi/handler/scheduled?cron=30+17+*+*+*'`.
+`curl 'localhost:8787/cdn-cgi/handler/scheduled?cron=30+17+*+*+*'`. Stocks inside funds need `BHARATSTOCK_API_KEY` in
+`worker/.dev.vars`. Builds then ask for the BharatStock job, which spends at most 50 calls a day across all users.
 
 Tests: `cd engine && uv run pytest -q`, `cd worker && npm test` (needs Docker), `cd web && npm run build && npm run lint`.
+`BHARATSTOCK_LIVE=1 npx vitest run test/stocks.live.test.ts` (in `worker/`) checks stocks against the real BharatStock
+API (it spends about 5 of the day's calls).
 
 ## Where things are
 - `web/`: the dashboard SPA (`src/App.tsx`, `components/`, `pages/`)

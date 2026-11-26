@@ -7,6 +7,7 @@ import { ApiError } from './lib/errors'
 import { handleParseBatch, type ParseMessage, TMP_SWEEP_CRON, tmpSweep } from './lib/jobs'
 import { handleRebuildBatch, PREBUILD_CRON, prebuild, type RebuildMessage } from './lib/snapshot'
 import { handleMarketBatch, type MarketMessage, NAV_INGEST_CRONS, NAV_REPAIR_CRON, navIngest, navRepair } from './market/jobs'
+import { requestStocks, STOCKS_CRON } from './market/stocks'
 import { requireSession } from './middleware/session'
 import { authRoutes } from './routes/auth'
 import { jobRoutes } from './routes/jobs'
@@ -99,7 +100,7 @@ class EngineUnavailable extends Error {
 export default {
   fetch: app.fetch,
 
-  // Dispatch on event.cron (wrangler.jsonc triggers). Still to come: M11 (stocks), M14 (cleanup).
+  // Dispatch on event.cron (wrangler.jsonc triggers). Still to come: M14 (cleanup), M18 (AMC scrapers).
   async scheduled(controller, env, ctx) {
     const cron = controller.cron
     if (cron === TMP_SWEEP_CRON) {
@@ -117,6 +118,11 @@ export default {
     }
     if (cron === NAV_REPAIR_CRON) {
       ctx.waitUntil(navRepair(env, { now: controller.scheduledTime }).then(() => undefined))
+      return
+    }
+    if (cron === STOCKS_CRON) {
+      // The daily BharatStock run (M11): continues what yesterday's budget left, and fetches newer months.
+      ctx.waitUntil(requestStocks(env, controller.scheduledTime, true).then(() => undefined))
       return
     }
     console.log('cron_unhandled', controller.cron)

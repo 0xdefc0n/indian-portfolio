@@ -37,6 +37,8 @@ portfolioRoutes.get('/portfolio', signedIn, async (c) => {
 
   const obj = row.blob_key && ownsKey(hid, row.blob_key) && row.blob_key.startsWith(`${blobKeys.householdPrefix(hid)}snapshot/`) ? await c.env.BUCKET.get(row.blob_key) : null
   if (!obj) return c.json(EMPTY_PORTFOLIO, 200, flags(false, building && state.statements > 0))
+  // The last statement was deleted and the rebuild hasn't emptied the snapshot yet: don't show what's gone.
+  if (!state.statements) return c.json(EMPTY_PORTFOLIO, 200, flags(false, false))
 
   const vault = await tenant(c).vaultFromRow(row)
   const { bytes, flags: blobFlags } = await vault.open(row.blob_key!, await obj.arrayBuffer())
@@ -57,7 +59,7 @@ portfolioRoutes.get('/portfolio/status', signedIn, async (c) => {
   const [row, market] = await Promise.all([readSnapshotRow(c.env, c.var.householdId), cachedMarketStatus(c.env, (p) => c.executionCtx.waitUntil(p))])
   if (!row) return c.json({ status: 'empty', building: false, pending: false, stale: false, market_date: null, built_at: null })
   const s = snapshotState(row, market)
-  const status = !s.statements ? 'empty' : s.building ? 'building' : s.pending ? 'pending' : s.failed ? 'failed' : 'ready'
+  const status = s.building ? 'building' : s.pending ? 'pending' : !s.statements && !s.blob_key ? 'empty' : s.failed ? 'failed' : 'ready'
   if (s.building || s.pending) c.header('Retry-After', String(STATUS_RETRY_S))
   c.header('Cache-Control', 'private, no-store')
   return c.json({ status, building: s.building, pending: s.pending, stale: s.stale, market_date: s.market_date, built_at: s.built_at })

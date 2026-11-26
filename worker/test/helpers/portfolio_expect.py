@@ -63,7 +63,9 @@ def main(paths: list[str]) -> None:
     need = market_requirements(statements, all_codes)
     held = set(need["held_isins"])
     isin_to_code = {i: c for i, c in all_codes.items() if i in held}
-    market = {"navs": {c: navs[c] for c in need["codes"] if c in navs}, "isin_to_code": isin_to_code, "stocks": None}
+    # Stocks (M11): the Worker's tests have a (test-only) BharatStock key and no stock data stored yet.
+    stocks = {"enabled": True, "matches": {}, "holdings": {}}
+    market = {"navs": {c: navs[c] for c in need["codes"] if c in navs}, "isin_to_code": isin_to_code, "stocks": stocks}
     engine = json.loads(json.dumps(build_portfolio(statements, market, date.today())))
     out = {
         "engine": engine,

@@ -1,5 +1,6 @@
 // The one way routes and jobs reach the engine: lease a slot from EnginePool, call that slot, release it.
 import type { AcquireOptions, AcquireResult, EngineClass } from '../pool-core'
+import { decodeWant } from '../market/stocks'
 
 export type Busy = { ok: false; code: 'busy'; queued_ahead: number; eta_s: number; ticket?: number }
 export type Full = { ok: false; code: 'full'; retry_after: number }
@@ -138,7 +139,17 @@ export const engineApi: {
 /** Engine /build timeout: inside the 120 s batch lease and the snapshot claim. */
 export const BUILD_TIMEOUT_MS = 100_000
 
-export type EngineBuild = { ok: true; gzip: Uint8Array<ArrayBuffer>; peakRssMb: number | null; navHits: number; navMisses: number } | { ok: false; code: string }
+export type EngineBuild =
+  | {
+      ok: true
+      gzip: Uint8Array<ArrayBuffer>
+      peakRssMb: number | null
+      navHits: number
+      navMisses: number
+      /** The funds the stocks view needs data for, [isin, name] (X-Engine-Stocks-Want, M11). */
+      stocksWant?: [string, string][]
+    }
+  | { ok: false; code: string }
 
 /**
  * Build a snapshot on a held EngineBatch slot. `body` is the /build JSON with format "gzip", so the answer is the
@@ -185,6 +196,7 @@ async function callBuild(engine: Fetcher, body: string): Promise<EngineBuild> {
         peakRssMb: Number.isFinite(rss) ? rss : null,
         navHits: num('x-engine-nav-hits') || 0,
         navMisses: num('x-engine-nav-misses') || 0,
+        stocksWant: decodeWant(res.headers.get('x-engine-stocks-want')),
       }
     }
     const err = await res.json<Record<string, unknown>>().catch(() => null)

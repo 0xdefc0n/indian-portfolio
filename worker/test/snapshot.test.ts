@@ -160,7 +160,11 @@ describe('pf-rebuild consumer', () => {
     const { h } = await builtHousehold('empty')
     const st = await env.DB.prepare('SELECT id FROM statement WHERE household_id = ?1').bind(h.householdId).first<{ id: string }>()
     expect((await call(`/api/statements/${st!.id}`, { method: 'DELETE', jar: h.jar })).status).toBe(200)
+    // Before the rebuild runs: status is pending (not empty) and the old snapshot isn't served.
+    expect(await (await call('/api/portfolio/status', { jar: h.jar })).json()).toMatchObject({ status: 'pending', pending: true })
+    expect(await (await portfolio(h)).res.json()).toMatchObject({ members: [] })
     expect(await deliverRebuilds(takeRebuilds(h.householdId))).toEqual([{ outcome: 'emptied' }])
+    expect(await (await call('/api/portfolio/status', { jar: h.jar })).json()).toMatchObject({ status: 'empty', pending: false })
     expect((await snapshotRow(h.householdId))!.blob_key).toBeNull()
     expect(await snapshotKeys(h)).toEqual([])
     const { res, building } = await portfolio(h)

@@ -380,8 +380,7 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
     benchmark = {"name": market.BENCHMARK_NAME, "returns": market.trailing_returns(bench)} if bench else None
 
     # Stocks inside each equity fund, from data the caller fetched (plan §10.3.1)
-    equity = list({h["isin"]: {"isin": h["isin"], "name": h["name"]} for h in holdings if h["asset_class"] == "Equity"}.values())
-    stock_data = stocks.snapshot(equity, market_data.get("stocks"))
+    stock_data = stocks.snapshot(stocks.equity_funds(holdings), market_data.get("stocks"))
 
     return {"members": members, "holdings": holdings, "activity": activity, "sips": sips, "benchmark": benchmark,
             "stocks": stock_data}
