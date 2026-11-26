@@ -161,7 +161,7 @@ export function accountDeletedEmail(job: DeletedEmailJob): OutgoingEmail {
     job.reason === 'inactive'
       ? "We deleted your PocketFolio account because nobody had signed in to it for 3 years, as our privacy policy says. We emailed you about it 2 days before."
       : 'Your PocketFolio account was deleted, as you asked.',
-    'Your family members, statements and portfolio are gone, and so is the key that encrypted them. Copies in our backups become unreadable straight away and are purged within 30 days.',
+    'Your family members, statements and portfolio are gone for good, along with the key that protected them.',
     `You can sign up again at any time. Questions? Write to ${SUPPORT}.`,
   ]
   return { to: job.to, subject, text: [subject, '', ...paragraphs.flatMap((p) => [p, ''])].join('\n').trim(), html: plainHtml(subject, paragraphs) }

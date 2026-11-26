@@ -129,10 +129,14 @@ describe('export (plan §9.2, Rule 14 access)', () => {
     expect(data.sessions.length).toBeGreaterThanOrEqual(1)
     expect(data.sessions.filter((s: { current: boolean }) => s.current)).toHaveLength(1)
     expect(data.consents).toEqual([expect.objectContaining({ notice_version: NOTICE_VERSION, withdrawn_at: null })])
-    expect(data.members).toEqual([
-      expect.objectContaining({ id: m1, name: 'Test Parent', pan: 'ABCDE1234F', pan_masked: 'AB••••••4F' }),
-      expect.objectContaining({ id: m2, name: 'Test Child', pan: 'PQRST6789K' }),
-    ])
+    // Both members, in any order: two inserts in the same millisecond sort by their random ids.
+    expect(data.members).toHaveLength(2)
+    expect(data.members).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: m1, name: 'Test Parent', pan: 'ABCDE1234F', pan_masked: 'AB••••••4F' }),
+        expect.objectContaining({ id: m2, name: 'Test Child', pan: 'PQRST6789K', pan_masked: 'PQ••••••9K' }),
+      ]),
+    )
     expect(data.statements.map((s: { id: string }) => s.id).sort()).toEqual([s1.id, s2.id].sort())
     for (const s of data.statements) expect(s.data).toEqual({ synthetic: true, holdings: [{ isin: 'INF000000000', units: 1 }] })
     expect(data.sip_changes).toEqual([expect.objectContaining({ member_id: m1, kind: 'skip', date: '2026-12-24', isin: 'INF000K01AB1', folio: '1234/56' })])

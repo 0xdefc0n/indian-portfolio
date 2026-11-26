@@ -13,7 +13,8 @@ export function Wordmark() {
   )
 }
 
-export function PublicShell({ children, home = true }: { children: React.ReactNode; home?: boolean }) {
+/** footer: false for a screen that fits the viewport (the consent screen links the policies itself). */
+export function PublicShell({ children, home = true, footer = true }: { children: React.ReactNode; home?: boolean; footer?: boolean }) {
   return (
     <div className="flex min-h-svh flex-col">
       <header className="mx-auto flex h-[68px] w-full max-w-[1240px] items-center justify-between px-4 sm:px-7">
@@ -27,7 +28,7 @@ export function PublicShell({ children, home = true }: { children: React.ReactNo
         <ThemeToggle />
       </header>
       <div className="flex-1">{children}</div>
-      <LegalFooter />
+      {footer && <LegalFooter />}
     </div>
   )
 }

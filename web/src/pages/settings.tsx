@@ -178,8 +178,7 @@ export function SettingsPage({ me }: { me: Me }) {
 
         <Panel title="Delete account">
           <p className="text-sm text-muted-foreground">
-            Erases your account and everything in it at once, and withdraws your consent. Backups become unreadable straight
-            away and are purged within 30 days.
+            Erases your account and everything in it at once, for good, and withdraws your consent.
           </p>
           <Button variant="destructive" className="mt-4 h-11" onClick={() => setDeleting(true)}>
             <Trash2Icon /> Delete account
