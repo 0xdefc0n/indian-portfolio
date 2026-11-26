@@ -40,7 +40,19 @@ API (it spends about 5 of the day's calls).
   (redacted output).
 
 ## Privacy
-Statements are parsed in memory and never kept as PDFs. Parsed data is compressed, then encrypted with a per-household
-key before it's stored. Logs carry opaque ids, counts and timings only, never PANs, names, amounts or holdings. The
-dashboard shows PANs masked. Real statements for development live only in git-ignored folders (`data/`,
-`engine/tests/private/`). Details: plan §0, §8 and §12.
+PocketFolio is a hosted, multi-user app now: data is stored on Cloudflare, not on your machine. What users are told is
+in the app at `/privacy`, `/terms` and `/security` (`web/src/pages/legal.tsx`), and they accept a consent notice before
+any data route works.
+
+- **PDFs are never kept.** A statement is parsed in memory. Only when the engine is busy is it parked, encrypted, for
+  at most 24 hours (usually minutes), then deleted.
+- **Encrypted per household.** Parsed statements, snapshots, member names, PANs and SIP changes are sealed with
+  AES-256-GCM under a per-household key, which is itself wrapped by a key-encryption key held as a Worker secret.
+- **Users' rights.** Settings has *Download my data* (everything, decrypted, as JSON) and *Delete account*
+  (crypto-shredding: the key goes first, then the R2 objects and every row; backups become unreadable at once and are
+  purged within 30 days). Accounts unused for 3 years get an email, then are erased 48 hours later.
+- **Logs** carry opaque ids, counts and timings only, never PANs, names, emails, folios, amounts or holdings. The
+  security log (`audit_event`) is kept 400 days. The UI shows PANs masked (`AB••••••4F`).
+- **Development data.** Real statements live only in git-ignored folders (`data/`, `engine/tests/private/`) and are
+  never committed or printed.
+- **Incidents:** [docs/INCIDENT_RESPONSE.md](docs/INCIDENT_RESPONSE.md). Design: plan §0, §8 and §12.

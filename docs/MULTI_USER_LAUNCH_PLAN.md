@@ -801,7 +801,10 @@ bucket or D1 export is useless on its own.
   Time Travel (30 days) can still hold rows, but they're useless without the DEK. Say this in the privacy policy:
   "backups purged within 30 days".
   ✅ M6: `shredHousehold()` in `src/lib/household.ts` (blanks `dek_wrapped`, deletes both prefixes, then the household
-  row, which cascades). M14 calls it from `DELETE /api/account` and also removes the user and session rows.
+  row, which cascades). ✅ M14: `deleteAccount()` (`src/lib/account.ts`) calls it from `DELETE /api/account` and the
+  inactivity erasure, then removes every other row naming the user. A test scans every table and column for the
+  user id, household id and email afterwards: only `audit_event` remains. Sealed `/daily` entries in the edge cache
+  expire within a day and are unreadable without the DEK.
 
 ---
 
@@ -830,8 +833,8 @@ export async function assertMember(c, memberId: string) {
 |---|---|---|---|
 | `GET/POST /api/auth/*` | – | Better Auth (Google, magic link, device flow, sessions) | |
 | `POST /api/session/adopt` | device token | QR cookie bridge (§7.4) | only if needed |
-| `GET /api/me` | ✅ | `{ user: {name, email, image}, household: {id, created_at}, consent_ok, limits, usage }` | |
-| `POST /api/consent` | ✅ | record acceptance of `notice_version` | Blocks every `/api/*` data route until accepted (403 `consent_required`) |
+| `GET /api/me` | ✅ | `{ user: {name, email, image}, household: {id, created_at}, consent_ok, limits, usage }` | ✅ M14: also `notice_version`; `consent_ok` comes from the session, else one D1 check. 401 when the household is gone (a deleted account's other devices hold a valid cookie cache for ≤ 5 min). `limits`/`usage` not built yet |
+| `POST /api/consent` | ✅ | record acceptance of `notice_version` | Blocks every `/api/*` data route until accepted (403 `consent_required`). ✅ M14: body `{ notice_version, adult: true }` (`409 notice_changed`, `400 adult_required`). Writes `consent`, stamps every session of the user and re-issues the cookie cache, so gating costs 0 D1 queries on a consented request. A session without the current version pays one query (`UPDATE session … WHERE EXISTS consent … RETURNING`), which also covers consent given on another device. `requireSession()` gates by default; `/me`, `/consent`, export and delete pass `consent: false` |
 | `GET /api/config` | – | `{ features: { cdsl_fetch: false, kfintech_auto: false, stocks: true }, kfintech_form_url, turnstile_site_key }` | replaces today's sandbox config |
 | `GET /api/members` | ✅ | list `{id, name, pan_masked, statements: [{id, kind, as_of, holdings_count}]}` | ✅ M6: returns `{ members: [...] }`; `name` is null until a statement or a rename sets it. One D1 batch |
 | `PATCH /api/members/:id` | ✅ | rename (display override) | ✅ M6: `{ name }`, 1–60 characters; replaces the sealed `display_name_enc` (a later statement doesn't overwrite it, M7) |
@@ -848,8 +851,8 @@ export async function assertMember(c, memberId: string) {
 | `POST /api/sips/cancel` | ✅ | cancel one SIP in PocketFolio for good (§10.5.1, M12): `{ member_id, isin, folio, confirm: true }` | `assertMember`; no undo; ≤ 200 changes per household |
 | `GET /api/market/status` | – | `{ latest_nav_date, coverage_pct, final }` for the "NAVs updating" hint | public, cacheable for 5 min |
 | `POST /api/kfintech/guide` | ✅ | `{ member_id or pan, password? }` → stores a pending password, returns `{ password, form_url }` | the manual path only (D9); same validation as `kfintech.password_problem`. **The one place a PAN may be typed:** KFintech's own form needs it, and a new person isn't a member yet. Picking an existing member needs no PAN |
-| `GET /api/account/export` | ✅ | JSON download of all parsed statements and members (decrypted) | DPDP access right; 3 per day |
-| `DELETE /api/account` | ✅ + recent auth | delete everything (§8), sign out all sessions, send the confirmation email | requires a session less than 10 min old or a fresh magic link |
+| `GET /api/account/export` | ✅ | JSON download of all parsed statements and members (decrypted) | DPDP access right; 3 per day. ✅ M14: fresh session (D1), `429 export_limit`. Streams: account, sign-in methods, sessions (IP, UA), consents, household, members (name, PAN), SIP changes, uploads, pending passwords, the user's security log, then each statement's parsed JSON. Leaves out internal keys and lookup values (DEK, HMACs, R2 keys, hashes, tokens) and snapshots (derived) |
+| `DELETE /api/account` | ✅ + recent auth | delete everything (§8), sign out all sessions, send the confirmation email | requires a session less than 10 min old or a fresh magic link. ✅ M14: `{ confirm: "DELETE" }` (`400 confirm_required`), `403 reauth_required` past 10 min (the UI signs out and back in, then reopens the dialog). `shredHousehold()`, then quota, pending codes/links, the per-address rate-limit row and the user (cascades session, account, consent), a second prefix sweep, and the email. `audit_event` rows stay (ids only, 400 days) |
 | `POST /api/cdsl/*`, `POST /api/kfintech/request` | – | **Not deployed** (D8, D9). Return 404. | Keep the old code in `engine/legacy/` or git history |
 
 Errors: JSON `{ error: { code, message } }`. Messages are safe to show and never contain PANs or file names.
@@ -1115,7 +1118,7 @@ Engine `/parse` timeout: 60 s. On timeout return `parse_timeout`, and count it i
 | `nav-ingest`, `nav-backfill`, `nav-repair` | see §10.4 | Official AMFI NAVs for every scheme into D1, several times a night. This replaces the old per-scheme mfapi refresh. |
 | `snapshot-prebuild` | triggered when a market day becomes final (§10.4), at the latest `0 5 * * *` | Enqueue a rebuild for households with `last_active_at` in the last 7 days, with `sendBatch` (100 per call). The `rebuild` queue's `max_concurrency` and the `EngineBatch` cap set the drain rate, so this is the nightly burst handled at a steady pace. The per-message delay is spread over 0–30 min to smooth the wake-ups. |
 | `stocks-monthly` | `0 5 10-20 * *` | §10.3.1. ✅ M11: until the AMC scrapers ship (M18) this cron is replaced by a daily BharatStock run, `stocks` at `0 4 * * *` (09:30 IST: after BharatStock's UTC day resets, before the 10:00 IST final NAV run and prebuild). M18 adds the monthly scrape cron back. |
-| `cleanup` | `0 21 * * *` | Expire pending passwords and old quota windows. Drop `tracked_scheme` rows unseen for 90 days. Delete finished `parse_job` rows older than 7 days and expired Better Auth `session` / `verification` rows. Send DPDP inactivity notices and do erasures (§12). |
+| `cleanup` | `0 21 * * *` | Expire pending passwords and old quota windows. Drop `tracked_scheme` rows unseen for 90 days. Delete finished `parse_job` rows older than 7 days and expired Better Auth `session` / `verification` rows. Send DPDP inactivity notices and do erasures (§12). ✅ M14 (`src/lib/cleanup.ts`): also expired `rate_limit` rows, `audit_event` older than 400 days, SIP skips older than the member's newest statement, `nav_run` older than 90 days, and `stock_match` rows unwanted for 90 days with every `fund_portfolio` row (and R2 blob) no wanted row reads. Inactivity: 500 notices and 50 erasures per run. Each step fails alone (logged by class) |
 | `tmp-sweep` | `15 * * * *` (hourly) | Parked PDFs past `expires_at`: delete the R2 object, set `expired`. Re-enqueue `queued` jobs whose message was lost (no change for 15 min). Counts only in logs. ✅ M8: also deletes leftover PDFs of finished jobs and recounts the parked PDFs for `EnginePool` (§10.1 D, as built). |
 
 #### 10.3.1 Stocks inside funds: AMC scraper first, BharatStock fallback (D10)
@@ -1540,6 +1543,13 @@ days and months; the refusal says which counter and the seconds until it resets.
 
 The owner must provide the legal entity name, grievance officer name and email, and jurisdiction. Get a lawyer to
 review before launch.
+
+✅ M14 as built: the pages and the consent screen are in `web/src/pages/legal.tsx` and `consent.tsx`. The notice
+version is `NOTICE_VERSION` in `worker/src/lib/consent.ts` and `web/src/lib/legal.ts`; they must match, and a bump asks
+everyone again. The legal details are **placeholders** in `web/src/lib/legal.ts` (`placeholders: true` shows a draft
+banner). The footer (every page, including /login) carries "Not investment advice" and the legal links. The tax-harvest
+and health-check panels aren't in the UI yet; the fund dialog's tax split has the disclaimer inline. The emails ("Your
+account was deleted", the inactivity notice) are in `src/lib/email.ts`. Breach plan: `docs/INCIDENT_RESPONSE.md`.
 
 **Also rewrite the README "Privacy" section.** "Everything stays on this machine" is no longer true.
 

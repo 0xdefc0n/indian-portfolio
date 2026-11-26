@@ -97,9 +97,14 @@ for (let i = 0; i < 60 && !otp; i++) {
 }
 check('sign-in email arrived', !!otp)
 check('signed in with the code', (await api('/api/auth/sign-in/email-otp', { body: { email, otp } })).status === 200)
-const me = (await (await api('/api/me')).json()) as { household?: { id: string } }
+const me = (await (await api('/api/me')).json()) as { household?: { id: string }; consent_ok?: boolean; notice_version?: string }
 const hid = me.household?.id ?? ''
 if (!check('GET /api/me has a household', !!hid)) process.exit(1)
+// M14: data routes need the privacy notice accepted (403 consent_required until then).
+if (me.consent_ok === false) {
+  const c = await api('/api/consent', { body: { notice_version: me.notice_version, adult: true } })
+  if (!check('accepted the privacy notice', c.status === 200, String(c.status))) process.exit(1)
+}
 
 // 2. Upload: no password first (D19), then each candidate as the typed password.
 const bytes = readFileSync(pdfPath)
