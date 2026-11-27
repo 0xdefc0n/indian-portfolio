@@ -40,8 +40,8 @@ M22–M33 added from the owner's todo; Claude chose their order by ease and depe
 | M20 | Stock and ETF prices | 8 | done (ships to staging with the next merge) | 2026-11-27 | `f74adf8`, `a57e63c` | Built to plan §10.4.5. **Source changed:** NSE/BSE refuse automated clients (NSE drops the connection, BSE answers 403), so prices come from Upstox's public candle API by ISIN (owner's choice, 2026-11-27). Its terms for commercial use are unclear, so Upstox's written OK (or a licensed feed) is now an M17 owner item. ETFs were already at their AMFI NAV (CDSL tags INF ISINs as funds); M20 adds shares and bonds. Tests: engine 91 pass + 6 private skipped (golden: the synthetic share revalued from ₹1,500 to the 24 Nov close); worker 406 pass + 1 opt-in skipped, incl. 12 in `test/prices.test.ts` (saved Upstox answers: parse, a re-run writes 0 rows, intraday then official close, bonus replaces the series, NSE→BSE→none, retries, cron chunks, cleanup, gateway, a build tracking a pre-M20 statement's share and following up) and 2 new daily-returns cases (a share counts; a bonus-sized jump is flagged); web build, lint and 42 tests pass. Not yet checked: a live staging run. On the first deploy, each household's next build (the stale read after the SNAPSHOT_VERSION bump) tracks its shares and asks for their history, and the follow-up build prices them. Later: corporate actions after the newest statement (M21), stocks in XIRR (M21), Upstox rate limits in the M16 load test |
 | M28 | Benchmark score for funds and stocks | 8 | done (ships to staging with the next merge; niftyindices.com consent is an M17 owner item) | 2026-11-27 | `6508843` (draft), `454f454` | Built to plan §21.4 after the owner's answers (niftyindices.com TRI, owner getting consent; stocks vs Nifty 50 + sector line; 10-year stock history; index/hybrid/debt unscored). **Method from research** (owner asked): Morningstar's MRAR(γ=2) excess over 3/5/10 years with its 100 / 60:40 / 50:30:20 weights, plus freefincal's rolling 3/5-year consistency; 3-year minimum like Morningstar and Value Research; identical to the index = 50. **Calibration on public data** (257 direct-growth equity schemes, 203 scored): 87 ahead / 70 close / 46 behind, median 64. ✅ VERIFY: the M9 parse keeps categories (two AMFI vocabularies, both mapped); niftyindices answers 16 years per call for all 23 indices but **stalls user agents containing "fetch" or starting "Mozilla"** (`market-data/1.0` used); stock sectors from M11/M18 disclosures. Tests: worker 424 pass + 1 skipped (18 new in `test/score.test.ts`: MRAR, 50 for identical, 90/10 golden, caps, weights by months, young/gaps, month-ends, every category header of today's NAVAll, the saved niftyindices answer, ingest re-run writes 0, plan/score/upsert, IDCW → growth option, share with sector line, the build carrying scores and rebuilding on a change; M20's first fetch now 10 years); engine 92 pass + 6 private skipped (golden gains `score: null`); web build, lint and 48 tests pass. Screens checked headless at 360 px and 1440 px, dark and light: 0 page errors, no overflow. Not yet checked: a live staging run. Later: see plan §21.4 |
 | M21 | Stock gains: buy prices and corporate actions | 8 | done (ships to staging with the next merge; NSE terms are an M17 owner item) | 2026-11-27 | `ad75fdf` (draft), `cbf9fa9` | Built to plan §21.6 after the owner's answers (both tradebook import and manual average price; dividends as income only, not in XIRR; tax P&L import later; 7 brokers now: Zerodha, Groww, Angel One, Upstox, ICICI Direct, Paytm Money, Dhan). ✅ VERIFY: NSE's corporate-action API answers `market-data/1.0` (a "Mozilla" agent stalls, as niftyindices does), 2010–today in one call per year, 96% of rows with an ISIN; `EQUITY_L.csv` answers too. **Engine:** `parsers/tradebook.py` (header-driven, 7 profiles, Groww's encrypted Excel opens with the member's PAN via `msoffcrypto-tool`), `equity.py` (FIFO with splits and bonuses as they happen, bonus = nil-cost lot from the ex-date, intraday left out, CDSL units reconcile (partial / sold elsewhere), trades after the statement, manual price in today's terms, grandfathering from the 31 Jan 2018 high, dividends, merger/demerger banner, fund-NAV-stopped banner, units over time in today's terms). Stock gains share the ₹1.25 lakh exemption with funds. **Worker:** `market/corp.ts` (07:00 IST, last 30 days + one-time backfill from 2010, weekly symbols), migrations `market/0010`, `app/0013`; `POST/GET/DELETE /api/tradebooks`, `PUT/DELETE /api/stocks/cost`; tradebooks are direct path only (503 `engine_busy` + SPA retry, never parked); member delete and export cover them; `SNAPSHOT_VERSION` 7. **Web:** Add statement → Broker tab; holding dialog → Buy price, Dividends, banner. Tests: engine 124 pass + 7 skipped (18 parser tests on synthetic files per broker incl. encrypted Groww; 14 golden equity tests: FIFO with split and bonus, split after the statement, merger banner, partial/sold-elsewhere, intraday, old ISIN by symbol, grandfathering, shared exemption); worker 438 pass + 1 skipped (6 NSE parser/job on saved NSE rows, 8 tradebook/cost API); web 45 pass, build ok, headless 360/1280 px 0 page errors. **Private tradebooks: none provided**, so the counts-only check skips. Kotak, HDFC Securities, SBI Securities and Motilal Oswal wait for one real export header each |
-| M23 | Competitor and market research | 9 | todo | | | |
-| M24 | Premium design refresh, logo and dashboard redesign | 9 | todo | | | |
+| M23 | Competitor and market research | 9 | done (waiting for the owner to read the recommendations, `docs/research/COMPETITORS.md` §8) | 2026-11-27 | `31e90c4` | `docs/research/COMPETITORS.md` plus 4 sourced appendices in `docs/research/competitors/`: 17 products (INDmoney, Kuvera, ET Money, Groww, Zerodha, Value Research, MProfit, Wealthy, Tickertape, Portfolio360, Velthian, MF Central, PowerUp, NaviPlan, MFPA, Dezerv), 11 FIRE calculators, keyword clusters, 8 blog titles, subreddits and forums with their promotion rules. **Finding:** every big app needs an account (or OTP/KYC) per family member, and no one documents eCAS + CAS de-duplication across members; Portfolio360 is the closest twin but charges for the household view. Feature matrix, positioning line, landing sections + 3 headlines + 11 FAQ (M25), dashboard input (M24), FIRE inputs/outputs/method (M27). **Limits:** Reddit, etmoney.com and valueresearchonline.com refused the research tools (complaints from app stores, Trustpilot, forums and Reddit mirrors instead); no search volumes (autocomplete only). A manual Reddit pass is needed before M30 |
+| M24 | Premium design refresh, logo and dashboard redesign | 9 | blocked (needs owner: OK on staging after the next merge) | 2026-11-28 | `475ca47`, `8e59ef7`, `5920cd3`, `3f312f3` | Owner approved the look on 2026-11-27: the "Glass tile" wordmark, the owner's stacked app icon, dashboard direction A in its second version (Family with Everyone first, asset-class cards first, no statement dates, slow motion). The canvas was deleted at the owner's request; a local backup is in git-ignored `temp/design/`. **Built:** v2 tokens in `web/src/index.css` (gold `--primary` text-safe, `--gold` fill, glass, `cat-fd/ppf/epf/silver`, champagne `cat-gold`), `.glass`/`.glass-hero`/`.lift`/`.btn-gold`, gold default `Button`, sentence-case labels; `Wordmark` in both headers; `scripts/brand.mjs` (`npm run icons`) writes outlined wordmark SVGs, the app icon, favicon svg/ico, the PWA, maskable and Apple icons and the 120 px Google consent logo (replaces pwa-assets-generator); the new dashboard layout (`components/family.tsx`); theme colours `#0B0D12`/`#F5F3EE`; store screenshots regenerated (0 page errors). Plan §13 rewritten as the v2 reference and the `CLAUDE.md` rule updated. **Checks:** headless on demo data, 11 pages (4 dashboard tabs, members, settings, privacy, terms, security, login, link) at 360 and 1280 px, dark and light: 0 page errors, 0 overflow, 0 touch targets under 44 px on the phone (pre-existing small targets fixed: theme toggle, member switch, view-all links, Add buttons, XIRR info, transaction filters, Show details); consent screen 0 errors (its checkbox's 44 px target is its label); Add-statement dialog both sizes 0 errors. Contrast: every text pair AA in both themes (lowest 5.07:1). Web build and lint (only the 3 existing warnings) pass, 45 web tests pass. Later: email templates still use the old colours (`worker/src/lib/email.ts`); the login pitch copy waits for M25; `@vite-pwa/assets-generator` is now unused in devDependencies; a fund dialog wasn't opened in the headless run |
 | M25 | Landing page and SEO foundation | 9 | todo | | | |
 | M26 | Blog | 9 | todo | | | |
 | M27 | FIRE calculator | 9 | todo | | | |
@@ -62,7 +62,8 @@ Status values: `todo` · `in progress` · `blocked (needs owner: …)` · `done`
    the whole plan every time.
 2. **Pick the milestone:** the one the owner named, otherwise the first row in the Status table that isn't `done`.
    Never skip ahead. If the previous milestone isn't `done`, finish or unblock it first.
-3. **Check "Needs from owner".** If anything is missing, stop before writing code. Set the row to
+3. **Check "Needs from owner"**, and any **"From M23"** line (open decisions from the research): ask the owner
+   those questions before building. If anything is missing, stop before writing code. Set the row to
    `blocked (needs owner: …)` and tell the owner exactly what's needed and how to provide it. **Secrets go in a
    git-ignored file (`worker/.dev.vars`, `.env`), never in chat.** Claude reads them from there and never prints them.
 4. **Branch:** all milestones are built on the single branch **`multi-user`**, one or more commits per milestone, with
@@ -401,6 +402,10 @@ dashboard, applied to every existing screen.
 **Read:** plan §13, §21.1, `docs/research/COMPETITORS.md` (M23).
 **Needs from owner:** OK on the design direction (a written spec with 2–3 rendered options of the dashboard and the logo,
 in the first session), then OK on the final look.
+**From M23 (ask the owner in the first session, with the design options):** read `docs/research/COMPETITORS.md` §5 (dashboard) and §3
+(feature matrix). Ask: (1) add a per-member split under the family total? (2) add "last statement: <date>" per member
+(Claude's idea, not seen elsewhere)? (3) asset-class cards for every type instead of a funds-first layout? The logo and
+copy must not echo Portfolio360's "Your family's wealth, in one number" (§3).
 **Build:**
 - **Logo:** a two-part wordmark in SVG: "Pocket" in plain text, "folio" on a gold, glass-like rounded block. Light and
   dark versions, a square mark, the favicon, the PWA icons and maskable icons (replacing the M15 ones), and the Google
@@ -440,6 +445,11 @@ household, no user row is created, and no email is queued), and phone-to-desktop
 **Read:** plan §21.2, §13 (v2 from M24), `docs/research/COMPETITORS.md`.
 **Needs from owner:** OK on the landing copy (drafted from M23). OK to install the SEO skill after Claude's review (below).
 A Google Search Console property for `pocketfolio.in` (owner verifies it by DNS), done any time before M17.
+**From M23 (ask the owner before writing copy):** read `docs/research/COMPETITORS.md` §1 (positioning), §4 (landing) and §7 (keywords,
+AI search). Ask: (1) is the positioning line OK? (2) headline A, B or C (§4)? (3) the answer to FAQ 6, "is it free, and
+how do you make money?" (D7 says free with fair-use limits; pricing waits for M31), (4) robots.txt: allow
+`OAI-SearchBot` and `PerplexityBot`; block or allow `GPTBot` and `Google-Extended` (training)? Never invent proof
+points (§4).
 **Build:**
 - **SEO tooling:** read the third-party code of github.com/AgricIDaniel/claude-seo (and what claudeseoskill.com
   describes) in full. Check that it sends nothing anywhere and runs nothing unexpected. Write the review into
@@ -462,6 +472,9 @@ light.
 **Goal:** helpful articles that bring families to PocketFolio from Google and AI search.
 **Read:** plan §21.2, `docs/research/COMPETITORS.md` (keywords), `docs/research/SEO.md`.
 **Needs from owner:** a review of each draft. **A post goes live only after the owner's OK.**
+**From M23:** the 8 post titles and the keyword clusters are in `docs/research/COMPETITORS.md` §7, and the sources per post are in
+`docs/research/competitors/keywords-communities.md` §1. Ask the owner which posts to draft first, and recheck the CAS
+password rules against official sources before post 1 (published guides disagree, §3).
 **Build:**
 - `/blog` and `/blog/<slug>`, prerendered from Markdown in the repo, with a `draft` flag that keeps a post out of the
   build, the sitemap and the feed. RSS feed, `Article` structured data, author and dates, related posts, a call to
@@ -479,6 +492,11 @@ OK'd each post that goes live.
 plan from the user's real portfolio after sign-in.
 **Read:** plan §21.3, `docs/research/COMPETITORS.md` (FIRE section).
 **Needs from owner:** OK on the plan section (inputs, formulas, outputs) written in the first session.
+**From M23 (ask the owner when writing the plan section):** read `docs/research/COMPETITORS.md` §6 and
+`docs/research/competitors/fire-calculators.md` §4. Ask: (1) the defaults that have no source: healthcare and education
+inflation (10%?), gold return (8%?), Monte Carlo volatility; (2) include the optional Monte Carlo "stress test" tab?
+(3) bootstrap from the Nifty TRI history M28 stores, given the niftyindices.com terms question? Verify the EPF
+withdrawal tax rules before modelling them.
 **Build:**
 - **Public `/fire`** (prerendered, SEO page): age, retirement age, monthly expenses, current savings, monthly SIP,
   expected returns, inflation, withdrawal rate. Out: FIRE number, years to FI, the SIP needed, a corpus chart, and Lean,
@@ -496,6 +514,11 @@ checked at 360 px and desktop, dark and light.
 **Goal:** a plan for reaching families on Reddit, LinkedIn and X, with the first posts ready.
 **Read:** plan §21.11, `docs/research/COMPETITORS.md` (communities), the published blog posts.
 **Needs from owner:** the owner creates the accounts and posts. **Claude never posts, comments or creates accounts.**
+**From M23:** communities, sizes and promotion rules are in `docs/research/COMPETITORS.md` §7 and
+`docs/research/competitors/keywords-communities.md` §3, but come from third-party directories: Reddit refused the
+research tools. **First ask the owner to check each subreddit's sidebar and rules in a browser** (or OK installing the
+last30days skill for Reddit only, with no browser cookies or Reddit login). Under SEBI's 2025 rules, posts are education
+only.
 **Build:** `docs/marketing/SOCIAL_PLAYBOOK.md`:
 - **Reddit:** which subreddits, each one's self-promotion rules (read and cited), a comment-first approach, cadence,
   and what gets accounts banned.
@@ -653,6 +676,9 @@ additions: the public pages (landing, blog, `/fire`) get CSP and caching checks,
 **Needs from owner:** read-only access to the Cloudflare usage dashboard numbers (Claude reads them through the API with
 the existing token). OK on the recommendation.
 **Order:** after M16 (owner, 2026-11-27), so it uses measured numbers, not estimates.
+**From M23:** competitor prices are in `docs/research/COMPETITORS.md` §2 (free, ₹499, ₹999 + ₹749 per member, ₹1,499, ₹2,500, ₹2,999,
+₹18,000+), and what paid tiers sell (tax pack, family view, scores, FIRE, AI) is in §1.5. The study also answers M25's
+FAQ 6, "how do you make money?".
 **Build:** `docs/research/COST_AND_PRICING.md`:
 - Cost per user per year at 1k, 10k and 100k users, by line item (containers, D1, R2, queues, email, BharatStock,
   domains), from the load tests and staging usage. Update plan §18.

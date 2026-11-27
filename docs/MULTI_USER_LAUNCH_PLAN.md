@@ -17,9 +17,8 @@ be verified during implementation are marked ⚠️ VERIFY, with what to check a
    amounts or holdings. Logs carry only opaque IDs (`user_id`, `household_id`, `statement_id`), counts, durations and
    error class names. This already applies in the current code (see `README.md` → Privacy) and continues.
    When testing with real PDFs, print counts and ok/fail only.
-2. **Keep the UI consistent with the current design.** The bento overview, dark-first theme, and mobile layout from
-   commit `089634a` are the design system **until M24**, which replaces it with the premium design system v2 (D21,
-   §21.1). From then on, v2 is the system everything reuses. Every new screen (login, onboarding, members, settings, link device,
+2. **Keep the UI consistent with design system v2** (D21, §13, built in M24). It replaced the `089634a` bento
+   system. Everything reuses it. Every new screen (login, onboarding, members, settings, link device,
    legal pages, "coming soon" states) must reuse it. See §13.
 3. **Work phase by phase (§17).** Finish each phase's acceptance criteria before starting the next. Commit per phase.
 4. **Tenant isolation is non-negotiable.** Every read and write of user data goes through one helper that takes the
@@ -1714,21 +1713,35 @@ account was deleted", the inactivity notice) are in `src/lib/email.ts`. Breach p
 
 ---
 
-## 13. Frontend changes (keep the current design)
+## 13. Frontend changes (design system v2)
 
-> **From M24 (D21), design system v2 replaces the rules below** (tokens, fonts, cards). M24 rewrites this section with
-> the v2 reference. The layout, mobile, states and accessibility rules stay.
+> **Design system v2 (D21, M24, approved by the owner 2026-11-27)** is the reference for every screen. The decisions
+> and the contrast table are in [docs/design/M24_DESIGN_SPEC.md](design/M24_DESIGN_SPEC.md).
 
-**Design consistency is required:**
-- **Tokens and theme.** Use the tokens in `web/src/index.css` only: `bg-surface`, `ring-border`, `text-muted-foreground`,
-  gain/loss and the chart colours. No new colours or fonts. IBM Plex Sans, the existing radius scale, and dark-first
-  with the existing `ThemeToggle`.
-- **Cards.** Build cards with the existing `Panel` pattern (`rounded-2xl bg-surface p-4 ring-1 ring-border sm:p-6`)
-  and the bento grid from the overview. Use the existing shadcn components in `web/src/components/ui/` (Button,
-  Dialog, Input, Label, Badge, Tabs, Segmented, Skeleton, Tooltip, Sonner toasts) and `lucide-react` icons.
-- **Mobile.** New pages work at 360 px wide and reuse `BottomNav` and `TabNav` patterns. Touch targets are at least 44 px.
-- **States.** Every screen has loading (Skeleton), empty and error states that look like the current ones.
-- **Accessibility.** Labels on inputs, focus rings, AA contrast in both themes.
+**Design system v2: use it, don't invent around it:**
+- **Tokens.** Only the tokens in `web/src/index.css`: `background`, `surface`/`surface-2`, `foreground`,
+  `muted-foreground`, `border`, `gain`/`loss`, `chart-*`, `cat-*` (incl. `cat-fd`/`cat-ppf`/`cat-epf`/`cat-silver`).
+  **Gold is the brand and the single action colour.** `--primary` is the text-safe gold (links, active states, focus
+  rings: `#E2B65E` dark, `#86600F` light); `--gold` is the fill (the default `Button`, the `btn-gold` class, the logo).
+  Gold never means gain: gains stay green, losses rose. No other new colours. Every text pair is AA in both themes.
+- **Type.** Geist (self-hosted), tabular figures everywhere. Hero figure 44/64 px, section titles 16 px semibold, card
+  figures 18–24 px, body 14–14.5 px, small 12–13 px. Labels (`.eyebrow`) are sentence case, 13 px, muted.
+- **Surfaces.** `.glass` for every card (`Panel`, `Cell`): translucent in dark with a 1 px ring and a top highlight;
+  white with a soft shadow in light. `.glass-hero` (one per page) adds a gold hairline. Radius 24 px for cards, 20 px
+  for small cards, 12 px for buttons. `.lift` on cards that open something.
+- **Motion.** Slow and smooth: `.rise` 0.9 s staggered on load, rolling numbers, the value chart draws in over 1.8 s,
+  hover lifts 0.5 s. Everything stops under `prefers-reduced-motion` (rule in `index.css`).
+- **Logo.** `Wordmark` (`components/brand.tsx`) everywhere; the files come from `web/scripts/brand.mjs`
+  (`npm run icons`): outlined wordmark SVGs (dark and light), the owner's stacked app icon, the favicon (the gold block
+  alone), PWA and maskable icons, the Apple icon and the 120 px Google consent-screen logo
+  (`public/brand/google-consent-120.png`).
+- **Dashboard.** The hero (number, chart that drives it, return strip) with Family (Everyone first, tap to focus) and
+  Upcoming SIPs beside it; then "Where it's invested" (one card per asset class over an allocation bar); then the
+  at-a-glance tiles, holdings, allocation, fixed income, gold & silver and transactions.
+- **Mobile.** 360 px first, `BottomNav`, touch targets at least 44 px (`pointer-coarse:` sizes where a control is
+  smaller on desktop).
+- **States.** Every screen has loading (Skeleton), empty and error states in the same system.
+- **Accessibility.** Labels on inputs, focus rings in gold, AA contrast in both themes.
 
 **New screens and changes:**
 1. **`/login`**:

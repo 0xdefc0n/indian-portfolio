@@ -42,7 +42,7 @@ export function TransactionsView({ items, members, showMember }: { items: Activi
             aria-checked={filter === f.id}
             onClick={() => setFilter(f.id)}
             className={cn(
-              "rounded-full px-3.5 py-1.5 text-sm ring-1 transition-colors",
+              "rounded-full px-3.5 py-1.5 text-sm ring-1 transition-colors pointer-coarse:min-h-11",
               "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
               filter === f.id ? "bg-foreground text-background ring-foreground" : "bg-surface ring-border hover:bg-muted",
             )}

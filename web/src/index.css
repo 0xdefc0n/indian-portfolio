@@ -11,6 +11,8 @@
     --font-sans: 'Geist Variable', system-ui, sans-serif;
     --font-mono: 'Geist Mono Variable', ui-monospace, monospace;
     --color-surface-2: var(--surface-2);
+    --color-gold: var(--gold);
+    --color-gold-foreground: var(--gold-foreground);
     --color-gain: var(--gain);
     --color-loss: var(--loss);
     --color-surface: var(--surface);
@@ -54,37 +56,46 @@
     --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-/* Bento: dark-first ink, Geist, tabular figures */
+/* Design system v2 (M24, plan §13): warm ink, gold glass, Geist, tabular figures.
+   Every text pair passes WCAG AA in both themes (docs/design/M24_DESIGN_SPEC.md §4).
+   --primary is the text-safe gold (links, active states, focus); --gold is the fill (primary buttons, logo). */
 :root {
-    --background: #F2F3F7;
-    --foreground: #12141C;
+    --background: #F5F3EE;
+    --foreground: #16150F;
     --surface: #FFFFFF;
-    --surface-2: #F6F7FB;
+    --surface-2: #FAF8F4;
     --card: #FFFFFF;
-    --card-foreground: #12141C;
+    --card-foreground: #16150F;
     --popover: #FFFFFF;
-    --popover-foreground: #12141C;
-    --primary: #3D4DB7;
+    --popover-foreground: #16150F;
+    --primary: #86600F;
     --primary-foreground: #FFFFFF;
-    --secondary: #ECEEF5;
-    --secondary-foreground: #12141C;
-    --muted: #ECEEF5;
-    --muted-foreground: #5B6176;
-    --accent: #E7E9F5;
-    --accent-foreground: #12141C;
-    --destructive: #B23A55;
-    --border: rgb(18 20 28 / 0.08);
-    --input: rgb(18 20 28 / 0.14);
-    --ring: #3D4DB7;
-    --gain: #0B7A5F;
-    --loss: #B23A55;
-    --dots: rgb(18 20 28 / 0.07);
-    --shadow: rgb(18 20 28 / 0.14);
-    --chart-1: #3D4DB7;
-    --chart-2: #1F9E89;
-    --chart-3: #C2477A;
-    --chart-4: #C99A1E;
-    --chart-5: #9B5DB5;
+    --gold: #D9A847;
+    --gold-hi: #EBC679;
+    --gold-foreground: #1C1406;
+    --secondary: #EFECE5;
+    --secondary-foreground: #16150F;
+    --muted: #EFECE5;
+    --muted-foreground: #5F5A4F;
+    --accent: #EBE7DE;
+    --accent-foreground: #16150F;
+    --destructive: #B0344F;
+    --border: rgb(22 21 15 / 0.08);
+    --input: rgb(22 21 15 / 0.14);
+    --ring: #86600F;
+    --gain: #0A7656;
+    --loss: #B0344F;
+    --dots: rgb(22 21 15 / 0.06);
+    --shadow: rgb(60 45 10 / 0.18);
+    --glass: #FFFFFF;
+    --glass-hover: #FFFFFF;
+    --highlight: rgb(255 255 255 / 0);
+    --hairline: rgb(134 96 15 / 0.55);
+    --chart-1: #B8892E;
+    --chart-2: #1F8F7E;
+    --chart-3: #B8467A;
+    --chart-4: #3E7CC0;
+    --chart-5: #7A5BB5;
     --cat-large: #3D4DB7;
     --cat-largemid: #6E79D6;
     --cat-mid: #1F9E89;
@@ -94,51 +105,62 @@
     --cat-elss: #3E86C9;
     --cat-hybrid: #7A86A3;
     --cat-debt: #93A9BB;
-    --cat-gold: #C99A1E;
+    --cat-gold: #D6C69A;
+    --cat-silver: #7C8394;
     --cat-intl: #2A9BB0;
-    --cat-stocks: #4B5167;
+    --cat-stocks: #3E7CC0;
+    --cat-fd: #1F8F7E;
+    --cat-ppf: #0F5F54;
+    --cat-epf: #6FC0B0;
     --cat-other: #A3A7BA;
     --radius: 0.875rem;
     --sidebar: #FFFFFF;
-    --sidebar-foreground: #12141C;
-    --sidebar-primary: #3D4DB7;
+    --sidebar-foreground: #16150F;
+    --sidebar-primary: #86600F;
     --sidebar-primary-foreground: #FFFFFF;
-    --sidebar-accent: #ECEEF5;
-    --sidebar-accent-foreground: #12141C;
-    --sidebar-border: rgb(18 20 28 / 0.08);
-    --sidebar-ring: #3D4DB7;
+    --sidebar-accent: #EFECE5;
+    --sidebar-accent-foreground: #16150F;
+    --sidebar-border: rgb(22 21 15 / 0.08);
+    --sidebar-ring: #86600F;
 }
 
 .dark {
-    --background: #0A0C14;
-    --foreground: #ECEEF5;
-    --surface: #11141E;
-    --surface-2: #171B27;
-    --card: #11141E;
-    --card-foreground: #ECEEF5;
-    --popover: #1C2130;
-    --popover-foreground: #ECEEF5;
-    --primary: #A3ADFF;
-    --primary-foreground: #0A0C14;
-    --secondary: #1C2130;
-    --secondary-foreground: #ECEEF5;
-    --muted: #1A1E2B;
-    --muted-foreground: #8E94AA;
-    --accent: #1F2433;
-    --accent-foreground: #ECEEF5;
-    --destructive: #FF8496;
-    --border: rgb(255 255 255 / 0.075);
+    --background: #0B0D12;
+    --foreground: #EEEAE1;
+    --surface: #13161D;
+    --surface-2: #1A1E27;
+    --card: #13161D;
+    --card-foreground: #EEEAE1;
+    --popover: #1A1E27;
+    --popover-foreground: #EEEAE1;
+    --primary: #E2B65E;
+    --primary-foreground: #1C1406;
+    --gold: #D9A847;
+    --gold-hi: #EBC679;
+    --gold-foreground: #1C1406;
+    --secondary: #1A1E27;
+    --secondary-foreground: #EEEAE1;
+    --muted: #181B23;
+    --muted-foreground: #A29D92;
+    --accent: #1F232D;
+    --accent-foreground: #EEEAE1;
+    --destructive: #FF8A8F;
+    --border: rgb(255 255 255 / 0.08);
     --input: rgb(255 255 255 / 0.12);
-    --ring: #A3ADFF;
-    --gain: #4ADE9A;
-    --loss: #FF8496;
-    --dots: rgb(255 255 255 / 0.06);
-    --shadow: rgb(0 0 0 / 0.5);
-    --chart-1: #A3ADFF;
-    --chart-2: #3FD8B0;
-    --chart-3: #FF7EAE;
-    --chart-4: #F2CB5C;
-    --chart-5: #C99BFF;
+    --ring: #E2B65E;
+    --gain: #4FD69C;
+    --loss: #FF8A8F;
+    --dots: rgb(255 255 255 / 0.05);
+    --shadow: rgb(0 0 0 / 0.6);
+    --glass: rgb(255 255 255 / 0.035);
+    --glass-hover: rgb(255 255 255 / 0.055);
+    --highlight: rgb(255 255 255 / 0.05);
+    --hairline: rgb(226 182 94 / 0.75);
+    --chart-1: #E2B65E;
+    --chart-2: #5FC4B4;
+    --chart-3: #F08DB5;
+    --chart-4: #7FB2E8;
+    --chart-5: #B9A3F0;
     --cat-large: #8391FF;
     --cat-largemid: #B5BCFF;
     --cat-mid: #3FD8B0;
@@ -148,18 +170,22 @@
     --cat-elss: #6CB8FF;
     --cat-hybrid: #A2AAC4;
     --cat-debt: #BFD0DC;
-    --cat-gold: #F2CB5C;
+    --cat-gold: #E9D8A6;
+    --cat-silver: #B7BCC8;
     --cat-intl: #5CD2E6;
-    --cat-stocks: #C3C7DA;
+    --cat-stocks: #7FB2E8;
+    --cat-fd: #5FC4B4;
+    --cat-ppf: #3E9E90;
+    --cat-epf: #A8E6DA;
     --cat-other: #6C7194;
-    --sidebar: #11141E;
-    --sidebar-foreground: #ECEEF5;
-    --sidebar-primary: #A3ADFF;
-    --sidebar-primary-foreground: #0A0C14;
-    --sidebar-accent: #1A1E2B;
-    --sidebar-accent-foreground: #ECEEF5;
-    --sidebar-border: rgb(255 255 255 / 0.075);
-    --sidebar-ring: #A3ADFF;
+    --sidebar: #13161D;
+    --sidebar-foreground: #EEEAE1;
+    --sidebar-primary: #E2B65E;
+    --sidebar-primary-foreground: #1C1406;
+    --sidebar-accent: #1A1E27;
+    --sidebar-accent-foreground: #EEEAE1;
+    --sidebar-border: rgb(255 255 255 / 0.08);
+    --sidebar-ring: #E2B65E;
 }
 
 @layer base {
@@ -183,9 +209,23 @@
 }
 @layer components {
   /* small uppercase label */
-  .eyebrow { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-foreground); }
+  /* small label: sentence case in v2 (calmer than mono capitals) */
+  .eyebrow { font-size: 13px; font-weight: 450; color: var(--muted-foreground); }
+  /* v2 glass surface: translucent card, 1 px ring, top highlight (dark); white card with a soft shadow (light) */
+  .glass { background: var(--glass); box-shadow: inset 0 0 0 1px var(--border), inset 0 1px 0 var(--highlight), 0 18px 40px -32px var(--shadow); }
+  /* the hero: a touch brighter, with a gold hairline along the top edge */
+  .glass-hero { position: relative; background: linear-gradient(180deg, color-mix(in srgb, var(--glass-hover) 100%, transparent), var(--glass)); box-shadow: inset 0 0 0 1px var(--border), inset 0 1px 0 var(--highlight), 0 50px 100px -50px var(--shadow); }
+  .glass-hero::after { content: ""; position: absolute; left: 40px; right: 40px; top: 0; height: 1px; pointer-events: none; background: linear-gradient(90deg, transparent, var(--hairline), transparent); }
+  /* cards that open something lift slowly on hover */
+  .lift { transition: transform .5s cubic-bezier(.2,.8,.2,1), box-shadow .5s ease, background-color .5s ease; }
+  @media (hover: hover) {
+    .lift:hover { transform: translateY(-3px); background-color: var(--glass-hover); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent), inset 0 1px 0 var(--highlight), 0 28px 56px -32px var(--shadow); }
+  }
+  .lift:active { transform: scale(.985); }
+  /* primary action: gold glass fill */
+  .btn-gold { background: linear-gradient(180deg, var(--gold-hi), var(--gold)); color: var(--gold-foreground); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.45); }
   /* staggered entrance */
-  .rise { animation: rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+  .rise { animation: rise 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
   /* dotted texture fading out from the top-right corner */
   .dot-texture::before {
     content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
@@ -193,7 +233,7 @@
     mask-image: linear-gradient(200deg, #000 0%, transparent 45%);
   }
   /* chart line reveals left to right */
-  .draw-in .recharts-surface { animation: draw-in 1.3s cubic-bezier(0.3, 0.7, 0.2, 1) 0.2s backwards; }
+  .draw-in .recharts-surface { animation: draw-in 1.8s cubic-bezier(0.3, 0.7, 0.2, 1) 0.2s backwards; }
   /* height animation for expanders: wrap content in .expander > div */
   .expander { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.45s cubic-bezier(0.3, 0.8, 0.2, 1); }
   .expander > * { overflow: hidden; min-height: 0; }

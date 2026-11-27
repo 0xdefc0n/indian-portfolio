@@ -63,7 +63,7 @@ export function Segmented<T extends string>({ options, value, onChange, kind, la
             className={cn(
               "relative z-10 shrink-0 whitespace-nowrap rounded-lg font-medium transition-colors duration-300",
               "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-              size === "sm" ? "px-3 py-1.5 text-[13px]" : "px-3.5 py-1.5 text-[13.5px]",
+              size === "sm" ? "px-3 py-1.5 text-[13px] pointer-coarse:min-h-11" : "px-3.5 py-1.5 text-[13.5px] pointer-coarse:min-h-11",
               on ? "text-foreground" : "text-muted-foreground hover:text-foreground",
             )}
           >

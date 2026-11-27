@@ -274,9 +274,9 @@ export function AddStatementDialog({
       {trigger !== null && (
         <DialogTrigger asChild>
           {trigger ?? (
-            <Button>
-              <PlusIcon />
-              Add statement
+            <Button aria-label="Add statement" className="h-11 rounded-xl px-4 max-sm:w-11 max-sm:px-0">
+              <PlusIcon className="size-[18px]" />
+              <span className="max-sm:sr-only">Add statement</span>
             </Button>
           )}
         </DialogTrigger>

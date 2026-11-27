@@ -219,7 +219,7 @@ export function MetalsFootnote() {
 
 export function AddAssetButton({ onClick, label = "Add" }: { onClick: () => void; label?: string }) {
   return (
-    <Button variant="outline" size="sm" className="h-9" onClick={onClick}>
+    <Button variant="outline" size="sm" className="h-9 pointer-coarse:h-11" onClick={onClick}>
       <PlusIcon />
       {label}
     </Button>
