@@ -1464,7 +1464,9 @@ last seen, latest stored date, backfilled / checked / failed times), `stock_pric
 ROWID), and `price_state` (a version bumped whenever closes change; part of the snapshot inputs hash).
 
 **Jobs** (`worker/src/market/prices.ts`, on `pf-market`, max_concurrency 4 → ≤ 4 Upstox requests at a time):
-- **Upload:** the INE/IN9 ISINs a statement holds go to `tracked_equity`; ones with no history yet get a `prices`
+- **Upload and build:** the INE/IN9 ISINs a statement holds go to `tracked_equity`, and every snapshot build does the
+  same for the shares it holds (last seen refreshed at most daily). So statements uploaded before M20 get priced, and
+  a household that doesn't upload for 90 days keeps its shares tracked. Ones with no history yet get a `prices`
   message straight away (asked again after 6 h if it never ran).
 - **Cron:** the 23:00 IST nav-ingest run (today's close, from the intraday candle after 16:00 IST) and the 07:00 IST
   one (the exchange's official close replaces it) send every ISIN seen in 90 days, 50 per message.

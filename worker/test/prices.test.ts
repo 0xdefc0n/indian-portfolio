@@ -5,6 +5,7 @@ import { createExecutionContext, createMessageBatch, createScheduledController, 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import worker from '../src/index'
 import { cleanup } from '../src/lib/cleanup'
+import { requestRebuild } from '../src/lib/snapshot'
 import { handleMarketBatch, type MarketMessage, marketQueue } from '../src/market/jobs'
 import {
   ADJUST_TOLERANCE,
@@ -27,6 +28,9 @@ import intraday from './fixtures/upstox/intraday-INE002A01018-20261127.json?raw'
 import invalid from './fixtures/upstox/invalid-instrument.json?raw'
 import rel from './fixtures/upstox/nse-INE002A01018-202611.json?raw'
 import tcs from './fixtures/upstox/nse-INE467B01029-202611.json?raw'
+import { FAKE_PAN } from './helpers/pdf-fixture'
+import { deliverRebuilds, fakeBuild, storedStatement, takeRebuilds } from './helpers/snapshot'
+import { addMember, newHousehold } from './helpers/tenant'
 
 vi.setConfig({ testTimeout: 30_000 })
 afterEach(() => vi.restoreAllMocks())
@@ -244,5 +248,33 @@ describe('the market gateway', () => {
     for (const path of ['/px/INF204KB17I5.json', '/px/INE002A01018.json/x', `/px/${REL.toLowerCase()}.json`, '/px/']) {
       expect((await serveMarket(env, new Request(`http://market.internal${path}`))).status).toBe(403)
     }
+  })
+})
+
+describe('builds (snapshot)', () => {
+  it('a build tracks the shares it holds (statements from before M20), sends their history, and follows up', async () => {
+    const h = await newHousehold('prices-build')
+    const m = await addMember(h, FAKE_PAN, 'SYNTHETIC SHARES')
+    await storedStatement(h, m, { isins: ['INF000A01011', REL] }) // stored without the upload path: not tracked
+    const sent: MarketMessage[] = []
+    vi.spyOn(marketQueue, 'sendBatch').mockImplementation(async (_e, msgs) => void sent.push(...msgs))
+    const calls = fakeBuild()
+    await requestRebuild(env, h.householdId)
+    const [first] = await deliverRebuilds(takeRebuilds(h.householdId))
+    expect(sent.filter((x) => x.type === 'prices')).toEqual([{ type: 'prices', isins: [REL] }])
+    const market = (calls[0] as unknown as { market: { price_key: string; price_refresh: string[] } }).market
+    expect(market.price_refresh).toEqual([REL]) // still downloading: read fresh, and built again later
+    expect(market.price_key).toMatch(/\|px\d+$/)
+    expect(first).toMatchObject({ outcome: 'built', requeue: { msg: { force: true, followups: 1 } } })
+
+    // the history arrives; the follow-up build has nothing pending and no new send
+    upstox({ NSE: { [REL]: candlesOf(rel) } })
+    await runPrices(env, [REL], { now: Date.now(), ...noSleep })
+    sent.length = 0
+    await requestRebuild(env, h.householdId)
+    const [second] = await deliverRebuilds(takeRebuilds(h.householdId))
+    expect((calls.at(-1) as unknown as { market: { price_refresh: string[] } }).market.price_refresh).toEqual([])
+    expect(sent.filter((x) => x.type === 'prices')).toEqual([])
+    expect(second?.requeue).toBeUndefined()
   })
 })

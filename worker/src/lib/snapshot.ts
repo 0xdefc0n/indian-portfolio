@@ -24,7 +24,8 @@ import { HOLIDAY_LOOKBACK_DAYS, holidayDates } from '../market/holidays'
 import { BENCHMARK_CODE } from '../market/store'
 import { requestAmc } from '../market/amc-scrape'
 import { mffKey } from '../market/mfforecast'
-import { EQUITY_ISIN, pricesPending, priceVersion } from '../market/prices'
+import { sendPrices } from '../market/jobs'
+import { EQUITY_ISIN, pricesPending, priceVersion, trackEquities } from '../market/prices'
 import { apiKey, budgetLeft, recordWants, requestStocks, stockData, stocksEnabled, stocksVersion } from '../market/stocks'
 import { blobKeys, deleteBlobs, getJsonBlob, isUuid } from './blob'
 import { FLAG_GZIP, hmacHex, toBytes, type Vault } from './crypto'
@@ -433,7 +434,12 @@ async function buildRequest(env: Env, vault: Vault, used: StatementRow[], member
   }
   const stocks = await stockData(env, [...isins], now)
   // Shares and bonds (M20): the engine reads their exchange-price series; ones still downloading are read fresh.
-  const pending = await pricesPending(env, [...isins].filter((i) => EQUITY_ISIN.test(i)))
+  // Builds track them too (last seen refreshed daily), so statements uploaded before M20, or long ago, stay priced.
+  const shares = [...isins].filter((i) => EQUITY_ISIN.test(i))
+  await trackEquities(env, shares, now)
+    .then((ask) => sendPrices(env, ask))
+    .catch((e) => console.error('tracked_equity_failed', (e as Error).name))
+  const pending = await pricesPending(env, shares)
   const overrides = []
   for (const o of overrideRows) {
     const sip = JSON.parse(await vault.openText(sipFieldKey(o.id), o.sip_enc)) as { isin: string; folio: string | null }
