@@ -1,4 +1,4 @@
-// /api/assets (plan §21.12, D28, M19): fixed deposits, PPF and EPF entered by hand. Inputs only: the SPA computes
+// /api/assets (plan §21.12, D28, M19; §21.5, M29): fixed deposits, PPF, EPF, gold, silver and SGBs entered by hand. Inputs only: the SPA computes
 // the values with the shared lib/manual-assets.ts. All behind the session and the tenant guard; another household's
 // asset or member id is a 404.
 import { type Context, Hono } from 'hono'
@@ -6,6 +6,8 @@ import { createAsset, deleteAsset, listAssets, updateAsset } from '../lib/assets
 import { auditStatement } from '../lib/audit'
 import { ApiError, notFound } from '../lib/errors'
 import { RATES } from '../lib/rates'
+import { istToday } from '../market/amfi'
+import { cachedMetalRates } from '../market/metals'
 import { tenant } from '../lib/tenant'
 import { requireSession } from '../middleware/session'
 import type { AppBindings } from '../types'
@@ -21,7 +23,13 @@ async function bodyOf(c: Context<AppBindings>): Promise<Record<string, unknown>>
 
 assetRoutes.get('/assets', signedIn, async (c) => {
   c.header('Cache-Control', 'no-store')
-  return c.json({ assets: await listAssets(tenant(c)), rates: RATES })
+  // Gold and silver rates (M29) from the edge cache; a market DB hiccup leaves them out (the SPA shows "Rate
+  // unavailable") rather than failing the list.
+  const [assets, metals] = await Promise.all([
+    listAssets(tenant(c)),
+    cachedMetalRates(c.env, istToday(), (p) => c.executionCtx.waitUntil(p)).catch(() => undefined),
+  ])
+  return c.json({ assets, rates: metals ? { ...RATES, metals } : RATES })
 })
 
 assetRoutes.post('/assets', signedIn, async (c) => {

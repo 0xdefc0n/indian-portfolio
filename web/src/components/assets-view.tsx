@@ -1,10 +1,10 @@
 // The Assets tab: everything the family owns, one kind at a time. The boxes at the top are the switch (mutual funds,
 // ETFs, stocks & bonds, FD/PPF/EPF): picking one shows only that kind, with its own allocation strip, so nothing has
 // to be scrolled past. SIPs sit with the mutual funds (they're a mutual-fund thing). Gold (M29) and live stock prices
-// (M20) join the same switch later. Same Panel, table and list components as before (§13).
+// (M20) join the same switch later. Gold & silver (M29): SGBs from statements plus gold, silver and SGBs added by hand. Same Panel, table and list components as before (§13).
 import type { AssetDialogState } from "@/components/asset-dialogs"
 import { AllocationStrip, type Slice } from "@/components/allocation-strip"
-import { AddAssetButton, FixedIncome } from "@/components/fixed-income"
+import { AddAssetButton, FixedIncome, GoldSilver } from "@/components/fixed-income"
 import { HoldingsTable } from "@/components/holdings-table"
 import { PageTitle, Panel } from "@/components/panel"
 import { SipTable, sipSummary } from "@/components/sip-table"
@@ -18,7 +18,9 @@ import { cn } from "@/lib/utils"
 type Props = {
   holdings: Holding[]
   fixed: AssetRow[]
-  /** Funds, shares and FD/PPF/EPF together. */
+  /** Gold, silver and SGBs added by hand. */
+  metals: AssetRow[]
+  /** Funds, shares, FD/PPF/EPF and gold together. */
   total: number
   /** The kind shown; null: the first kind that has anything. */
   kind: AssetKind | null
@@ -39,11 +41,12 @@ type Props = {
   onAssetsChanged: () => void
 }
 
-const ORDER: AssetKind[] = ["mf", "etf", "stock", "fixed"]
+const ORDER: AssetKind[] = ["mf", "etf", "stock", "fixed", "gold"]
 const TABLE_LABELS = {
   mf: { item: "Fund", price: "NAV" },
   etf: { item: "ETF", price: "Price" },
   stock: { item: "Stock or bond", price: "Price" },
+  gold: { item: "SGB in demat", price: "Gold rate" },
 } as const
 
 function Stat({ label, children }: { label: string; children: React.ReactNode }) {
@@ -76,7 +79,7 @@ function KindTabs({ groups, total, current, onPick }: {
   onPick: (k: AssetKind) => void
 }) {
   return (
-    <div role="tablist" aria-label="Kind of asset" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div role="tablist" aria-label="Kind of asset" className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
       {groups.map((g) => {
         const on = g.kind === current
         return (
@@ -106,15 +109,18 @@ function KindTabs({ groups, total, current, onPick }: {
 }
 
 export function AssetsView(p: Props) {
-  const byKind: Record<Exclude<AssetKind, "fixed">, Holding[]> = { mf: [], etf: [], stock: [] }
+  const byKind: Record<Exclude<AssetKind, "fixed">, Holding[]> = { mf: [], etf: [], stock: [], gold: [] }
   for (const h of p.holdings) byKind[holdingKind(h)].push(h)
   const fixedValue = p.fixed.reduce((s, r) => s + r.v.value, 0)
+  const metalValue = p.metals.reduce((s, r) => s + r.v.value, 0)
   const sum = (hs: Holding[]) => hs.reduce((s, h) => s + h.value, 0)
   const groups = ORDER.map((k) =>
-    k === "fixed" ? { kind: k, value: fixedValue, count: p.fixed.length } : { kind: k, value: sum(byKind[k]), count: byKind[k].length },
-  ).filter((g) => g.count > 0 || g.kind === "fixed") // FD/PPF/EPF always shows, so there's a way to add the first one
+    k === "fixed" ? { kind: k, value: fixedValue, count: p.fixed.length }
+    : k === "gold" ? { kind: k, value: sum(byKind.gold) + metalValue, count: byKind.gold.length + p.metals.length }
+    : { kind: k, value: sum(byKind[k]), count: byKind[k].length },
+  ).filter((g) => g.count > 0 || g.kind === "fixed" || g.kind === "gold") // these always show, so there's a way to add the first one
   const current = groups.some((g) => g.kind === p.kind) ? p.kind! : (groups[0]?.kind ?? "fixed")
-  const count = p.holdings.length + p.fixed.length
+  const count = p.holdings.length + p.fixed.length + p.metals.length
   const pick = (k: AssetKind) => {
     p.onCategory(null)
     p.onKind(k)
@@ -127,9 +133,32 @@ export function AssetsView(p: Props) {
         {p.fixed.length > 0 && <AllocationStrip slices={slicesOf(p.fixed.map((r) => ({ category: r.category, value: r.v.value })))} active={p.hovered} onHover={p.onHover} selected={null} onSelect={() => undefined} />}
         <Panel
           title={KIND_LABEL.fixed}
-          aside={p.fixed.length ? <span className="flex items-center gap-3">{inr(fixedValue)}<AddAssetButton onClick={() => p.onAssetAction({ kind: "add" })} /></span> : undefined}
+          aside={p.fixed.length ? <span className="flex items-center gap-3">{inr(fixedValue)}<AddAssetButton onClick={() => p.onAssetAction({ kind: "add", group: "fixed" })} /></span> : undefined}
         >
           <FixedIncome rows={p.fixed} memberName={p.assetMemberName} failed={p.assetsFailed} onAction={p.onAssetAction} onChanged={p.onAssetsChanged} />
+        </Panel>
+      </>
+    )
+  } else if (current === "gold") {
+    const demat = byKind.gold
+    const items = [...demat.map((h) => ({ category: h.category, value: h.value })), ...p.metals.map((r) => ({ category: r.category, value: r.v.value }))]
+    body = (
+      <>
+        {items.length > 0 && <AllocationStrip slices={slicesOf(items)} active={p.hovered} onHover={p.onHover} selected={null} onSelect={() => undefined} />}
+        {demat.length > 0 && (
+          <Panel title="SGBs in demat" aside={`${demat.length} · ${inr(sum(demat))}`}>
+            <HoldingsTable holdings={demat} total={p.total} members={p.members} showMember={p.showMember} highlight={p.hovered}
+              itemLabel={TABLE_LABELS.gold.item} priceLabel={TABLE_LABELS.gold.price} />
+            <p className="mt-3 border-t pt-3 text-[12.5px] text-muted-foreground">
+              From your CDSL statement, valued at today's gold rate (what RBI pays at maturity), not the exchange price. Interest is paid to your bank every six months.
+            </p>
+          </Panel>
+        )}
+        <Panel
+          title={demat.length ? "Held outside demat" : KIND_LABEL.gold}
+          aside={p.metals.length ? <span className="flex items-center gap-3">{inr(metalValue)}<AddAssetButton onClick={() => p.onAssetAction({ kind: "add", group: "metal" })} /></span> : undefined}
+        >
+          <GoldSilver rows={p.metals} memberName={p.assetMemberName} failed={p.assetsFailed} onAction={p.onAssetAction} onChanged={p.onAssetsChanged} />
         </Panel>
       </>
     )

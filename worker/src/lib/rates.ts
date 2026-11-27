@@ -9,6 +9,8 @@
 // Past the end of a table the last rate is used and marked provisional (EPF for FY 2026-27 is declared next year).
 // Before its start the first rate is used: balances that old are rare, and the value is approximate anyway.
 
+import type { MetalRates } from './metals'
+
 export type RateTable = {
   checked: string
   /** PPF: the rate (% a year) from each date (a quarter's first day) until the next entry. Sorted by `from`. */
@@ -17,6 +19,8 @@ export type RateTable = {
   ppfUntil: string
   /** EPF: the rate (% a year) of each financial year, keyed by its start year (2025 = FY 2025-26). */
   epf: Record<string, number>
+  /** Gold and silver ₹/g (M29): from the market DB, added by `GET /api/assets`. Absent: no rate (values unknown). */
+  metals?: MetalRates
 }
 
 export const RATES: RateTable = {

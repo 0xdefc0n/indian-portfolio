@@ -6,7 +6,7 @@ import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react
 import { toast } from "sonner"
 
 import { AddStatementDialog } from "@/components/add-statement-dialog"
-import { type AssetDialogState, AssetDialogs } from "@/components/asset-dialogs"
+import { type AssetDialogState, AssetDialogs, type AssetGroup } from "@/components/asset-dialogs"
 import { AddAssetButton, FixedIncomeList } from "@/components/fixed-income"
 import { ProcessingList } from "@/components/jobs"
 import { PageShell } from "@/components/app-header"
@@ -77,7 +77,7 @@ function DeleteDialog({ member, assets, onClose, onDone }: { member: MemberSumma
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const n = member?.statements.length ?? 0
-  const what = [n && `${n} statement${n === 1 ? "" : "s"}`, assets && `${assets} FD, PPF or EPF entr${assets === 1 ? "y" : "ies"}`].filter(Boolean).join(" and ")
+  const what = [n && `${n} statement${n === 1 ? "" : "s"}`, assets && `${assets} entr${assets === 1 ? "y" : "ies"} added by hand (FD, PPF, EPF, gold or silver)`].filter(Boolean).join(" and ")
 
   async function confirm() {
     if (!member) return
@@ -162,12 +162,15 @@ function DeleteStatementDialog({ target, onClose, onDone }: {
   )
 }
 
-function AssetSection({ rows, onAdd, onAction, onChanged }: { rows: AssetRow[]; onAdd: () => void; onAction: (s: AssetDialogState) => void; onChanged: () => void }) {
+function AssetSection({ rows, onAdd, onAction, onChanged }: { rows: AssetRow[]; onAdd: (g: AssetGroup) => void; onAction: (s: AssetDialogState) => void; onChanged: () => void }) {
   return (
     <div className="mt-4 border-t pt-3">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="text-sm font-medium text-muted-foreground">FD, PPF and EPF</h3>
-        <AddAssetButton onClick={onAdd} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-sm font-medium text-muted-foreground">FD, PPF, EPF and gold</h3>
+        <span className="flex gap-2">
+          <AddAssetButton onClick={() => onAdd("fixed")} label="FD, PPF, EPF" />
+          <AddAssetButton onClick={() => onAdd("metal")} label="Gold, silver" />
+        </span>
       </div>
       {rows.length ? <FixedIncomeList rows={rows} onAction={onAction} onChanged={onChanged} compact /> : <p className="mt-1 text-sm text-muted-foreground">None yet.</p>}
     </div>
@@ -261,14 +264,14 @@ export function MembersPage({ me }: { me: Me }) {
     if (adding && window.location.search) window.history.replaceState(null, "", window.location.pathname)
   }, [adding])
 
-  // FD, PPF and EPF (M19), valued in the browser with the shared calculator.
+  // FD, PPF and EPF (M19), gold, silver and SGBs (M29), valued in the browser with the shared calculator.
   const assets = useAssets()
   const rows = useMemo(() => valued(assets.assets ?? [], assets.rates), [assets.assets, assets.rates])
   const [assetDlg, setAssetDlg] = useState<AssetDialogState>(null)
   const pick = useMemo(() => (members ?? []).map((m) => ({ id: m.id, name: displayName(m) })), [members])
   const unassigned = rows.filter((r) => !r.member_id || !members?.some((m) => m.id === r.member_id))
   const section = (memberId: string | null, list: AssetRow[]) => (
-    <AssetSection rows={list} onAdd={() => setAssetDlg({ kind: "add", member: memberId })} onAction={setAssetDlg} onChanged={assets.reload} />
+    <AssetSection rows={list} onAdd={(group) => setAssetDlg({ kind: "add", member: memberId, group })} onAction={setAssetDlg} onChanged={assets.reload} />
   )
 
   const n = members?.length ?? 0

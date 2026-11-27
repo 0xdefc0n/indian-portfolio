@@ -1,9 +1,12 @@
-// /api/assets (plan §21.12, M19): create, list, edit and delete FD/PPF/EPF; the tenant guard (another household gets
-// 404); no plaintext amounts, rates or dates in D1; limits; the member cascade; export and account deletion.
+// /api/assets (plan §21.12, M19; §21.5, M29): create, list, edit and delete FD/PPF/EPF and gold/silver/SGB; the tenant
+// guard (another household gets 404); no plaintext amounts, rates, weights or dates in D1; limits; the member cascade;
+// export and account deletion; the gold and silver rates served with the list.
 // All values synthetic.
 import { env } from 'cloudflare:test'
 import { describe, expect, it, vi } from 'vitest'
 import { assetFieldKey } from '../src/lib/assets'
+import { istToday } from '../src/market/amfi'
+import { metalCacheKey } from '../src/market/metals'
 import { SealError } from '../src/lib/crypto'
 import { LIMITS } from '../src/lib/limits'
 import { todayIst } from '../src/lib/manual-assets'
@@ -17,6 +20,18 @@ vi.setConfig({ testTimeout: 30_000 })
 const FD = { amount: 7_654_321, rate: 7.35, start: '2019-03-17', tenure: { years: 5, months: 0, days: 0 } }
 const PPF = { balance: 4_321_987, as_of: '2023-06-19', opened_year: 2013, yearly: 1_234_567 }
 const EPF = { balance: 2_468_013, as_of: '2024-08-23', monthly: 1_357_913 }
+const GOLD = { grams: 123.457, purity: 916, paid: 3_456_789, bought: '2018-09-14' }
+const SGB = { series: '2017-18-IV', grams: 7193, bought: { on: '2022-04-18', price: 5917.37 } }
+
+/** Two synthetic gold and silver rate days in the market DB (public data; the edge cache keys on today's date). */
+async function seedMetalRates() {
+  await env.MARKET.batch([
+    env.MARKET.prepare("INSERT OR REPLACE INTO metal_rate (metal, date, rate, etfs) VALUES ('gold', 20200131, 4100.5, 3), ('gold', 20261126, 12800, 5)"),
+    env.MARKET.prepare("INSERT OR REPLACE INTO metal_rate (metal, date, rate, etfs) VALUES ('silver', 20261126, 154.3, 5)"),
+  ])
+  await caches.default.delete(metalCacheKey(env, istToday())) // an earlier test's list cached none
+
+}
 
 type AssetJson = { id: string; type: string; member_id: string | null; inputs: Record<string, unknown>; created_at: number; updated_at: number }
 const send = (h: Household, path: string, method: string, body?: unknown) => call(path, { jar: h.jar, method, body })
@@ -25,7 +40,8 @@ async function add(h: Household, body: unknown) {
   expect(res.status).toBe(201)
   return (await res.json<{ asset: AssetJson }>()).asset
 }
-const list = async (h: Household) => (await (await call('/api/assets', { jar: h.jar })).json<{ assets: AssetJson[]; rates: { checked: string } }>())
+type Rates = { checked: string; metals?: { gold: [string, number][]; silver: [string, number][] } }
+const list = async (h: Household) => (await (await call('/api/assets', { jar: h.jar })).json<{ assets: AssetJson[]; rates: Rates }>())
 
 describe('/api/assets', () => {
   it('creates, lists, edits and deletes (inputs only, normalised; the rate table comes along)', async () => {
@@ -54,6 +70,26 @@ describe('/api/assets', () => {
     expect((await list(h)).assets.map((a) => a.id)).toEqual([ppf.id])
     const events = await env.DB.prepare("SELECT event FROM audit_event WHERE household_id = ?1 AND event LIKE 'asset_%' ORDER BY id").bind(h.householdId).all<{ event: string }>()
     expect(events.results.map((e) => e.event)).toEqual(['asset_added', 'asset_added', 'asset_changed', 'asset_changed', 'asset_changed', 'asset_deleted'])
+  })
+
+  it('gold, silver and SGBs: inputs normalised, the rates come with the list (month-ends plus recent days)', async () => {
+    await seedMetalRates()
+    const h = await newHousehold('assets-gold')
+    const gold = await add(h, { type: 'gold', inputs: GOLD })
+    expect(gold.inputs).toEqual(GOLD)
+    const silver = await add(h, { type: 'silver', inputs: { grams: 1000 } })
+    expect(silver.inputs).toEqual({ grams: 1000, purity: 999, paid: null, bought: null })
+    const sgb = await add(h, { type: 'sgb', inputs: SGB })
+    expect(sgb.inputs).toEqual({ ...SGB, redeemed: null })
+    // Redeemed early: before year 5 is refused, naming the field
+    const early = await send(h, `/api/assets/${sgb.id}`, 'PATCH', { inputs: { ...SGB, redeemed: '2019-01-01' } })
+    expect(await early.json()).toMatchObject({ code: 'bad_input', field: 'redeemed' })
+    expect((await send(h, '/api/assets', 'POST', { type: 'sgb', inputs: { ...SGB, series: '1999-00-I' } })).status).toBe(400)
+
+    const got = await list(h)
+    expect(got.assets.map((a) => a.type)).toEqual(['gold', 'silver', 'sgb'])
+    expect(got.rates.metals?.gold).toEqual(expect.arrayContaining([['2020-01-31', 4100.5], ['2026-11-26', 12800]]))
+    expect(got.rates.metals?.silver).toEqual(expect.arrayContaining([['2026-11-26', 154.3]]))
   })
 
   it('GET is one D1 round trip', async () => {
@@ -126,7 +162,12 @@ describe('privacy', () => {
     await add(h, { type: 'fd', member_id: member, inputs: { ...FD, closed: { on: '2021-07-29', penalty: 1.5 } } })
     await add(h, { type: 'ppf', inputs: { ...PPF, overrides: [{ fy: 2031, amount: 1_111_193 }] } })
     await add(h, { type: 'epf', inputs: { ...EPF, stopped: '2025-02-27' } })
-    const needles = ['7654321', '7.35', '2019-03-17', '4321987', '2023-06-19', '1234567', '2468013', '2024-08-23', '1357913', '2021-07-29', '1111193', '2025-02-27']
+    await add(h, { type: 'gold', inputs: GOLD })
+    await add(h, { type: 'sgb', member_id: member, inputs: SGB })
+    const needles = [
+      '7654321', '7.35', '2019-03-17', '4321987', '2023-06-19', '1234567', '2468013', '2024-08-23', '1357913', '2021-07-29', '1111193', '2025-02-27',
+      '123.457', '3456789', '2018-09-14', '2022-04-18', '5917.37', '2017-18-IV',
+    ]
 
     const tables = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").all<{ name: string }>()
     expect(tables.results.map((t) => t.name)).toContain('manual_asset')
@@ -145,10 +186,15 @@ describe('privacy', () => {
     const member = await addMember(h, 'ABCDE1234F', 'SYNTHETIC HOLDER')
     const mine = await add(h, { type: 'ppf', member_id: member, inputs: PPF })
     const loose = await add(h, { type: 'fd', inputs: FD })
+    await seedMetalRates()
+    const gold = await add(h, { type: 'gold', inputs: GOLD })
 
     const text = await (await call('/api/account/export', { jar: h.jar })).text()
     const data = JSON.parse(text)
-    expect(data.manual_assets).toHaveLength(2)
+    expect(data.manual_assets).toHaveLength(3)
+    // valued at the market DB's latest gold rate: 123.457 g × 12,800 × 0.916 (today is after 26 Nov 2026)
+    expect(data.manual_assets[2]).toMatchObject({ id: gold.id, type: 'gold', name: 'Gold · 22K · 123.457 g', inputs: GOLD })
+    expect(data.manual_assets[2].approximate_value.value).toBeCloseTo(123.457 * 12_800 * 0.916, 4)
     expect(data.manual_assets[0]).toMatchObject({
       id: mine.id,
       type: 'ppf',
@@ -164,7 +210,7 @@ describe('privacy', () => {
 
     // the member goes, and with them their assets (the cascade); the household's own FD stays
     expect((await call(`/api/members/${member}`, { jar: h.jar, method: 'DELETE' })).status).toBe(200)
-    expect((await list(h)).assets.map((a) => a.id)).toEqual([loose.id])
+    expect((await list(h)).assets.map((a) => a.id)).toEqual([loose.id, gold.id])
 
     expect((await call('/api/account', { jar: h.jar, method: 'DELETE', body: { confirm: 'DELETE' } })).status).toBe(200)
     expect(await count('SELECT COUNT(*) AS n FROM manual_asset WHERE household_id = ?1', h.householdId)).toBe(0)

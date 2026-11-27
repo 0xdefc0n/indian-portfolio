@@ -62,13 +62,16 @@ function sumBy(hs: Holding[], key: (h: Holding) => string): Row[] {
  * Asset class and fund house splits, with plain-language concentration notes. `fixedIncome`: FD, PPF and EPF entered
  * by hand (M19), counted under Debt in the asset-class split only.
  */
-export function AllocationBreakdown({ holdings, total, fixedIncome = 0 }: { holdings: Holding[]; total: number; fixedIncome?: number }) {
+export function AllocationBreakdown({ holdings, total, fixedIncome = 0, gold = 0 }: { holdings: Holding[]; total: number; fixedIncome?: number; gold?: number }) {
   const classes = sumBy(holdings, (h) => h.asset_class)
-  if (fixedIncome > 0) {
-    const debt = classes.find((r) => r.label === "Debt")
-    if (debt) debt.value += fixedIncome
-    else classes.push({ label: "Debt", value: fixedIncome })
+  const addTo = (label: string, value: number) => {
+    if (value <= 0) return
+    const row = classes.find((r) => r.label === label)
+    if (row) row.value += value
+    else classes.push({ label, value })
   }
+  addTo("Debt", fixedIncome)
+  addTo("Gold & silver", gold) // gold, silver and SGBs added by hand (M29)
   const assets = classes.sort((x, y) => y.value - x.value).map((r) => ({ ...r, color: ASSET_COLOR[r.label] }))
   const amcs = sumBy(holdings, (h) => h.amc || "Other")
   const top = [...amcs].sort((a, b) => b.value - a.value)[0]
@@ -83,8 +86,9 @@ export function AllocationBreakdown({ holdings, total, fixedIncome = 0 }: { hold
       <div className="grid gap-8 md:grid-cols-2">
         <section>
           <h3 className="mb-3 text-sm font-medium text-muted-foreground">Asset class</h3>
-          <BarList rows={assets} total={total + fixedIncome} />
+          <BarList rows={assets} total={total + fixedIncome + gold} />
           {fixedIncome > 0 && <p className="mt-2 text-[13px] text-muted-foreground">Debt includes your FDs, PPF and EPF.</p>}
+          {gold > 0 && <p className="mt-2 text-[13px] text-muted-foreground">Gold &amp; silver includes what you added by hand.</p>}
         </section>
         <section>
           <h3 className="mb-3 text-sm font-medium text-muted-foreground">Fund house</h3>

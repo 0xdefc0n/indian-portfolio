@@ -1,7 +1,7 @@
 // The "Fixed income" list (plan §21.12, M19): each FD, PPF and EPF with its generated name, member, approximate value,
-// gain and the rate used. Used on the dashboard and, per member, on Members. Same row, badge and menu patterns as
-// the holdings and SIP lists (§13).
-import { fyLabel, fyOf, todayIst } from "@manual-assets"
+// gain and the rate used. Gold, silver and SGBs (§21.5, M29) use the same list, with the rate per gram. Used on the
+// dashboard and, per member, on Members. Same row, badge and menu patterns as the holdings and SIP lists (§13).
+import { fyLabel, fyOf, isMetalType, sgbSeries, todayIst } from "@manual-assets"
 import { Loader2Icon, MoreHorizontalIcon, PlusIcon } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { api, SignedOut } from "@/lib/api"
-import type { AssetRow } from "@/lib/assets"
+import { type AssetRow, perGram } from "@/lib/assets"
 import { day, inr, signed } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
@@ -20,9 +20,24 @@ const STATUS: Partial<Record<AssetRow["v"]["status"], string>> = {
   closed: "Closed early",
   stopped: "Contributions stopped",
   extended: "Past 15 years",
+  redeemed: "Redeemed early",
+}
+
+function metalDetail(r: AssetRow): string {
+  const parts = [perGram(r)]
+  if (r.type === "sgb") {
+    const s = sgbSeries(r.inputs.series)
+    if (r.v.status === "active" && r.v.maturity) parts.push(`matures ${day(r.v.maturity)}`)
+    if (s) parts.push(`${s.coupon}% interest`)
+    if (r.v.received > 0) parts.push(`${inr(r.v.received)} interest paid out`)
+  } else if (r.v.cost_unknown) {
+    parts.push("add what you paid to see the gain")
+  }
+  return parts.join(" · ")
 }
 
 function detail(r: AssetRow): string {
+  if (isMetalType(r.type)) return metalDetail(r)
   const parts = [`${r.v.rate}%`]
   if (r.type === "fd") {
     if (r.v.status === "active") parts.push(`matures ${day(r.v.maturity)}`)
@@ -48,7 +63,7 @@ function RowMenu({ row, onAction, onChanged }: { row: AssetRow; onAction: (s: As
       setBusy(false)
     }
   }
-  const act = (kind: "details" | "edit" | "close" | "stop" | "adjust" | "delete") => () => onAction({ kind, asset: row })
+  const act = (kind: "details" | "edit" | "close" | "stop" | "adjust" | "redeem" | "delete") => () => onAction({ kind, asset: row })
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -57,7 +72,7 @@ function RowMenu({ row, onAction, onChanged }: { row: AssetRow; onAction: (s: As
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuItem onSelect={act("details")}>Details and projection</DropdownMenuItem>
+        <DropdownMenuItem onSelect={act("details")}>{isMetalType(row.type) ? "Details and history" : "Details and projection"}</DropdownMenuItem>
         <DropdownMenuItem onSelect={act("edit")}>Edit</DropdownMenuItem>
         {row.type === "fd" &&
           (row.inputs.closed ? (
@@ -71,6 +86,12 @@ function RowMenu({ row, onAction, onChanged }: { row: AssetRow; onAction: (s: As
             <DropdownMenuItem onSelect={() => row.type === "epf" && undo({ ...row.inputs, stopped: null }, "Contributions back on")}>Contributions restarted</DropdownMenuItem>
           ) : (
             <DropdownMenuItem onSelect={act("stop")}>Contributions stopped</DropdownMenuItem>
+          ))}
+        {row.type === "sgb" &&
+          (row.inputs.redeemed ? (
+            <DropdownMenuItem onSelect={() => row.type === "sgb" && undo({ ...row.inputs, redeemed: null }, "No longer marked as redeemed")}>Not redeemed after all</DropdownMenuItem>
+          ) : (
+            row.v.status === "active" && <DropdownMenuItem onSelect={act("redeem")}>Redeemed early?</DropdownMenuItem>
           ))}
         <DropdownMenuSeparator />
         <DropdownMenuItem variant="destructive" onSelect={act("delete")}>Delete</DropdownMenuItem>
@@ -107,6 +128,7 @@ export function FixedIncomeList({ rows, memberName, onAction, onChanged, compact
                 <Badge variant="secondary">Approximate</Badge>
                 {status && <Badge variant="outline">{status}</Badge>}
                 {r.v.provisional && <Badge variant="outline">Provisional rate</Badge>}
+                {r.v.warnings.includes("stale_rate") && <Badge variant="outline">Older rate</Badge>}
               </div>
               <p className="mt-0.5 text-[13px] text-muted-foreground">
                 {who && <>{who} · </>}
@@ -116,7 +138,11 @@ export function FixedIncomeList({ rows, memberName, onAction, onChanged, compact
             </div>
             <div className="text-right">
               <div className="text-[14px] font-semibold tabular-nums">{inr(r.v.value)}</div>
-              <div className={cn("text-[13px] tabular-nums", r.v.gain >= 0 ? "text-gain" : "text-loss")}>{signed(r.v.gain, inr)}</div>
+              {r.v.cost_unknown ? (
+                <div className="text-[13px] text-muted-foreground">Gain unknown</div>
+              ) : (
+                <div className={cn("text-[13px] tabular-nums", r.v.gain >= 0 ? "text-gain" : "text-loss")}>{signed(r.v.gain, inr)}</div>
+              )}
             </div>
             <RowMenu row={r} onAction={onAction} onChanged={onChanged} />
           </li>
@@ -139,7 +165,7 @@ export function FixedIncome({ rows, memberName, failed, onAction, onChanged }: {
     return (
       <p className="text-sm text-muted-foreground">
         Track fixed deposits, PPF and EPF next to your funds.{" "}
-        <button className="-my-2 py-2 text-primary underline-offset-4 hover:underline" onClick={() => onAction({ kind: "add" })}>Add FD, PPF or EPF</button>
+        <button className="-my-2 py-2 text-primary underline-offset-4 hover:underline" onClick={() => onAction({ kind: "add", group: "fixed" })}>Add FD, PPF or EPF</button>
       </p>
     )
   }
@@ -152,6 +178,40 @@ export function FixedIncome({ rows, memberName, failed, onAction, onChanged }: {
         unless you set your own; FY {fyLabel(fy)} interest is credited on 31 March.
       </p>
     </div>
+  )
+}
+
+/** The dashboard's Gold & silver panel body (M29): the list, or a single line to add the first one. */
+export function GoldSilver({ rows, memberName, failed, onAction, onChanged }: {
+  rows: AssetRow[]
+  memberName?: (id: string | null) => string | undefined
+  failed: boolean
+  onAction: (s: AssetDialogState) => void
+  onChanged: () => void
+}) {
+  if (failed && !rows.length) return <p className="text-sm text-muted-foreground">Couldn't load your gold and silver. Reload to try again.</p>
+  if (!rows.length) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Track gold and silver you hold and Sovereign Gold Bonds outside demat, valued every day.{" "}
+        <button className="-my-2 py-2 text-primary underline-offset-4 hover:underline" onClick={() => onAction({ kind: "add", group: "metal" })}>Add gold or silver</button>
+      </p>
+    )
+  }
+  return (
+    <div>
+      <FixedIncomeList rows={rows} memberName={memberName} onAction={onAction} onChanged={onChanged} />
+      <MetalsFootnote />
+    </div>
+  )
+}
+
+export function MetalsFootnote() {
+  return (
+    <p className="mt-3 border-t pt-3 text-[12.5px] text-muted-foreground">
+      Approximate values at the day's bullion rate, before GST and making charges: about what a sale would fetch. The rate is
+      worked out from gold and silver ETF prices. SGB interest is paid every six months.
+    </p>
   )
 }
 

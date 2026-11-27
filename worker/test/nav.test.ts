@@ -98,6 +98,10 @@ beforeEach(async () => {
   const keys = (await env.BUCKET.list({ prefix: 'market/' })).objects.map((o) => o.key)
   if (keys.length) await env.BUCKET.delete(keys)
 })
+// The gold and silver step after each run (M29) has its own tests (metal-ingest.test.ts).
+beforeEach(() => {
+  vi.spyOn(marketHooks, 'afterIngest').mockResolvedValue()
+})
 afterEach(() => vi.restoreAllMocks())
 
 describe('nav-ingest', () => {

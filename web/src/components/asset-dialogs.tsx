@@ -1,9 +1,10 @@
-// Add, edit and change FD / PPF / EPF entered by hand (plan §21.12, D28, M19). Only the fields the maths needs: no
-// bank name, account number or label. The value and maturity update live under the form, computed with the same
+// Add, edit and change FD / PPF / EPF (plan §21.12, D28, M19) and gold / silver / SGB (§21.5, M29) entered by hand.
+// Only the fields the maths needs: no bank name, account number, certificate number or label. The value and maturity update live under the form, computed with the same
 // calculator the Worker uses. Same Dialog / Input / Label / Segmented / ToggleGroup as the rest of the app (§13).
 import {
-  type AssetInputs, type AssetType, DEFAULT_PENALTY, type EpfInputs, epfRate, type FdInputs, fyLabel, fyOf, parseInputs, PPF_YEAR_LIMIT,
-  type PpfInputs, ppfRate, type RateTable, TENURE_CHIPS, tenureChip, todayIst, valueAsset,
+  type AssetInputs, type AssetType, DEFAULT_PENALTY, type EpfInputs, epfRate, type FdInputs, fyLabel, fyOf, GOLD_PURITIES, isMetalType,
+  parseInputs, PPF_YEAR_LIMIT, type PpfInputs, ppfRate, type RateTable, SGB_SERIES, sgbEarliestRedemption, sgbMaturity, sgbSeries,
+  type SgbInputs, TENURE_CHIPS, tenureChip, todayIst, valueAsset,
 } from "@manual-assets"
 import { ChevronDownIcon, Loader2Icon, XIcon } from "lucide-react"
 import { type FormEvent, useState } from "react"
@@ -21,14 +22,17 @@ import type { AssetRow } from "@/lib/assets"
 import { day, inr } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
+/** Which add dialog: FD / PPF / EPF, or gold / silver / SGB. */
+export type AssetGroup = "fixed" | "metal"
+
 export type AssetDialogState =
-  | { kind: "add"; member?: string | null }
-  | { kind: "details" | "edit" | "close" | "stop" | "adjust" | "delete"; asset: AssetRow }
+  | { kind: "add"; member?: string | null; group?: AssetGroup }
+  | { kind: "details" | "edit" | "close" | "stop" | "adjust" | "redeem" | "delete"; asset: AssetRow }
   | null
 
 export type PickMember = { id: string; name: string }
 
-const TYPE_LABEL: Record<AssetType, string> = { fd: "FD", ppf: "PPF", epf: "EPF" }
+const TYPE_LABEL: Record<AssetType, string> = { fd: "FD", ppf: "PPF", epf: "EPF", gold: "Gold", silver: "Silver", sgb: "SGB" }
 
 const FIELD_HELP: Record<string, string> = {
   amount: "Enter the amount in whole rupees.",
@@ -44,6 +48,12 @@ const FIELD_HELP: Record<string, string> = {
   overrides: "Check the year and the amount.",
   stopped: "Pick a date up to today.",
   member: "Pick whose it is.",
+  grams: "Enter the weight in grams (whole units for an SGB).",
+  purity: "Pick the purity.",
+  paid: "Enter what you paid in whole rupees, with the date.",
+  bought: "Pick the date you bought it, up to today (an SGB: after its issue, with the price per gram).",
+  series: "Pick the series.",
+  redeemed: "Pick a date from the 5th year after issue, before maturity.",
 }
 const helpFor = (field: string) => FIELD_HELP[field] ?? "Check the amounts and dates and try again."
 
@@ -112,8 +122,16 @@ function Preview({ type, raw, rates }: { type: AssetType; raw: unknown; rates: R
   const parsed = parseInputs(type, raw, today)
   if (!parsed.ok) return <p className="text-[13px] text-muted-foreground">Fill in the fields to see today's value.</p>
   const v = valueAsset({ type, inputs: parsed.inputs } as Parameters<typeof valueAsset>[0], today, rates)
-  const rows: [string, string][] = [["Value today", inr(v.value)]]
-  if (type === "fd") {
+  const rows: [string, string][] = [["Value today", v.price || !isMetalType(type) ? inr(v.value) : "Rate unavailable"]]
+  if (isMetalType(type)) {
+    rows.push(["Rate used", v.price ? `${inr(v.price.rate)}/g` : "–"])
+    if (type === "sgb") {
+      rows.push([v.status === "active" ? "Matures on" : v.status === "redeemed" ? "Redeemed on" : "Matured on", day(v.status === "redeemed" ? (parsed.inputs as SgbInputs).redeemed : v.maturity)])
+      rows.push(["Interest every six months", inr(v.payout_amount)])
+    } else if (!v.cost_unknown) {
+      rows.push(["Gain", inr(v.gain)])
+    }
+  } else if (type === "fd") {
     const fd = parsed.inputs as FdInputs
     rows.push([v.status === "matured" ? "Matured on" : "Matures on", day(v.maturity)])
     if (fd.payout) rows.push([`Interest paid ${fd.payout === "monthly" ? "a month" : "a quarter"}`, inr(v.payout_amount)])
@@ -133,7 +151,7 @@ function Preview({ type, raw, rates }: { type: AssetType; raw: unknown; rates: R
         ))}
       </dl>
       {v.warnings.includes("ppf_over_limit") && <p className="mt-2 text-[13px] text-loss">PPF takes at most {inr(PPF_YEAR_LIMIT)} a year.</p>}
-      <p className="mt-2 text-[12.5px] text-muted-foreground">Approximate, before tax.</p>
+      <p className="mt-2 text-[12.5px] text-muted-foreground">{isMetalType(type) ? "Approximate, at the bullion rate (before GST and making charges)." : "Approximate, before tax."}</p>
     </div>
   )
 }
@@ -143,6 +161,7 @@ function Preview({ type, raw, rates }: { type: AssetType; raw: unknown; rates: R
 type Draft = {
   amount: string; rate: string; start: string; chip: string; years: string; months: string; days: string; payout: "none" | "monthly" | "quarterly"
   balance: string; as_of: string; opened_year: string; yearly: string; monthly: string; own_rate: string
+  grams: string; purity: string; paid: string; bought: string; series: string; sgb_on: string; sgb_price: string
 }
 
 function draftFrom(asset: AssetRow | undefined): Draft {
@@ -150,19 +169,37 @@ function draftFrom(asset: AssetRow | undefined): Draft {
   const d: Draft = {
     amount: "", rate: "", start: today, chip: "1y", years: "1", months: "0", days: "0", payout: "none",
     balance: "", as_of: today, opened_year: "", yearly: "", monthly: "", own_rate: "",
+    grams: "", purity: "916", paid: "", bought: "", series: SGB_SERIES.at(-1)?.id ?? "", sgb_on: "", sgb_price: "",
   }
   if (!asset) return d
+  if (asset.type === "gold" || asset.type === "silver") {
+    const i = asset.inputs
+    return { ...d, grams: str(i.grams), purity: str(i.purity), paid: str(i.paid), bought: i.bought ?? "" }
+  }
+  if (asset.type === "sgb") {
+    const i = asset.inputs
+    return { ...d, series: i.series, grams: str(i.grams), sgb_on: i.bought?.on ?? "", sgb_price: str(i.bought?.price) }
+  }
   if (asset.type === "fd") {
     const i = asset.inputs
     return { ...d, amount: str(i.amount), rate: str(i.rate), start: i.start, chip: tenureChip(i.tenure), years: str(i.tenure.years), months: str(i.tenure.months), days: str(i.tenure.days), payout: i.payout ?? "none" }
   }
-  const i = asset.inputs
+  const i = asset.inputs as PpfInputs | EpfInputs
   return { ...d, balance: str(i.balance), as_of: i.as_of, own_rate: str(i.rate), ...(asset.type === "ppf" ? { opened_year: str(asset.inputs.opened_year), yearly: str(asset.inputs.yearly) } : { monthly: str(asset.inputs.monthly) }) }
 }
 
 /** The raw inputs for the API (and the preview). Saved details that the form doesn't show (closed, overrides, stopped) are kept. */
 function rawInputs(type: AssetType, d: Draft, prev: AssetRow | undefined): Record<string, unknown> {
   const ownRate = d.own_rate.trim() === "" ? null : num(d.own_rate)
+  if (type === "gold" || type === "silver") {
+    const paid = d.paid.trim() === "" ? null : num(d.paid)
+    return { grams: num(d.grams), purity: type === "silver" ? 999 : Number(d.purity), paid, bought: d.bought || null }
+  }
+  if (type === "sgb") {
+    const redeemed = prev?.type === "sgb" ? prev.inputs.redeemed : null
+    const bought = d.sgb_on || d.sgb_price.trim() ? { on: d.sgb_on, price: num(d.sgb_price) } : null
+    return { series: d.series, grams: num(d.grams), bought, redeemed }
+  }
   if (type === "fd") {
     const chip = TENURE_CHIPS.find((c) => c.id === d.chip)
     const tenure = chip ? chip.tenure : { years: num(d.years || "0"), months: num(d.months || "0"), days: num(d.days || "0") }
@@ -177,16 +214,35 @@ function rawInputs(type: AssetType, d: Draft, prev: AssetRow | undefined): Recor
   return { balance: num(d.balance), as_of: d.as_of, monthly: num(d.monthly || "0"), stopped, rate: ownRate }
 }
 
-export function AssetForm({ open, asset, member, members, rates, onClose, onSaved }: {
+const GROUP_TYPES: Record<AssetGroup, { id: AssetType; label: string }[]> = {
+  fixed: [{ id: "fd", label: "Fixed deposit" }, { id: "ppf", label: "PPF" }, { id: "epf", label: "EPF" }],
+  metal: [{ id: "gold", label: "Gold" }, { id: "silver", label: "Silver" }, { id: "sgb", label: "SGB" }],
+}
+
+/** A native select in the Input's style (there's no Select component; §13 keeps the existing styles). */
+function SeriesSelect({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
+  const today = todayIst()
+  return (
+    <select id={id} value={value} onChange={(e) => onChange(e.target.value)}
+      className="h-11 w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 text-base outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30">
+      {[...SGB_SERIES].filter((x) => x.issue <= today).reverse().map((x) => (
+        <option key={x.id} value={x.id}>{x.name} · issued {day(x.issue)} at {inr(x.price)}/g</option>
+      ))}
+    </select>
+  )
+}
+
+export function AssetForm({ open, asset, member, group = "fixed", members, rates, onClose, onSaved }: {
   open: boolean
   asset?: AssetRow
   member?: string | null
+  group?: AssetGroup
   members: PickMember[]
   rates: RateTable
   onClose: () => void
   onSaved: () => void
 }) {
-  const [type, setType] = useState<AssetType>(asset?.type ?? "fd")
+  const [type, setType] = useState<AssetType>(asset?.type ?? GROUP_TYPES[group][0]!.id)
   const [who, setWho] = useState<string>(asset ? (asset.member_id ?? "") : (member ?? (members.length === 1 ? members[0].id : "")))
   const [d, setD] = useState<Draft>(() => draftFrom(asset))
   const [busy, setBusy] = useState(false)
@@ -215,13 +271,12 @@ export function AssetForm({ open, asset, member, members, rates, onClose, onSave
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{asset ? `Edit ${TYPE_LABEL[type]}` : "Add FD, PPF or EPF"}</DialogTitle>
-          <DialogDescription>Only amounts and dates, no account details needed.</DialogDescription>
+          <DialogTitle>{asset ? `Edit ${TYPE_LABEL[type]}` : group === "metal" ? "Add gold or silver" : "Add FD, PPF or EPF"}</DialogTitle>
+          <DialogDescription>{group === "metal" || isMetalType(type) ? "Only weights and dates, no bills or certificate numbers needed." : "Only amounts and dates, no account details needed."}</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="grid gap-4" noValidate>
           {!asset && (
-            <Segmented kind="radio" label="Type" value={type} onChange={(t) => { setType(t); setError(null) }}
-              options={[{ id: "fd", label: "Fixed deposit" }, { id: "ppf", label: "PPF" }, { id: "epf", label: "EPF" }]} />
+            <Segmented kind="radio" label="Type" value={type} onChange={(t) => { setType(t); setError(null) }} options={GROUP_TYPES[group]} />
           )}
           {members.length > 1 && (
             <div className="grid gap-2">
@@ -264,7 +319,49 @@ export function AssetForm({ open, asset, member, members, rates, onClose, onSave
             </>
           )}
 
-          {type !== "fd" && (
+          {(type === "gold" || type === "silver") && (
+            <>
+              <Field id="m-grams" label="Weight" hint={type === "gold" ? "Coins, bars and jewellery: the gold's weight, without stones." : undefined}>
+                <Input id="m-grams" inputMode="decimal" autoComplete="off" placeholder="grams" value={d.grams} onChange={(e) => set("grams")(e.target.value)} className="h-11" />
+              </Field>
+              {type === "gold" && (
+                <div className="grid gap-2">
+                  <span className="text-sm font-medium">Purity</span>
+                  <ToggleGroup type="single" variant="outline" size="sm" spacing={1.5} className="w-full flex-wrap" aria-label="Purity"
+                    value={d.purity} onValueChange={(v) => v && set("purity")(v)}>
+                    {GOLD_PURITIES.map((p) => (
+                      <ToggleGroupItem key={p.purity} value={String(p.purity)} className="h-9 px-3">{p.karat} ({p.purity})</ToggleGroupItem>
+                    ))}
+                  </ToggleGroup>
+                </div>
+              )}
+              <More>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field id="m-paid" label="What you paid"><Money id="m-paid" value={d.paid} onChange={set("paid")} placeholder="₹ in all" /></Field>
+                  <Field id="m-bought" label="Bought on"><DateInput id="m-bought" value={d.bought} onChange={set("bought")} /></Field>
+                </div>
+                <p className="-mt-2 text-[13px] text-muted-foreground">Optional. With both, you see the gain; without, just the value.</p>
+              </More>
+            </>
+          )}
+
+          {type === "sgb" && (
+            <>
+              <Field id="sgb-series" label="Series"><SeriesSelect id="sgb-series" value={d.series} onChange={set("series")} /></Field>
+              <Field id="sgb-grams" label="Units" hint="1 unit is 1 gram. SGBs in your demat account come in with your CDSL statement; add only those held elsewhere.">
+                <Input id="sgb-grams" inputMode="numeric" autoComplete="off" placeholder="grams" value={d.grams} onChange={(e) => set("grams")(e.target.value)} className="h-11" />
+              </Field>
+              <More>
+                <p className="text-[13px] text-muted-foreground">Bought later on the exchange? The date and the price per gram you paid.</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field id="sgb-on" label="Bought on"><DateInput id="sgb-on" value={d.sgb_on} onChange={set("sgb_on")} min={sgbSeries(d.series)?.issue} /></Field>
+                  <Field id="sgb-price" label="Price per gram"><Money id="sgb-price" value={d.sgb_price} onChange={set("sgb_price")} /></Field>
+                </div>
+              </More>
+            </>
+          )}
+
+          {(type === "ppf" || type === "epf") && (
             <>
               <div className="grid grid-cols-2 gap-3">
                 <Field id="pf-balance" label="Current balance"><Money id="pf-balance" value={d.balance} onChange={set("balance")} /></Field>
@@ -386,6 +483,23 @@ function StopDialog({ asset, onClose, onSaved }: { asset?: AssetRow; onClose: ()
   )
 }
 
+/** SGB → Redeemed early? (from the 5th year after issue, on an interest date; the RBI pays the gold price then). */
+function RedeemDialog({ asset, onClose, onSaved }: { asset?: AssetRow; onClose: () => void; onSaved: () => void }) {
+  const sgb = asset?.type === "sgb" ? asset.inputs : null
+  const s = sgb ? sgbSeries(sgb.series) : undefined
+  const earliest = s ? sgbEarliestRedemption(s.issue) : undefined
+  const [on, setOn] = useState(sgb?.redeemed ?? todayIst())
+  const a = useAction(asset, onSaved)
+  return (
+    <ActionDialog open={!!sgb} title="Redeemed this SGB early?" busy={a.busy} error={a.error} confirm="Save" onClose={onClose}
+      description={<>RBI buys SGBs back from the 5th year{earliest ? ` (for this series, from ${day(earliest)})` : ""}, on an interest date, at that week's gold price. The value stops on that date.</>}
+      onConfirm={() => sgb && a.patch({ ...sgb, redeemed: on } satisfies SgbInputs, "Marked as redeemed")}>
+      <Field id="redeem-on" label="Redeemed on"><DateInput id="redeem-on" value={on} onChange={setOn} min={earliest} /></Field>
+      {s && <p className="text-[13px] text-muted-foreground">It matures on {day(sgbMaturity(s.issue))} anyway.</p>}
+    </ActionDialog>
+  )
+}
+
 /** PPF → Adjust a year: change or skip one financial year's deposit. */
 function AdjustDialog({ asset, onClose, onSaved }: { asset?: AssetRow; onClose: () => void; onSaved: () => void }) {
   const ppf = asset?.type === "ppf" ? asset.inputs : null
@@ -451,11 +565,13 @@ export function AssetDialogs({ state, members, rates, onClose, onSaved, onState 
 }) {
   const done = () => { onClose(); onSaved() }
   const asset = state && state.kind !== "add" ? state.asset : undefined
-  const key = `${state?.kind}-${asset?.id ?? (state?.kind === "add" ? state.member : "")}`
+  const key = `${state?.kind}-${asset?.id ?? (state?.kind === "add" ? `${state.member}-${state.group}` : "")}`
   return (
     <>
       <AssetForm key={`f-${key}`} open={state?.kind === "add" || state?.kind === "edit"} asset={state?.kind === "edit" ? asset : undefined}
-        member={state?.kind === "add" ? state.member : undefined} members={members} rates={rates} onClose={onClose} onSaved={done} />
+        member={state?.kind === "add" ? state.member : undefined} group={state?.kind === "add" ? state.group : asset && isMetalType(asset.type) ? "metal" : "fixed"}
+        members={members} rates={rates} onClose={onClose} onSaved={done} />
+      <RedeemDialog key={`r-${key}`} asset={state?.kind === "redeem" ? asset : undefined} onClose={onClose} onSaved={done} />
       <CloseDialog key={`c-${key}`} asset={state?.kind === "close" ? asset : undefined} onClose={onClose} onSaved={done} />
       <StopDialog key={`s-${key}`} asset={state?.kind === "stop" ? asset : undefined} onClose={onClose} onSaved={done} />
       <AdjustDialog key={`a-${key}`} asset={state?.kind === "adjust" ? asset : undefined} onClose={onClose} onSaved={done} />

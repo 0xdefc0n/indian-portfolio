@@ -17,18 +17,32 @@ import { type Bytes, hmacHex, Vault } from './crypto'
 import type { DeletedEmailJob } from './email'
 import { shredHousehold } from './household'
 import { assetFieldKey } from './assets'
-import { type Asset, assetName, todayIst, valueAsset } from './manual-assets'
+import { type Asset, assetName, isMetalType, RATES, type RateTable, todayIst, valueAsset } from './manual-assets'
+import { readMetalRates } from '../market/metals'
 import { fieldKey } from './members'
 import { sipFieldKey } from './sip-overrides'
 
 export { AUDIT_RETENTION_MS }
+
+/** The rates the export values with: gold and silver need the market DB's (M29); read once per export, only if needed. */
+const exportRateCache = new WeakMap<object, Promise<RateTable>>()
+function exportRates(env: AccountEnv, rows: { type?: unknown }[], today: string): Promise<RateTable> {
+  if (!env.MARKET || !rows.some((r) => isMetalType(r.type as Asset['type']))) return Promise.resolve(RATES)
+  let p = exportRateCache.get(rows)
+  if (!p) {
+    const market = env.MARKET
+    p = readMetalRates({ MARKET: market }, Number(today.replace(/-/g, ''))).then((metals) => ({ ...RATES, metals }), () => RATES)
+    exportRateCache.set(rows, p)
+  }
+  return p
+}
 
 /** A session must be this fresh to delete the account (plan §9.2: "a session less than 10 min old"). */
 export const DELETE_REAUTH_MS = 10 * 60_000
 /** The typed confirmation (plan §13 item 7). */
 export const DELETE_CONFIRM = 'DELETE'
 
-type AccountEnv = Pick<Env, 'DB' | 'BUCKET' | 'Q_EMAIL' | 'BETTER_AUTH_SECRET' | 'DATA_KEK_V1'>
+type AccountEnv = Pick<Env, 'DB' | 'BUCKET' | 'Q_EMAIL' | 'BETTER_AUTH_SECRET' | 'DATA_KEK_V1'> & { MARKET?: D1Database }
 
 export type DeleteTarget = { userId: string; householdId: string; email: string }
 export type AuditMeta = { country: string | null; uaHash: string | null }
@@ -181,10 +195,10 @@ export async function exportAccount(
     ),
     // FD, PPF and EPF entered by hand (M19): the inputs as typed, and today's approximate values worked out from them.
     manual_assets: await Promise.all(
-      (assets?.results ?? []).map(async (a) => {
+      (assets?.results ?? []).map(async (a, _i, all) => {
         const inputs = JSON.parse((await open(assetFieldKey(a.id as string), a.inputs_enc)) ?? '{}')
         const asset = { type: a.type, inputs } as Asset
-        const { flows: _flows, ...value } = valueAsset(asset, today)
+        const { flows: _flows, ...value } = valueAsset(asset, today, await exportRates(env, all, today))
         return {
           id: a.id,
           type: a.type,

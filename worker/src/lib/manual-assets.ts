@@ -6,12 +6,20 @@
 //
 // Only the inputs are stored (sealed). Every value here is approximate: we model the rules, not the bank's or
 // EPFO's ledger. Everything is pre-tax (no TDS, no 80C). Dates are ISO 'YYYY-MM-DD' strings, Indian days.
+import {
+  type GoldPurity, karatOf, type Metal, metalRate, purityFactor, SGB_EARLY_MONTHS, SGB_TERM_MONTHS, sgbSeries, STALE_RATE_DAYS,
+} from './metals'
 import { RATES, type RateTable } from './rates'
 
 export { RATES, type RateTable }
+export * from './metals'
 
-export type AssetType = 'fd' | 'ppf' | 'epf'
-export const ASSET_TYPES: readonly AssetType[] = ['fd', 'ppf', 'epf']
+export type AssetType = 'fd' | 'ppf' | 'epf' | 'gold' | 'silver' | 'sgb'
+export const ASSET_TYPES: readonly AssetType[] = ['fd', 'ppf', 'epf', 'gold', 'silver', 'sgb']
+/** The two groups the screens show apart: fixed income (M19) and gold & silver (M29). */
+export const FIXED_TYPES: readonly AssetType[] = ['fd', 'ppf', 'epf']
+export const METAL_TYPES: readonly AssetType[] = ['gold', 'silver', 'sgb']
+export const isMetalType = (t: AssetType) => METAL_TYPES.includes(t)
 
 export type Tenure = { years: number; months: number; days: number }
 export type FdInputs = {
@@ -45,13 +53,36 @@ export type EpfInputs = {
   stopped: string | null
   rate: number | null
 }
-export type AssetInputs = FdInputs | PpfInputs | EpfInputs
-export type Asset = { type: 'fd'; inputs: FdInputs } | { type: 'ppf'; inputs: PpfInputs } | { type: 'epf'; inputs: EpfInputs }
+/** Physical gold or silver (M29). Silver is always 999. `paid` (₹, total) and `bought` are optional. */
+export type MetalInputs = {
+  grams: number
+  purity: GoldPurity
+  /** What was paid, ₹ in all. null: unknown (inherited, long ago): the value shows, the gain doesn't. */
+  paid: number | null
+  bought: string | null
+}
+/** A Sovereign Gold Bond held outside demat (M29): the series from the table and the units (1 unit = 1 g). */
+export type SgbInputs = {
+  series: string
+  grams: number
+  /** Bought later on the exchange: the price per gram and the date. null: subscribed at issue. */
+  bought: { on: string; price: number } | null
+  /** Redeemed before maturity (allowed from the 5th year). */
+  redeemed: string | null
+}
+export type AssetInputs = FdInputs | PpfInputs | EpfInputs | MetalInputs | SgbInputs
+export type Asset =
+  | { type: 'fd'; inputs: FdInputs }
+  | { type: 'ppf'; inputs: PpfInputs }
+  | { type: 'epf'; inputs: EpfInputs }
+  | { type: 'gold'; inputs: MetalInputs }
+  | { type: 'silver'; inputs: MetalInputs }
+  | { type: 'sgb'; inputs: SgbInputs }
 
 /** A cash flow from the investor's side, for XIRR: money in is negative, money out (or today's value) positive. */
 export type Flow = { date: string; amount: number }
 
-export type AssetStatus = 'active' | 'matured' | 'closed' | 'extended' | 'stopped'
+export type AssetStatus = 'active' | 'matured' | 'closed' | 'extended' | 'stopped' | 'redeemed'
 
 export type AssetValue = {
   /** Approximate value today. */
@@ -79,6 +110,13 @@ export type AssetValue = {
   warnings: string[]
   /** For Overall XIRR. */
   flows: Flow[]
+  /**
+   * Gold, silver, SGB: the ₹/g used (at the item's purity) and the day it's from; null when there's no rate. A
+   * `stale_rate` warning when it's more than 7 days older than the valuation day, `no_rate` when there's none.
+   */
+  price?: { rate: number; date: string } | null
+  /** Gold or silver with no price paid: left out of invested, gain and Overall XIRR. */
+  cost_unknown?: boolean
 }
 
 // ─── Limits (plan §21.12, §11) ──────────────────────────────────────────────────────────────────────────────────
@@ -91,6 +129,10 @@ export const MAX_RATE = 20
 export const MAX_PENALTY = 5
 export const DEFAULT_PENALTY = 1
 export const PPF_YEAR_LIMIT = 150_000
+/** Gold, silver and SGB units: up to 100 kg, gold and silver to the milligram. */
+export const MAX_GRAMS = 100_000
+/** ₹ per gram paid for an SGB bought on the exchange. */
+export const MAX_PRICE_PER_GRAM = 1_000_000
 
 // ─── Dates (UTC arithmetic on calendar days) ────────────────────────────────────────────────────────────────────
 
@@ -405,22 +447,113 @@ export function epfValue(inp: EpfInputs, today: string, rates: RateTable = RATES
   }
 }
 
+// ─── Gold and silver (M29) ──────────────────────────────────────────────────────────────────────────────────────
+
+/** The rate for a valuation day, and the warning it carries (none, stale or missing). */
+function priceOn(rates: RateTable, metal: Metal, date: string, factor: number) {
+  const r = metalRate(rates.metals, metal, date)
+  const price = r ? { rate: Math.round(r.rate * factor * 100) / 100, date: r.date } : null
+  const warnings = !r ? ['no_rate'] : daysBetween(r.date, date) > STALE_RATE_DAYS ? ['stale_rate'] : []
+  return { r, price, warnings }
+}
+
+const NO_MATURITY = { uncredited: 0, provisional: false, maturity: null, maturity_amount: null, payout_amount: null }
+
+/**
+ * Physical gold or silver: grams × the 999 rate × the purity's share (1, 0.916, 0.75). Bullion value, before GST and
+ * making charges. Without a price paid there's no gain (cost_unknown). Without a rate the value is what was paid.
+ */
+export function metalValue(metal: Metal, inp: MetalInputs, today: string, rates: RateTable = RATES): AssetValue {
+  const factor = metal === 'silver' ? 1 : purityFactor(inp.purity)
+  const { r, price, warnings } = priceOn(rates, metal, today, factor)
+  const known = inp.paid !== null
+  const value = r ? inp.grams * r.rate * factor : (inp.paid ?? 0)
+  const invested = inp.paid ?? 0
+  return {
+    ...NO_MATURITY,
+    value,
+    invested,
+    received: 0,
+    gain: known ? value - invested : 0,
+    rate: price?.rate ?? 0,
+    status: 'active',
+    warnings,
+    flows: known && inp.bought && inp.bought <= today ? [{ date: inp.bought, amount: -invested }, { date: today, amount: value }] : [],
+    price,
+    cost_unknown: !known,
+  }
+}
+
+/** An SGB's interest dates: every six months from issue, up to maturity. */
+export const sgbInterestDates = (issue: string) => Array.from({ length: SGB_TERM_MONTHS / 6 }, (_, i) => addMonths(issue, 6 * (i + 1)))
+export const sgbMaturity = (issue: string) => addMonths(issue, SGB_TERM_MONTHS)
+export const sgbEarliestRedemption = (issue: string) => addMonths(issue, SGB_EARLY_MONTHS)
+
+/**
+ * An SGB: units × the gold 999 rate, frozen at maturity or early redemption. Interest of units × issue price ×
+ * coupon / 2 every six months after the buy date, as "interest received". Invested: units × the price paid.
+ */
+export function sgbValue(inp: SgbInputs, today: string, rates: RateTable = RATES): AssetValue {
+  const s = sgbSeries(inp.series)
+  if (!s) throw new Error('unknown_sgb_series') // parseInputs never lets one through
+  const maturity = sgbMaturity(s.issue)
+  const status: AssetStatus = inp.redeemed && inp.redeemed <= today ? 'redeemed' : today >= maturity ? 'matured' : 'active'
+  const end = status === 'redeemed' ? inp.redeemed! : status === 'matured' ? maturity : today
+  const bought = inp.bought?.on ?? s.issue
+  const perGram = inp.bought?.price ?? s.price
+  const invested = inp.grams * perGram
+  const each = (inp.grams * s.price * s.coupon) / 200
+  const paid: Flow[] = sgbInterestDates(s.issue)
+    .filter((d) => d > bought && d <= end)
+    .map((date) => ({ date, amount: each }))
+  const received = paid.reduce((t, f) => t + f.amount, 0)
+  const { r, price, warnings } = priceOn(rates, 'gold', end, 1)
+  const value = r ? inp.grams * r.rate : invested
+  const started = bought <= today
+  return {
+    ...NO_MATURITY,
+    value,
+    invested,
+    received,
+    gain: value + received - invested,
+    rate: price?.rate ?? 0,
+    status,
+    maturity,
+    payout_amount: each,
+    // An ended bond's rate is the one on its end date: that's history, not stale.
+    warnings: status === 'active' ? warnings : warnings.filter((w) => w !== 'stale_rate'),
+    flows: started ? [{ date: bought, amount: -invested }, ...paid, { date: end, amount: value }] : [],
+    price,
+  }
+}
+
 // ─── Any asset ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 export function valueAsset(asset: Asset, today: string, rates: RateTable = RATES): AssetValue {
   if (asset.type === 'fd') return fdValue(asset.inputs, today)
   if (asset.type === 'ppf') return ppfValue(asset.inputs, today, rates)
-  return epfValue(asset.inputs, today, rates)
+  if (asset.type === 'epf') return epfValue(asset.inputs, today, rates)
+  if (asset.type === 'sgb') return sgbValue(asset.inputs, today, rates)
+  return metalValue(asset.type, asset.inputs, today, rates)
+}
+
+/** "20 g", "1.5 kg", "12.345 g". */
+export function gramsLabel(g: number): string {
+  if (g >= 1000 && Number.isInteger(g / 10)) return `${g / 1000} kg`
+  return `${Math.round(g * 1000) / 1000} g`
 }
 
 /** The generated name ("FD · 1 year · 7.25%", "PPF · opened 2018"): never a typed label (D28). */
 export function assetName(asset: Asset): string {
   if (asset.type === 'fd') return `FD · ${tenureLabel(asset.inputs.tenure)} · ${asset.inputs.rate}%`
   if (asset.type === 'ppf') return `PPF · opened ${asset.inputs.opened_year}`
-  return 'EPF'
+  if (asset.type === 'epf') return 'EPF'
+  if (asset.type === 'gold') return `Gold · ${karatOf(asset.inputs.purity)} · ${gramsLabel(asset.inputs.grams)}`
+  if (asset.type === 'silver') return `Silver · ${gramsLabel(asset.inputs.grams)}`
+  return `SGB ${sgbSeries(asset.inputs.series)?.name ?? ''} · ${gramsLabel(asset.inputs.grams)}`
 }
 
-export const ASSET_CATEGORY: Record<AssetType, string> = { fd: 'Fixed deposit', ppf: 'PPF', epf: 'EPF' }
+export const ASSET_CATEGORY: Record<AssetType, string> = { fd: 'Fixed deposit', ppf: 'PPF', epf: 'EPF', gold: 'Gold', silver: 'Silver', sgb: 'SGB' }
 
 // ─── Validation (the API and the form use the same rules) ───────────────────────────────────────────────────────
 
@@ -466,6 +599,35 @@ export function parseInputs(type: unknown, raw: unknown, today: string): ParseRe
     return { ok: true, inputs: { amount: raw.amount, rate: round2(raw.rate), start: raw.start, tenure, payout, closed } }
   }
 
+  if (type === 'gold' || type === 'silver') {
+    if (!numIn(raw.grams, 0.001, MAX_GRAMS)) return bad('grams')
+    const purity = type === 'silver' ? 999 : raw.purity
+    if (purity !== 999 && purity !== 916 && purity !== 750) return bad('purity')
+    const paid = raw.paid ?? null
+    if (paid !== null && !wholeRupees(paid, 1)) return bad('paid')
+    const bought = raw.bought ?? null
+    if (bought !== null && !dateOk(bought)) return bad('bought')
+    if (paid !== null && bought === null) return bad('bought') // XIRR needs the date
+    return { ok: true, inputs: { grams: Math.round(raw.grams * 1000) / 1000, purity, paid, bought } }
+  }
+
+  if (type === 'sgb') {
+    const s = typeof raw.series === 'string' ? sgbSeries(raw.series) : undefined
+    if (!s || s.issue > latest) return bad('series')
+    if (!intIn(raw.grams, 1, MAX_GRAMS)) return bad('grams')
+    let bought: SgbInputs['bought'] = null
+    if (raw.bought !== undefined && raw.bought !== null) {
+      const b = raw.bought
+      if (!isRecord(b) || !dateOk(b.on) || b.on < s.issue || b.on >= sgbMaturity(s.issue) || !numIn(b.price, 1, MAX_PRICE_PER_GRAM)) return bad('bought')
+      bought = { on: b.on, price: round2(b.price) }
+    }
+    const redeemed = raw.redeemed ?? null
+    if (redeemed !== null && (!dateOk(redeemed) || redeemed < sgbEarliestRedemption(s.issue) || redeemed >= sgbMaturity(s.issue) || redeemed < (bought?.on ?? s.issue))) {
+      return bad('redeemed')
+    }
+    return { ok: true, inputs: { series: s.id, grams: raw.grams, bought, redeemed } }
+  }
+
   if (!wholeRupees(raw.balance)) return bad('balance')
   if (!dateOk(raw.as_of)) return bad('as_of')
   const rate = rateOrNull(raw.rate)
@@ -503,8 +665,13 @@ export type ProjectionPoint = {
   received: number
 }
 
-/** Where a projection starts: the FD's start, or the PPF/EPF balance date. */
-export const projectionStart = (asset: Asset) => (asset.type === 'fd' ? asset.inputs.start : asset.inputs.as_of)
+/** Where a projection starts: the FD's start, the PPF/EPF balance date, the gold's buy date (or 5 years back). */
+export function projectionStart(asset: Asset, today: string = todayIst()): string {
+  if (asset.type === 'fd') return asset.inputs.start
+  if (asset.type === 'ppf' || asset.type === 'epf') return asset.inputs.as_of
+  if (asset.type === 'sgb') return asset.inputs.bought?.on ?? sgbSeries(asset.inputs.series)?.issue ?? today
+  return asset.inputs.bought ?? addMonths(today, -60)
+}
 
 /**
  * Where a projection ends by default: an FD's maturity (or its closing date); a PPF's 15-year maturity, or `years`
@@ -512,6 +679,13 @@ export const projectionStart = (asset: Asset) => (asset.type === 'fd' ? asset.in
  */
 export function projectionEnd(asset: Asset, today: string, years = 10): string {
   if (asset.type === 'fd') return asset.inputs.closed?.on ?? fdMaturity(asset.inputs.start, asset.inputs.tenure)
+  // Gold has no future to project (the price is unknown): its history, up to today or the bond's end.
+  if (asset.type === 'gold' || asset.type === 'silver') return today
+  if (asset.type === 'sgb') {
+    const s = sgbSeries(asset.inputs.series)
+    const end = asset.inputs.redeemed ?? (s ? sgbMaturity(s.issue) : today)
+    return end < today ? end : today
+  }
   if (asset.type === 'ppf') {
     const maturity = isoOf(asset.inputs.opened_year + 16, 4, 1)
     return maturity > today ? maturity : addMonths(today, 12 * years)

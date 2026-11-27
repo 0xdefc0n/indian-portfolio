@@ -5,7 +5,7 @@ import { AppHeader } from "@/components/app-header"
 import { LegalFooter } from "@/components/legal-footer"
 import { AddStatementDialog } from "@/components/add-statement-dialog"
 import { type AssetDialogState, AssetDialogs } from "@/components/asset-dialogs"
-import { AddAssetButton, FixedIncome } from "@/components/fixed-income"
+import { AddAssetButton, FixedIncome, GoldSilver } from "@/components/fixed-income"
 import type { Slice } from "@/components/allocation-strip"
 import { AssetsView } from "@/components/assets-view"
 import { type AssetKind, holdingKind } from "@/lib/asset-kind"
@@ -36,7 +36,7 @@ import { day, inr } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { upcomingSips } from "@/lib/sips"
 import { holdingFlows, xirr } from "@/lib/xirr"
-import { assetFlows, assetTotals, forMember, useAssets, valued } from "@/lib/assets"
+import { assetFlows, assetTotals, fixedOnly, forMember, metalsOnly, revalueSgbs, useAssets, valued } from "@/lib/assets"
 
 const EVERYONE = "all"
 
@@ -243,7 +243,8 @@ export default function App({ me }: { me: Me }) {
     if (!data) return null
     const members = who === EVERYONE ? data.members : data.members.filter((m) => m.id === who)
     const ids = new Set(members.map((m) => m.id))
-    const holdings = data.holdings.filter((h) => ids.has(h.member_id))
+    // SGBs in demat are valued at today's gold rate and filed under Gold & silver (M29)
+    const holdings = revalueSgbs(data.holdings.filter((h) => ids.has(h.member_id)), assets.rates)
     const total = holdings.reduce((s, h) => s + h.value, 0)
 
     const byCat = new Map<string, Slice>()
@@ -255,18 +256,21 @@ export default function App({ me }: { me: Me }) {
     }
     const slices = [...byCat.values()].map((s) => ({ ...s, share: total ? (s.value / total) * 100 : 0 })).sort((a, b) => b.value - a.value)
 
-    // Manual assets (M19): a member's own, or everyone's (those filed under no member show only for Everyone).
-    const fixed = forMember(assetRows, who === EVERYONE ? null : who)
-    const fixedTotals = assetTotals(fixed)
+    // Manual assets (M19, M29): a member's own, or everyone's (those filed under no member show only for Everyone).
+    const manual = forMember(assetRows, who === EVERYONE ? null : who)
+    const fixed = fixedOnly(manual)
+    const metals = metalsOnly(manual)
+    const fixedTotals = assetTotals(manual)
     const grandTotal = total + fixedTotals.value
-    const byAsset = new Map<string, Slice>()
-    for (const r of fixed) {
-      const s = byAsset.get(r.category) ?? { category: r.category, value: 0, share: 0, funds: 0 }
+    // Same category from both sides (SGB: demat and by hand) is one slice
+    const byAll = new Map([...byCat].map(([k, v]) => [k, { ...v }]))
+    for (const r of manual) {
+      const s = byAll.get(r.category) ?? { category: r.category, value: 0, share: 0, funds: 0 }
       s.value += r.v.value
       s.funds += 1
-      byAsset.set(r.category, s)
+      byAll.set(r.category, s)
     }
-    const allSlices = [...byCat.values(), ...byAsset.values()]
+    const allSlices = [...byAll.values()]
       .map((s) => ({ ...s, share: grandTotal ? (s.value / grandTotal) * 100 : 0 }))
       .sort((a, b) => b.value - a.value)
 
@@ -308,13 +312,13 @@ export default function App({ me }: { me: Me }) {
     // The dashboard's invested and gain include the manual assets; Funds & stocks XIRR stays as it is, and Overall
     // XIRR adds them (plan §21.12: two XIRRs).
     const dashReturns: Returns | null =
-      returns && fixed.length
+      returns && manual.length
         ? {
             ...returns,
             invested: returns.invested + fixedTotals.invested,
-            current: returns.current + fixedTotals.value,
+            current: returns.current + fixedTotals.costValue,
             gain: returns.gain + fixedTotals.gain,
-            overall: xirr([...holdingFlows(withCost), ...assetFlows(fixed)]),
+            overall: xirr([...holdingFlows(withCost), ...assetFlows(manual)]),
           }
         : returns
     const asOf = members.map((m) => m.as_of).filter(Boolean).sort().at(-1) ?? null
@@ -331,18 +335,20 @@ export default function App({ me }: { me: Me }) {
 
     return {
       members, total, slices, history, flowsKnown, prev, change, asOf, valueDate, est, historyPartial, historyNote,
-      returns, dashReturns, fixed, fixedTotal: fixedTotals.value, grandTotal, allSlices,
+      returns, dashReturns, fixed, metals, manual, grandTotal, allSlices,
+      fixedTotal: fixed.reduce((t, r) => t + r.v.value, 0),
+      metalTotal: metals.reduce((t, r) => t + r.v.value, 0),
       allHoldings: holdings,
       activity: data.activity.filter((a) => ids.has(a.member_id)),
       sips: data.sips.filter((x) => ids.has(x.member_id)),
       sipsMissing: members.filter((m) => !m.sips_known),
     }
-  }, [data, who, assetRows])
+  }, [data, who, assetRows, assets.rates])
 
   const memberMap = useMemo(() => new Map(data?.members.map((m) => [m.id, m])), [data])
   const pickMembers = useMemo(() => (data?.members ?? []).map((m) => ({ id: m.id, name: m.name })), [data])
   const assetMemberName = (id: string | null) => (id ? memberMap.get(id)?.name.split(" ")[0] : undefined)
-  const openFixedIncome = () => document.getElementById("fixed-income")?.scrollIntoView({ behavior: "smooth", block: "start" })
+  const openFixedIncome = (id = "fixed-income") => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })
   const switchMember = (v: string) => { setWho(v); setCategory(null) }
   const multi = (data?.members.length ?? 0) > 1
   const showMember = multi && who === EVERYONE
@@ -388,7 +394,7 @@ export default function App({ me }: { me: Me }) {
       <AppHeader
         me={me}
         onHome={() => setTab("overview")}
-        nav={ready ? <TabNav tab={tab} onChange={setTab} counts={{ assets: view.allHoldings.length + view.fixed.length }} /> : undefined}
+        nav={ready ? <TabNav tab={tab} onChange={setTab} counts={{ assets: view.allHoldings.length + view.manual.length }} /> : undefined}
         actions={data && data.members.length > 0 ? <AddStatementDialog onAdded={load} /> : undefined}
       />
 
@@ -404,10 +410,16 @@ export default function App({ me }: { me: Me }) {
           <Onboarding
             onAdded={load}
             fixedIncome={
-              <Cell className="md:col-span-6 lg:col-span-12" delay={200} lift={false} label="Fixed income">
-                <CellHead title="Fixed income" aside={assetRows.length ? <AddAssetButton onClick={() => setAssetDlg({ kind: "add" })} /> : undefined} />
-                <FixedIncome rows={assetRows} failed={assets.failed} onAction={setAssetDlg} onChanged={assets.reload} />
-              </Cell>
+              <>
+                <Cell className="md:col-span-6 lg:col-span-12" delay={200} lift={false} label="Fixed income">
+                  <CellHead title="Fixed income" aside={fixedOnly(assetRows).length ? <AddAssetButton onClick={() => setAssetDlg({ kind: "add", group: "fixed" })} /> : undefined} />
+                  <FixedIncome rows={fixedOnly(assetRows)} failed={assets.failed} onAction={setAssetDlg} onChanged={assets.reload} />
+                </Cell>
+                <Cell className="md:col-span-6 lg:col-span-12" delay={240} lift={false} label="Gold and silver">
+                  <CellHead title="Gold & silver" aside={metalsOnly(assetRows).length ? <AddAssetButton onClick={() => setAssetDlg({ kind: "add", group: "metal" })} /> : undefined} />
+                  <GoldSilver rows={metalsOnly(assetRows)} failed={assets.failed} onAction={setAssetDlg} onChanged={assets.reload} />
+                </Cell>
+              </>
             }
           />
         ))}
@@ -478,9 +490,9 @@ export default function App({ me }: { me: Me }) {
                     slices={view.allSlices}
                     total={view.grandTotal}
                     funds={view.allHoldings.length}
-                    others={view.fixed.length}
+                    others={view.manual.length}
                     onSelect={(c) => {
-                      if (!view.slices.some((s) => s.category === c)) return openFixedIncome() // FD, PPF, EPF
+                      if (!view.slices.some((s) => s.category === c)) return openFixedIncome(view.metals.some((r) => r.category === c) ? "gold-silver" : "fixed-income") // added by hand
                       const h = view.allHoldings.find((x) => x.category === c)
                       setAssetKind(h ? holdingKind(h) : null)
                       setCategory(c); setHovered(null); setTab("assets")
@@ -512,7 +524,7 @@ export default function App({ me }: { me: Me }) {
                 )}
 
                 <Cell className="md:col-span-6 lg:col-span-7" delay={340} label="Top holdings">
-                  <CellHead title="Top holdings" aside={viewAll("assets", `View all ${view.allHoldings.length + view.fixed.length}`)} />
+                  <CellHead title="Top holdings" aside={viewAll("assets", `View all ${view.allHoldings.length + view.manual.length}`)} />
                   <HoldingBars holdings={view.allHoldings} total={view.total} members={memberMap} showMember={showMember} />
                 </Cell>
                 <Cell className="md:col-span-6 lg:col-span-5" delay={390} label="Upcoming SIPs">
@@ -528,9 +540,19 @@ export default function App({ me }: { me: Me }) {
                   <Cell className="h-full" delay={420} lift={false} label="Fixed income">
                     <CellHead
                       title="Fixed income"
-                      aside={view.fixed.length ? <span className="flex items-center gap-3"><span className="eyebrow">{inr(view.fixedTotal)}</span><AddAssetButton onClick={() => setAssetDlg({ kind: "add", member: who === EVERYONE ? undefined : who })} /></span> : undefined}
+                      aside={view.fixed.length ? <span className="flex items-center gap-3"><span className="eyebrow">{inr(view.fixedTotal)}</span><AddAssetButton onClick={() => setAssetDlg({ kind: "add", group: "fixed", member: who === EVERYONE ? undefined : who })} /></span> : undefined}
                     />
                     <FixedIncome rows={view.fixed} memberName={showMember ? assetMemberName : undefined} failed={assets.failed} onAction={setAssetDlg} onChanged={assets.reload} />
+                  </Cell>
+                </div>
+
+                <div id="gold-silver" className="scroll-mt-24 md:col-span-6 lg:col-span-12">
+                  <Cell className="h-full" delay={430} lift={false} label="Gold and silver">
+                    <CellHead
+                      title="Gold & silver"
+                      aside={view.metals.length ? <span className="flex items-center gap-3"><span className="eyebrow">{inr(view.metalTotal)}</span><AddAssetButton onClick={() => setAssetDlg({ kind: "add", group: "metal", member: who === EVERYONE ? undefined : who })} /></span> : undefined}
+                    />
+                    <GoldSilver rows={view.metals} memberName={showMember ? assetMemberName : undefined} failed={assets.failed} onAction={setAssetDlg} onChanged={assets.reload} />
                   </Cell>
                 </div>
 
@@ -545,6 +567,7 @@ export default function App({ me }: { me: Me }) {
               <AssetsView
                 holdings={view.allHoldings}
                 fixed={view.fixed}
+                metals={view.metals}
                 total={view.grandTotal}
                 kind={assetKind}
                 onKind={setAssetKind}
@@ -576,7 +599,7 @@ export default function App({ me }: { me: Me }) {
                 </div>
 
                 <Panel title="Allocation">
-                  <AllocationBreakdown holdings={view.allHoldings} total={view.total} fixedIncome={view.fixedTotal} />
+                  <AllocationBreakdown holdings={view.allHoldings} total={view.total} fixedIncome={view.fixedTotal} gold={view.metalTotal} />
                 </Panel>
 
                 {data?.stocks?.enabled && (

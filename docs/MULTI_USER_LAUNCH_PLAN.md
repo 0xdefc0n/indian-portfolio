@@ -883,7 +883,7 @@ export async function assertMember(c, memberId: string) {
 | `GET /api/portfolio/daily?days=30&member=all` | ✅ | daily returns (§10.5): `{ as_of, coverage, today, series }` | `days` ≤ 366; `member` is `all` or a member ID, checked with `assertMember` |
 | `POST /api/sips/skip` · `DELETE /api/sips/skip` | ✅ | skip the next instalment of one SIP, or undo it (§10.5.1, M12): `{ member_id, isin, folio, due }` | `member_id` checked with `assertMember`; `due` today to +100 days; one skip per SIP |
 | `POST /api/sips/cancel` | ✅ | cancel one SIP in PocketFolio for good (§10.5.1, M12): `{ member_id, isin, folio, confirm: true }` | `assertMember`; no undo; ≤ 200 changes per household |
-| `GET /api/assets` · `POST /api/assets` · `PATCH/DELETE /api/assets/:id` | ✅ | FD, PPF and EPF entered by hand (§21.12, M19): inputs only, the SPA computes values | ✅ M19: `member_id` optional, checked with `assertMember`; another household's id → 404; `400 bad_input {field}`; `409 asset_limit` (50); `429 asset_write_limit` (30 adds/edits a day; deletes are never limited) |
+| `GET /api/assets` · `POST /api/assets` · `PATCH/DELETE /api/assets/:id` | ✅ | FD, PPF and EPF (§21.12, M19), gold, silver and SGBs (§21.5, M29) entered by hand: inputs only, the SPA computes values. `rates.metals` carries the gold and silver ₹/g series (edge-cached 1 h) | ✅ M19: `member_id` optional, checked with `assertMember`; another household's id → 404; `400 bad_input {field}`; `409 asset_limit` (50); `429 asset_write_limit` (30 adds/edits a day; deletes are never limited) |
 | `GET /api/market/status` | – | `{ latest_nav_date, coverage_pct, final }` for the "NAVs updating" hint | public, cacheable for 5 min |
 | `POST /api/kfintech/guide` | ✅ | `{ member_id or pan, password? }` → stores a pending password, returns `{ password, form_url }` | the manual path only (D9); same validation as `kfintech.password_problem`. **The one place a PAN may be typed:** KFintech's own form needs it, and a new person isn't a member yet. Picking an existing member needs no PAN |
 | `GET /api/account/export` | ✅ | JSON download of all parsed statements and members (decrypted) | DPDP access right; 3 per day. ✅ M14: fresh session (D1), `429 export_limit`. Streams: account, sign-in methods, sessions (IP, UA), consents, household, members (name, PAN), SIP changes, uploads, pending passwords, the user's security log, then each statement's parsed JSON. Leaves out internal keys and lookup values (DEK, HMACs, R2 keys, hashes, tokens) and snapshots (derived) |
@@ -2334,7 +2334,7 @@ get a nightly rebuild; parse ~1.5 vCPU-s on average; build ~0.5 vCPU-s.
 - Manually entered FD, PPF and EPF with approximate returns (M19), and stock gains from broker tradebooks or manual buy
   prices (M21). Owner request, 2026-11-26; see `docs/MILESTONES.md` Phase 8. Design to be written before each starts.
 - AI portfolio analysis (M32) and the admin panel (M33) are scheduled after launch (§21.8, §21.9).
-- Digital gold (app-bought grams) isn't tracked (D24). Mergers and demergers aren't computed (D25).
+- Digital gold (app-bought grams) isn't tracked (D24). The IBJA paid API as the gold/silver rate source (§21.5). Mergers and demergers aren't computed (D25).
 - A Python Worker for the engine, if Pyodide memory limits and the `pillow`/`rapidfuzz` gaps change (re-run the §3.1 test).
 - **A per-household Durable Object** for live status over WebSocket (hibernating), instead of polling. It would also
   serialise that household's rebuilds natively. Worth it only if polling shows up in D1 load after launch.
@@ -2391,12 +2391,107 @@ encryption, and demo data only in every screenshot, image and post.
 - **Market data, not user data:** computed nightly once per scheme in the market DB. Labelled "not investment advice".
 
 ### 21.5 Gold and silver (D24, M29)
-- **Physical:** grams and purity (gold 24K/22K/18K, silver 999), optional buy price and date.
-- **SGB:** series, units (grams), issue price and date; 2.5% a year interest paid every six months; 8-year maturity;
-  valued at the gold rate (the redemption basis).
-- **Rate:** a daily public per-gram rate in the market DB (⚠️ VERIFY the source, e.g. IBJA). Fallback: the per-gram
-  price implied by gold/silver ETF NAVs in the NAV store.
-- Stored like M19's manual assets: sealed inputs, same member model, a "Gold & silver" allocation class.
+Drafted in M29's first session; the owner's decisions of 2026-11-27 are in bold. Built on M19 (§21.12): same table,
+sealed inputs, member model, limits, API, live shared calculator and dialogs. Values are labelled "approximate".
+
+**Owner's decisions (2026-11-27):**
+- **Rate source: gold and silver ETF NAVs from AMFI, anchored to IBJA through public RBI SGB prices** (not IBJA itself).
+  ⚠️ VERIFY result: ✅ IBJA (ibjarates.com) publishes 999/995/916/750/585 gold (₹/10 g) and silver 999 (₹/kg), AM and
+  PM, no weekends or holidays, but **its API is paid** (price on request, nagaraj.iyer@ibja.in) and its site asks anyone
+  using the rate "for valuation and pricing activities" to subscribe through the official API. Scraping it is ruled out.
+  RBI's SGB issue and redemption notices are public and quote IBJA 999 averages, so they serve as anchors. The IBJA API
+  can replace the ETF route later without changing the calculator (the served series is the same shape).
+- **SGBs in a CDSL statement are detected and valued at the gold rate** (by ISIN from the series table, falling back to
+  the name), and move from "Stocks & bonds" to Gold & silver. Typing in an SGB is only for bonds held outside demat
+  (RBI Retail Direct, bank or post office certificates), so nothing is counted twice.
+- **SGB: pick the series from a list** (all tranches 2015-16 Series I to 2023-24 Series IV, in code), then grams.
+- **Gold ETFs and gold funds stay under ETFs and Mutual funds.** The Assets tab's new Gold & silver kind holds physical
+  gold, physical silver and SGBs (statement and manual). The asset-class split already counts gold funds as
+  "Gold & silver".
+
+**What the forms ask** (an "Add gold or silver" dialog, `Segmented` Gold / Silver / SGB; same copy line as M19):
+| Type | Fields | Defaults and notes |
+|---|---|---|
+| Gold | weight (grams, up to 3 decimals); purity chips **24K (999), 22K (916), 18K (750)** | More options: what you paid (₹, total) and when. Without them the value shows but no gain, and it stays out of invested, gain and Overall XIRR |
+| Silver | weight (grams) | Purity 999. More options as for gold |
+| SGB | series (a list, newest first, with its issue date and price); units (1 unit = 1 g) | More options: "Bought later on the exchange": date and price per gram (default: the issue date and price). **Redeemed early?** is an action on a saved SGB (allowed from year 5) |
+- Names are generated: "Gold · 22K · 20 g", "Silver · 1 kg", "SGB 2018-19 Series IV · 10 g".
+
+**Calculations** (in the shared `lib/manual-assets.ts`, with the series and rate lookups in `lib/metals.ts`):
+- **Rate lookup:** the rate on a date is the latest one on or before it (weekends, holidays and a missed night fall back
+  to the last day). A rate more than 7 days old today shows "Rate from {date}". No rate at all (a new install before the
+  first ingest, or silver before 2022): the value is what was paid, or nothing, with "Rate unavailable".
+- **Physical:** `grams × rate999 × purity` with purity 1 (999), 0.916 or 0.75, which is how IBJA's 916/750 rates relate
+  to its 999 rate (checked on its table: 916 = 999 × 0.916). Bullion value, before GST and making charges: about what a
+  sale would fetch, not a jeweller's buying price.
+- **SGB:** `units × rate999` today, or frozen at the maturity (8 years) or early-redemption date with a "Matured" or
+  "Redeemed" badge. Interest is `units × issue price × coupon / 2` every six months from the issue date (coupon 2.75 %
+  for the 2015-16 tranches that carried it, else 2.5 %), counted for the dates after the buy date and up to the end, as
+  "interest received" in the gain. Invested = units × (price paid or issue price). XIRR flows: the purchase, each
+  interest payment, and the value on the end date (today, maturity or redemption).
+- **Statement SGBs:** units × today's rate replaces the statement's exchange price; the coupon is shown from the series
+  table. Invested stays unknown (CDSL has no cost), as for other demat holdings until M21.
+
+**Rate ingest** (`worker/src/market/metals.ts`, table `metal_rate` in `pocketfolio-market`, migration
+`migrations/market/0007_metal_rate.sql`):
+- Reference ETFs: a few large, long-lived gold ETFs and silver ETFs (AMFI codes in code). Their daily NAVs already
+  arrive with every nav-ingest run (all of NAVAll is stored); their history is backfilled once like any tracked scheme.
+- Anchors in code: RBI SGB redemption prices (₹/g, the simple average of three IBJA 999 closes, with the dates) for gold;
+  dated IBJA silver 999 closes for silver. For each ETF, `k = anchor price ÷ mean NAV on the anchor dates` (grams of
+  metal per unit, inverted). Between anchors `k` is interpolated (log-linear: the expense ratio slowly shrinks the
+  grams per unit); outside them the nearest segment's slope is extended, clamped to 0–2 % a year.
+- Rate on a date = median over the reference ETFs with a NAV that day of `NAV × k`. Stored as `(metal, date, rate,
+  etfs)`, upserted only when it changes, so a re-run writes 0 rows. Runs after each nav-ingest and after a reference
+  ETF's backfill. A new anchor is a code change; the next run recomputes the history.
+- Served to the SPA inside `GET /api/assets` → `rates.metals` (month-end points since 2015 plus the last 31 days, ~350
+  points), read through the edge cache (1 h) so household requests don't hit the market DB.
+
+**Storage:** `migrations/app/0012_gold.sql` widens `manual_asset.type` to `fd, ppf, epf, gold, silver, sgb` (SQLite
+can't alter a CHECK, so the table is rebuilt and the rows copied). Same sealing, limits (50 assets in all), export
+(`manual_assets` with today's values) and deletion.
+
+**Screens:** a **Gold & silver** panel on the dashboard (like Fixed income) and a kind on the Assets tab; allocation
+categories "Gold", "Silver" and "SGB" (existing tokens) inside the "Gold & silver" asset class; Members lists them with
+the other manual assets. The details dialog shows value today, put in, gain, interest received (SGB), and a value
+history chart from the buy date (or the last 5 years) to today at month-end rates, with the money put in.
+
+**Golden tests:** purity factors; a missing rate day falling back; no rate; SGB interest schedule (2.5 % and 2.75 %,
+bought on the exchange mid-life, matured, redeemed early); XIRR flows; the derivation (anchors, interpolation, median,
+an ETF missing a day). Ingest: saved AMFI NAV fixtures for the reference ETFs, re-runs write 0 rows. API isolation
+and the D1 plaintext scan cover the new types.
+
+**As built (M29, 2026-11-27).** The spec above holds; choices where it left room:
+- ✅ Code: `worker/src/lib/metals.ts` (rate lookup, purity, SGB helpers) and `lib/sgb-series.ts` (67 tranches), both
+  shared with the SPA through `@manual-assets`; gold/silver/SGB valuation and validation in `lib/manual-assets.ts`;
+  `worker/src/market/metals.ts` (derivation, job, serving) and `market/metal-anchors.ts` (reference ETFs, anchors);
+  migrations `app/0012_manual_asset_gold.sql` and `market/0007_metal_rate.sql`. Web: `lib/assets.ts` (groups, totals,
+  statement SGBs), `components/asset-dialogs.tsx`, `asset-details.tsx`, `fixed-income.tsx` (`GoldSilver`),
+  `assets-view.tsx`. Tests: `worker/test/metals.test.ts`, `metal-ingest.test.ts`, `assets.test.ts`;
+  `web/src/lib/assets.test.ts`.
+- ✅ **Series table:** RBI's tranche table, every issue price against its RBI release, ISINs from NSE bhavcopies (all
+  67 have one). RBI names the first three tranches "2015-I", "2016-I", "2016-II"; ids are the names with "Series"
+  dropped ("2017-18-IV"). Coupon 2.75 % for the first five tranches, 2.5 % from 2016-17 Series III. Maturity is
+  issue + 8 years (NSE shows 2018-19 Series IV maturing in December 2026, not 1 January 2027: unconfirmed, left as is).
+- ✅ **Reference ETFs:** gold: Nippon India ETF Gold BeES, HDFC, SBI, ICICI Prudential, Kotak; silver: Nippon India,
+  ICICI Prudential, Aditya Birla Sun Life, HDFC, Axis (since 2022). **Anchors:** 61 RBI redemption prices, one a month
+  from February 2021 to November 2026 (early tranches average the Monday–Friday week); 12 IBJA silver 999 PM closes
+  from May 2025 to November 2026. Splits in an ETF's history (a day-on-day move beyond ±30 %) are undone first.
+- ✅ **Accuracy, measured** against 291 days of IBJA's published 999 PM closes (May 2025 – November 2026): gold median
+  0.10 % off (90 % of days within 0.32 %), silver 0.18 % (within 0.68 %). The one large miss is Sunday 1 February 2026
+  (a Budget-day session with a 10 % fall that IBJA priced and the ETFs hadn't). Before the first anchor (2015–2020,
+  history charts only) `k` is extended at the clamped slope, so those years are rougher.
+- **Missing days:** the served series has month-end points plus the last 31 days; a lookup takes the latest point on or
+  before the day. "Older rate" shows when today's rate is over 7 days old.
+- **Statement SGBs** are detected in the SPA (`revalueSgbs`), not the engine: units × gold rate, category "SGB",
+  asset class "Gold & silver", Assets kind Gold & silver ("SGBs in demat"). Daily returns don't revalue them yet.
+- **No price paid** (`cost_unknown`): the value counts in totals, but not invested, gain or Overall XIRR; the dashboard's
+  "current" for returns adds only the assets with a known cost, so current − invested = gain.
+- **Ops:** the anchors are updated by hand with the PPF/EPF table each quarter (M16 checklist): add the latest RBI
+  redemption price and an IBJA silver close. First deploy: nav-ingest queues the 10 reference ETFs' backfills; each one
+  finishing recomputes the history.
+- Colours (§13, existing tokens): Gold `--cat-gold`, SGB `--cat-sector`, Silver `--cat-other`.
+
+**Later:** the IBJA paid API as the source; statement SGBs in daily returns; SGB interest in the activity list.
 
 ### 21.6 Corporate actions (D25, M21)
 - **Today:** not handled. CDSL holdings are as of the statement date, and nothing adjusts them afterwards.
