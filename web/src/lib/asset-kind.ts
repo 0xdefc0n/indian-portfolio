@@ -13,10 +13,12 @@ export type AssetKind = HoldingKind | "fixed"
 
 const ETF_RE = /\bETF\b|exchange traded|\bBeES\b/i
 const FOF_RE = /\bFoF\b|fund of funds?|\bFOF\b/i
+const RTA_SOURCES = new Set(["CAMS", "KFINTECH", "RTA"])
 
 export function holdingKind(h: Pick<Holding, "isin" | "name" | "sebi_category" | "sources" | "folio">): HoldingKind {
   if (!h.isin.startsWith("INF")) return sgbOfHolding(h.isin, h.name) ? "gold" : "stock"
-  const rtaHeld = !!h.folio || (h.sources ?? []).some((s) => s !== "CDSL")
+  // CAMS / KFintech: held with the fund house. CDSL and broker files (M34: "Groww", "Zerodha", "Tradebook") are demat.
+  const rtaHeld = !!h.folio || (h.sources ?? []).some((s) => RTA_SOURCES.has(s))
   if (rtaHeld) return "mf"
   const text = `${h.name} ${h.sebi_category ?? ""}`
   return ETF_RE.test(text) && !FOF_RE.test(text) ? "etf" : "mf"

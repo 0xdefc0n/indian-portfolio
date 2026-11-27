@@ -16,6 +16,7 @@ export const LIMITS = {
   assetWritesPerDay: 30, // adds and edits; deleting is never limited
   tradebookBytes: 5 * 1024 * 1024, // plan §21.6: a broker tradebook (CSV or Excel)
   tradebooksPerMember: 24,
+  brokerHoldingsPerMember: 12, // plan §21.13 (M34): one per broker account; a newer file from the account replaces it
   stockCostsPerHousehold: 500, // manual average buy prices (M21)
 } as const
 

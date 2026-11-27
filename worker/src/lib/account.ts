@@ -115,7 +115,7 @@ export async function exportAccount(
 ): Promise<ReadableStream<Uint8Array>> {
   const db = env.DB
   const { userId, householdId } = who
-  const [user, accounts, sessions, consents, household, members, statements, sips, jobs, pending, audit, assets, tradebooks, costs] = await db.batch<Row>([
+  const [user, accounts, sessions, consents, household, members, statements, sips, jobs, pending, audit, assets, tradebooks, costs, brokerHoldings] = await db.batch<Row>([
     db.prepare('SELECT id, name, email, "emailVerified" AS email_verified, image, "createdAt" AS created_at FROM user WHERE id = ?1').bind(userId),
     db.prepare('SELECT "providerId" AS provider, "createdAt" AS created_at FROM account WHERE "userId" = ?1 ORDER BY "createdAt"').bind(userId),
     db
@@ -123,7 +123,7 @@ export async function exportAccount(
       .bind(userId),
     db.prepare('SELECT notice_version, accepted_at, withdrawn_at FROM consent WHERE user_id = ?1 ORDER BY accepted_at').bind(userId),
     db.prepare('SELECT id, created_at, last_active_at, dek_wrapped, kek_version FROM household WHERE id = ?1 AND owner_user_id = ?2').bind(householdId, userId),
-    db.prepare('SELECT id, pan_enc, pan_masked, display_name_enc, created_at FROM member WHERE household_id = ?1 ORDER BY created_at, id').bind(householdId),
+    db.prepare('SELECT id, pan_enc, pan_masked, display_name_enc, created_at, no_pan FROM member WHERE household_id = ?1 ORDER BY created_at, id').bind(householdId),
     db
       .prepare(
         `SELECT id, member_id, kind, as_of, period_from, parser_version, holdings_count, warnings_count, created_at, blob_key
@@ -143,6 +143,9 @@ export async function exportAccount(
       .prepare('SELECT id, member_id, broker, period_from, period_to, trades_count, parser_version, created_at, blob_key FROM tradebook WHERE household_id = ?1 ORDER BY created_at')
       .bind(householdId),
     db.prepare('SELECT id, member_id, cost_enc, updated_at FROM stock_cost WHERE household_id = ?1 ORDER BY updated_at').bind(householdId),
+    db
+      .prepare('SELECT id, member_id, broker, as_of, holdings_count, parser_version, created_at, blob_key FROM broker_holding WHERE household_id = ?1 ORDER BY created_at')
+      .bind(householdId),
   ])
   const h = household?.results[0] as { id: string; created_at: number; last_active_at: number; dek_wrapped: Bytes; kek_version: number } | undefined
   const u = user?.results[0]
@@ -187,8 +190,8 @@ export async function exportAccount(
       (members?.results ?? []).map(async (m) => ({
         id: m.id,
         name: await open(fieldKey.name(m.id as string), m.display_name_enc),
-        pan: await open(fieldKey.pan(m.id as string), m.pan_enc),
-        pan_masked: m.pan_masked,
+        pan: m.no_pan ? null : await open(fieldKey.pan(m.id as string), m.pan_enc), // M34: a member from a broker file has none
+        pan_masked: m.no_pan ? null : m.pan_masked,
         created_at: iso(m.created_at as number),
       })),
     ),
@@ -241,28 +244,56 @@ export async function exportAccount(
     security_log: (audit?.results ?? []).map((a) => ({ event: a.event, country: a.ip_country ?? null, at: iso(a.at as number) })),
   }
 
-  const list = (statements?.results ?? []) as (Row & { id: string; blob_key: string })[]
-  // Broker tradebooks (M21): their parsed trades (the files themselves are never kept), after the statements.
-  const books = (tradebooks?.results ?? []) as (Row & { id: string; blob_key: string })[]
+  // Statements, then broker tradebooks (M21) and broker holdings statements (M34): their parsed data (the files
+  // themselves are never kept), one blob at a time.
+  type Item = Row & { id: string; blob_key: string }
+  const sections: [string, Item[]][] = [
+    ['statements', (statements?.results ?? []) as Item[]],
+    ['tradebooks', (tradebooks?.results ?? []) as Item[]],
+    ['broker_holdings', (brokerHoldings?.results ?? []) as Item[]],
+  ]
+  const items = sections.flatMap(([name, rows]) => rows.map((row, at) => ({ name, row, first: at === 0 })))
   const enc = new TextEncoder()
   let i = -1
+  let arrayOpen = false
+  const written = new Set<string>()
+  const close = () => {
+    const out = arrayOpen ? '\n ]' : ''
+    arrayOpen = false
+    return out
+  }
+  /** `,"name": []` for the sections before `upto` (all of them without it) that haven't been written. */
+  const empties = (upto?: string) => {
+    let out = ''
+    for (const [n] of sections) {
+      if (n === upto) break
+      if (!written.has(n)) {
+        out += `,\n "${n}": []`
+        written.add(n)
+      }
+    }
+    return out
+  }
   return new ReadableStream<Uint8Array>({
     async pull(ctl) {
       try {
         if (i === -1) {
-          ctl.enqueue(enc.encode(`${JSON.stringify(head, null, 1).slice(0, -2)},\n "statements": [`))
-        } else if (i < list.length + books.length) {
-          const inBooks = i >= list.length
-          const s = inBooks ? books[i - list.length]! : list[i]!
-          const obj = await env.BUCKET.get(s.blob_key)
-          if (!obj) throw new ExportError(inBooks ? 'tradebook blob missing' : 'statement blob missing')
-          const data = await openJson(vault, s.blob_key, await obj.arrayBuffer())
-          const { blob_key: _key, ...meta } = s
-          const out = { ...meta, created_at: iso(s.created_at as number), data }
-          const lead = inBooks && i === list.length ? '\n ],\n "tradebooks": [' : (inBooks ? i > list.length : i > 0) ? ',' : ''
-          ctl.enqueue(enc.encode(`${lead}\n  ${JSON.stringify(out)}`))
+          ctl.enqueue(enc.encode(`${JSON.stringify(head, null, 1).slice(0, -2)}`))
+        } else if (i < items.length) {
+          const { name, row, first } = items[i]!
+          let lead = ','
+          if (first) {
+            lead = `${close()}${empties(name)},\n "${name}": [`
+            written.add(name)
+            arrayOpen = true
+          }
+          const obj = await env.BUCKET.get(row.blob_key)
+          if (!obj) throw new ExportError(`${name} blob missing`)
+          const data = await openJson(vault, row.blob_key, await obj.arrayBuffer())
+          const { blob_key: _key, ...meta } = row
+          ctl.enqueue(enc.encode(`${lead}\n  ${JSON.stringify({ ...meta, created_at: iso(row.created_at as number), data })}`))
         } else {
-          ctl.enqueue(enc.encode(books.length ? '\n ]\n}\n' : '\n ],\n "tradebooks": []\n}\n'))
+          ctl.enqueue(enc.encode(`${close()}${empties()}\n}\n`))
           ctl.close()
         }
         i++

@@ -24,7 +24,7 @@ export type Have = Partial<Record<"mf" | "listed" | AssetType, number>> & {
 
 const STATEMENT: { id: "mf" | "listed"; label: string; hint: string; icon: typeof ChartPieIcon }[] = [
   { id: "mf", label: "Mutual funds", hint: "CAMS, KFintech or CDSL PDF", icon: ChartPieIcon },
-  { id: "listed", label: "Stocks & ETFs", hint: "CDSL statement PDF", icon: ChartCandlestickIcon },
+  { id: "listed", label: "Stocks & ETFs", hint: "CDSL PDF or broker file", icon: ChartCandlestickIcon },
 ]
 
 const BY_HAND: { id: AssetType; label: string; hint: string; color: string }[] = [
@@ -188,7 +188,10 @@ export function AddAssetDialog({
         <DialogHeader>
           {back}
           <DialogTitle>{pick === "mf" ? "Add mutual funds" : "Add stocks & ETFs"}</DialogTitle>
-          <DialogDescription>Any family member's statement. We file it under the right person from its PAN.</DialogDescription>
+          <DialogDescription>
+            Any family member's statement. We file it under the right person from its PAN.
+            {pick === "listed" ? " A broker file has no PAN, so we may ask whose it is." : ""}
+          </DialogDescription>
         </DialogHeader>
         <UploadForm kind={pick} onDone={() => { close(); onAdded() }} onQueued={onAdded} />
       </>

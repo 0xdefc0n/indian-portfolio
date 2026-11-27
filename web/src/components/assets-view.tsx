@@ -15,7 +15,7 @@ import { type AssetRow, assetFlows, assetTotals } from "@/lib/assets"
 import { day, inr, monthly, pct } from "@/lib/format"
 import { nextRun } from "@/lib/sips"
 import { cn } from "@/lib/utils"
-import { holdingFlows, xirr } from "@/lib/xirr"
+import { costKnown, dated, holdingFlows, xirr } from "@/lib/xirr"
 
 type Props = {
   holdings: Holding[]
@@ -138,7 +138,7 @@ const REST: Record<AssetKind, string> = {
 function KindReturns({ kind, holdings, rows }: { kind: AssetKind; holdings: Holding[]; rows: AssetRow[] }) {
   const value = holdings.reduce((s, h) => s + h.value, 0) + rows.reduce((s, r) => s + r.v.value, 0)
   if (value <= 0) return null
-  const withCost = holdings.filter((h) => h.invested != null && h.cashflows?.length)
+  const withCost = holdings.filter(costKnown)
   const known = rows.filter((r) => !r.v.cost_unknown)
   const t = assetTotals(known)
   const invested = withCost.reduce((s, h) => s + (h.invested ?? 0), 0) + t.invested
@@ -158,7 +158,7 @@ function KindReturns({ kind, holdings, rows }: { kind: AssetKind; holdings: Hold
       <ReturnBoxes
         showValue
         valueLabel={covered < n ? `Value of these ${covered === 1 ? one : many}` : "Current value"}
-        returns={{ invested, current, gain: current - invested, xirr: xirr([...holdingFlows(withCost), ...assetFlows(known)]), funds: covered, complete: covered === n }}
+        returns={{ invested, current, gain: current - invested, xirr: xirr([...holdingFlows(dated(withCost)), ...assetFlows(known)]), funds: covered, complete: covered === n }}
       />
       {covered < n && (
         <p className="mt-4 border-t pt-3 text-[12.5px] text-muted-foreground">
@@ -179,6 +179,23 @@ export function PriceNote({ holdings }: { holdings: Holding[] }) {
     <p className="mt-3 border-t pt-3 text-[12.5px] text-muted-foreground">
       {latest ? `Valued at the closing price of ${day(latest)} on NSE (BSE if it isn't listed there).` : "Valued at the price on your statement."}
       {latest && kept > 0 && ` ${kept} without an exchange price ${kept === 1 ? "keeps" : "keep"} your statement's price.`}
+    </p>
+  )
+}
+
+/**
+ * M34 (plan §21.13 rule 4): shares in a broker holdings statement newer than the CDSL statement but not in it. CDSL's
+ * quantities win, so they aren't counted: a newer CDSL statement is asked for.
+ */
+export function BrokerNote({ members }: { members: Iterable<Member> }) {
+  const notes = [...members].flatMap((m) => (m.broker_notes ?? []).map((n) => ({ ...n, who: m.name })))
+  if (!notes.length) return null
+  const names = notes.slice(0, 3).map((n) => n.name).join(", ") + (notes.length > 3 ? ` and ${notes.length - 3} more` : "")
+  return (
+    <p className="mt-3 border-t pt-3 text-[12.5px] text-muted-foreground" role="status">
+      {notes.length === 1 ? "1 share" : `${notes.length} shares`} in your {notes[0]!.broker} holdings statement of {day(notes[0]!.as_of)}{" "}
+      {notes.length === 1 ? "isn't" : "aren't"} in your CDSL statement yet ({names}). Upload a newer CDSL statement to count{" "}
+      {notes.length === 1 ? "it" : "them"}.
     </p>
   )
 }
@@ -268,6 +285,7 @@ export function AssetsView(p: Props) {
             priceLabel={TABLE_LABELS[current].price}
           />
           {current === "stock" && <PriceNote holdings={rows} />}
+          {(current === "stock" || current === "etf") && !p.category && <BrokerNote members={p.members.values()} />}
         </Panel>
         {current === "mf" && !p.category && (p.sips.length > 0 || p.sipsMissing.length > 0) && (
           <div id="sips" className="scroll-mt-24">

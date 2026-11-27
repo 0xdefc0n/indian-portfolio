@@ -4,7 +4,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { Holding } from "@/lib/api"
 import { categoryColor, inr, pct, signed } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { holdingFlows, xirr } from "@/lib/xirr"
+import { costKnown, dated, holdingFlows, xirr } from "@/lib/xirr"
 
 export type Slice = { category: string; value: number; share: number; funds: number }
 
@@ -31,8 +31,8 @@ function details(holdings: Holding[]): Map<string, Detail> {
   for (const h of holdings) {
     const d = out.get(h.category) ?? { funds: [], invested: 0, current: 0, xirr: null, known: 0 }
     d.funds.push(h)
-    if (h.invested != null && h.cashflows?.length) {
-      d.invested += h.invested
+    if (costKnown(h)) {
+      d.invested += h.invested ?? 0
       d.current += h.value
       d.known += 1
     }
@@ -40,8 +40,8 @@ function details(holdings: Holding[]): Map<string, Detail> {
   }
   for (const d of out.values()) {
     d.funds.sort((a, b) => b.value - a.value)
-    const withCost = d.funds.filter((h) => h.invested != null && h.cashflows?.length)
-    d.xirr = withCost.length ? xirr(holdingFlows(withCost)) : null
+    const withDates = dated(d.funds.filter(costKnown))
+    d.xirr = withDates.length ? xirr(holdingFlows(withDates)) : null
   }
   return out
 }
@@ -101,7 +101,7 @@ function SliceCard({ slice, detail }: { slice: Slice; detail: Detail }) {
             <li key={`${h.member_id}-${h.isin}-${h.folio}`} className="flex items-baseline gap-3">
               <span className="min-w-0 flex-1 truncate">{h.name}</span>
               <span className="shrink-0 tabular-nums">{inr(h.value)}</span>
-              {h.invested != null && h.cashflows?.length ? (
+              {h.invested != null && costKnown(h) ? (
                 <span className={cn("w-14 shrink-0 text-right text-xs tabular-nums", h.value >= h.invested ? "text-gain" : "text-loss")}>
                   {signed(((h.value - h.invested) / h.invested) * 100, (n) => pct(n, 1))}
                 </span>

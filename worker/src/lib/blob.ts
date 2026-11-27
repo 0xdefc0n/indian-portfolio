@@ -25,6 +25,8 @@ export const blobKeys = {
   statement: (hid: string, statementId: string) => `h/${part(hid, 'household')}/statements/${part(statementId, 'statement')}.bin`,
   snapshot: (hid: string, inputsHash: string) => `h/${part(hid, 'household')}/snapshot/${part(inputsHash, 'hash')}.bin`,
   tradebook: (hid: string, id: string) => `h/${part(hid, 'household')}/tradebooks/${part(id, 'tradebook')}.bin`,
+  /** A broker holdings statement's parsed rows (M34). */
+  holdings: (hid: string, id: string) => `h/${part(hid, 'household')}/holdings/${part(id, 'holdings')}.bin`,
   parkedPdf: (hid: string, jobId: string) => `tmp/${part(hid, 'household')}/${part(jobId, 'job')}.bin`,
   /** Cached daily series (§10.5.3): one per snapshot inputs, latest NAV date and member (or `all`). */
   dailyPrefix: (hid: string, inputsHash?: string) =>

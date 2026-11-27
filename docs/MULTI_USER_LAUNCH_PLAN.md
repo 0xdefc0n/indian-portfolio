@@ -3155,3 +3155,78 @@ exist; shares without them show "—" ("needs buy dates") and stay out of portfo
 **Privacy.** Like tradebooks: the file is read once and never kept; only ISIN, quantity, average price and the as-on
 date are stored, sealed. The name is used only as the member's name.
 
+#### As built (M34, 2026-11-28)
+- **Brokers.** The owner had no other broker's header row, so the others come from research (open-source parsers
+  checked against real files, broker help pages):
+  - **Groww**: the owner's layout above.
+  - **Zerodha Console** (high confidence): `Symbol, ISIN, Sector, Quantity Available, Quantity Discrepant, Quantity
+    Long Term, Quantity Pledged (Margin), Quantity Pledged (Loan), Average Price, Previous Closing Price, …`, preamble
+    `Client ID` and `Equity Holdings Statement as on YYYY-MM-DD`. The quantity is Available + Discrepant + both
+    Pledged columns. Long Term is part of Available, so it isn't added. The workbook has `Equity`, `Mutual Funds` and
+    `Combined` sheets: only the first sheet with a known header is read, so nothing counts twice. Zerodha's Coin
+    mutual funds sheet is Later.
+  - **Dhan** holding summary (high confidence for the format): `Scrip Name, ISIN Code, Free Holding, Locked In, Safe
+    Keep, MTF Pledge, Margin Pledge, CUSA Pledge, Closing Price, Valuation`. It has quantities but no buy price, so its
+    shares show "Add buy price".
+  - **Not found**: Upstox, Angel One, ICICI Direct (its current export has no average price), HDFC Sky, Kotak Neo
+    and 5paisa. Each is added from one real header row.
+- **Code:**
+  - engine: `engine/parsers/broker_holdings.py` (profiles, preamble, one row per ISIN with NSE/BSE rows merged);
+    `parse.parse_broker` reads a file once and the first header in it decides holdings or tradebook;
+    `/parse` kind `BROKER`, with the password a JSON list of candidates; `portfolio._stage` / `_broker_rows`;
+    `equity._fill_broker` and `equity.derived_positions`.
+  - Worker: `src/lib/broker-files.ts`, `migrations/app/0014_broker_files.sql`.
+  - web: `statement-upload.tsx` ("Whose is this?", `SamePerson`) and the Members page.
+- **One upload.** `POST /api/statements` sends anything that isn't a PDF to the broker-file path. Up to 5 MB, the
+  direct path only: a busy engine answers 503 `engine_busy` and the SPA tries again, as for M21 tradebooks. The
+  `/api/tradebooks` upload with a member picker stays.
+- **Whose file it is**, in this order:
+  1. the member whose PAN the file names;
+  2. the member this account's earlier file went to;
+  3. the only member whose name matches the file's;
+  4. otherwise 422 `needs_member` with the file's name. The SPA asks, then sends the file again with `member_id` or
+     `new_member_name`. Asking isn't counted as a failed upload.
+- **Members without a PAN.** `member` can't drop its NOT NULLs without rebuilding a table that others cascade
+  from, so `no_pan = 1` marks such a member, with `pan_hmac 'nopan:{id}'`, sealed PAN `''` and masked PAN `''`.
+  - **Same person:** `GET /api/members` lists `same_as` on a member with a PAN (`sameName`: the same words, or all
+    of the shorter name's words with at least two; titles and initials ignored).
+  - **Yes:** `POST /api/members/{no-PAN id}/merge {into}` moves the broker files, tradebooks, buy prices and manual
+    assets to the PAN member and deletes the other, in one batch. Where both have a buy price for a share, the PAN
+    member's is kept.
+  - **No:** `POST …/keep-separate {other}` writes `member_distinct`, and the pair isn't asked about again.
+  - **When asked:** after the upload that created the PAN member, and on the Members page.
+- **Accounts.** `account_key` = HMAC(PAN_PEPPER, household | broker | client code), or the member's id when the file
+  has no code; it is unique per household.
+  - A newer file from the same account replaces the row and its blob in the same batch.
+  - An older file is refused: 409 `older_file`.
+  - Up to 12 accounts per member.
+- **Also stored, besides the plan's list:** each share's name and the statement's closing price. Both are public
+  market data, used to name and value a share until its exchange price series arrives (M20).
+- **Counting:**
+  - Rule 3's order is kept: tradebook lots, then the broker average, then a manual price. A broker average covers
+    at most the units its files hold.
+  - Each file's average is put into the statement date's terms with the splits and bonuses in between.
+  - A lot from a broker average has no buy date (`dated: false`): it gives invested and gain, but no XIRR cash flows
+    and no tax split. A sale from it gives no realised gain (counted as unknown cost).
+  - `cost_source` gains `broker`, `tradebook+broker` and `broker+manual`.
+  - The web's totals count these shares in invested and returns, and leave them out of XIRR (`costKnown` / `dated`
+    in `lib/xirr.ts`).
+- **A tradebook alone** (no CDSL statement, no holdings file) now shows what its trades still hold
+  (`derived_positions`), valued at the last trade price until the exchange series arrives. Its lots are dated, so
+  they get an XIRR.
+- **Builds.**
+  - A household with only broker files or tradebooks builds, and `readSnapshotRow` counts those files as sources.
+  - `members` (in the `/build` request) names members that have no statement.
+  - `broker_notes` on a member are rule 4's notes, shown under Stocks and ETFs.
+  - Prebuild includes these households.
+  - `SNAPSHOT_VERSION` is 8.
+- **ETFs from a broker file are ETFs.** The web treated any source other than CDSL as a fund-house holding. Now only
+  CAMS/KFintech sources make a holding a mutual fund.
+
+**Later:**
+- other brokers' profiles, from one real header row each;
+- Zerodha's mutual funds sheet;
+- a tradebook-only member who also has a holdings file from another broker (today the tradebook's derived positions
+  are used only when the member has neither a CDSL statement nor a holdings file);
+- a member without a PAN gaining one from a tradebook that names it.
+

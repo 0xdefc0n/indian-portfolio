@@ -73,3 +73,40 @@ def parse_trades(data: bytes, password: str) -> dict:
         log.warning("tradebook parser crashed: %s", type(e).__name__)
         return {"ok": False, "code": "parse_error", "message": "Could not read this tradebook", "metrics": _metrics(t0)}
     return {"ok": True, "kind": "TRADEBOOK", "source": tb["broker"], "pan": tb.pop("pan"), "statement": tb, "metrics": _metrics(t0)}
+
+
+def parse_broker(data: bytes, passwords: list[str]) -> dict:
+    """A broker file (M34): a holdings statement or a tradebook, told apart by the header row, CSV or Excel.
+
+    {ok: True, kind: "HOLDINGS" | "TRADEBOOK", source: broker slug, pan, statement, metrics} or {ok: False, code, ...}.
+    `passwords`: candidates for an encrypted Excel (Groww's open with the holder's PAN), tried in order.
+    The header that comes first in the file decides; a file with neither is `unrecognised`.
+    """
+    from .parsers import broker_holdings, tradebook
+
+    t0 = time.process_time()
+    tries: list[str] = []
+    for p in passwords:
+        for v in (p.upper(), p):
+            if v and v not in tries:
+                tries.append(v)
+    try:
+        st = kind = None
+        for rows in tradebook.read_sheets(data, tries):  # the first sheet with a known header decides
+            hold = broker_holdings.find_header(rows)
+            trade = tradebook.find_header(rows)
+            if hold and (not trade or hold[1] <= trade[1]):
+                st, kind = broker_holdings.parse_holdings_rows(rows, hold), "HOLDINGS"
+            elif trade:
+                st, kind = tradebook.parse_tradebook_rows(rows, trade), "TRADEBOOK"
+            if st is not None:
+                break
+        if st is None:
+            raise TradebookError("unrecognised", "Not a broker file we know")
+    except TradebookError as e:
+        log.info("broker file failed: %s", e.code)
+        return {"ok": False, "code": e.code, "message": str(e), "metrics": _metrics(t0)}
+    except Exception as e:
+        log.warning("broker file parser crashed: %s", type(e).__name__)
+        return {"ok": False, "code": "parse_error", "message": "Could not read this file", "metrics": _metrics(t0)}
+    return {"ok": True, "kind": kind, "source": st["broker"], "pan": st.pop("pan", None), "statement": st, "metrics": _metrics(t0)}

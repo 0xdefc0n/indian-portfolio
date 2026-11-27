@@ -5,9 +5,13 @@ POST /parse   body: the raw PDF bytes (application/pdf)
               → parse_pdf()'s result plus the engine `version`
               X-Statement-Kind TRADEBOOK: the body is a broker tradebook (CSV/XLSX, M21) and the password the member's
               PAN (Groww's reports open with it) → parse_trades()'s result
+              X-Statement-Kind BROKER: a broker holdings statement or tradebook (CSV/XLSX, M34), told apart by the
+              header row; the password is a JSON list of candidates (PANs, typed) → parse_broker()'s result
               The body is read into memory. Multipart is deliberately not used: Starlette spools uploads over 1 MB
               to a temporary file on disk, and PDFs must never touch disk.
-POST /build   JSON {statements, market, today, format?, overrides?, trades?, stock_costs?} → the portfolio snapshot
+POST /build   JSON {statements, market, today, format?, overrides?, trades?, stock_costs?, broker_holdings?, members?}
+              → the portfolio snapshot. broker_holdings / members: broker holdings statements and members that
+              have no statement (M34, portfolio.py)
               trades / stock_costs: broker tradebook trades and manual average buy prices (M21, equity.py), with
               market.corp_actions, market.symbols and market.fmv_2018
               overrides: the user's SIP skips and cancels, [{member_id, isin, folio, kind: skip|cancel, due}] (M12);
@@ -50,7 +54,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from . import VERSION, amc, navstore, stocks
-from .parse import parse_pdf, parse_trades, peak_rss_mb
+from .parse import parse_broker, parse_pdf, parse_trades, peak_rss_mb
 from .portfolio import build_portfolio, market_requirements
 
 MAX_PDF_BYTES = 10 * 1024 * 1024
@@ -111,7 +115,7 @@ async def parse(request: Request):
         if data is None:
             return _error(413, "too_large", "PDF is larger than 10 MB")
         kind = request.headers.get("x-statement-kind") or None
-        if kind != "TRADEBOOK" and not data.startswith(b"%PDF"):
+        if kind not in ("TRADEBOOK", "BROKER") and not data.startswith(b"%PDF"):
             return JSONResponse({"ok": False, "code": "unrecognised", "message": "Not a PDF file"})
         try:
             raw = request.headers.get("x-pdf-password", "")
@@ -121,6 +125,13 @@ async def parse(request: Request):
             return _error(400, "bad_request", "X-Pdf-Password must be base64url")
         if kind == "TRADEBOOK":  # a broker tradebook, CSV or Excel (M21); the password is the member's PAN
             result = await asyncio.to_thread(parse_trades, data, password)
+        elif kind == "BROKER":  # a holdings statement or a tradebook (M34); the password is a JSON list of candidates
+            try:
+                cands = json.loads(password) if password else []
+                cands = [str(x) for x in cands][:12] if isinstance(cands, list) else []
+            except ValueError:
+                cands = []
+            result = await asyncio.to_thread(parse_broker, data, cands)
         else:
             result = await asyncio.to_thread(parse_pdf, data, password, kind)
         del data, password
@@ -151,10 +162,11 @@ async def build(request: Request):
             return _error(400, "bad_request", "Expected JSON {statements, market?, today?, overrides?}")
         try:
             trades, costs = req.get("trades") or [], req.get("stock_costs") or []  # M21
-            if not isinstance(trades, list) or not isinstance(costs, list):
-                return _error(400, "bad_request", "trades and stock_costs must be lists")
+            broker, members_in = req.get("broker_holdings") or [], req.get("members") or []  # M34
+            if not all(isinstance(x, list) for x in (trades, costs, broker, members_in)):
+                return _error(400, "bad_request", "trades, stock_costs, broker_holdings and members must be lists")
             result, want = await asyncio.to_thread(_build, statements, market, today, req.get("format") == "gzip", overrides,
-                                                   trades, costs)
+                                                   trades, costs, broker, members_in)
         except navstore.NavStoreError as e:
             log.warning("nav store failed: %s", e)
             return _error(502, "nav_store_error", "Could not read NAVs")
@@ -201,16 +213,17 @@ async def stocks_parse(request: Request):
 
 def _build(statements: list, market: dict, today: date | None, gz: bool,
            overrides: list | None = None, trades: list | None = None,
-           costs: list | None = None) -> tuple[dict | bytes, list[list[str]]]:
+           costs: list | None = None, broker: list | None = None,
+           members_in: list | None = None) -> tuple[dict | bytes, list[list[str]]]:
     """The CPU part of /build (a thread). NAVs come from the NAV store unless the request carries them."""
     if market.get("market_date") and market.get("navs") is None and navstore.store_url():
-        need = market_requirements(statements, market.get("isin_to_code") or {})
+        need = market_requirements(statements, market.get("isin_to_code") or {}, broker, trades, market.get("symbols"), today)
         refresh = {str(c) for c in market.get("refresh") or []}
         market["navs"] = navstore.load(need["codes"], str(market.get("nav_key") or market["market_date"]), refresh=refresh)
         if need["price_isins"] and market.get("prices") is None:
             market["prices"] = navstore.load_prices(need["price_isins"], str(market.get("price_key") or market.get("nav_key") or market["market_date"]),
                                                     refresh={str(i) for i in market.get("price_refresh") or []})
-    snapshot = build_portfolio(statements, market, today, overrides, trades, costs)
+    snapshot = build_portfolio(statements, market, today, overrides, trades, costs, broker, members_in)
     want = stocks.wanted(snapshot["holdings"], market.get("stocks"))
     if not gz:
         return snapshot, want

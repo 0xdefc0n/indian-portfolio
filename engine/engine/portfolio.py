@@ -299,7 +299,117 @@ def _fund_codes(staged: list, isin_to_code: dict[str, str]) -> dict[str, str]:
     return codes
 
 
-def market_requirements(statements: list[dict], isin_to_code: dict[str, str] | None = None) -> dict:
+# ─── Broker files (M34, plan §21.13) ─────────────────────────────────────────────────────────────────────────────
+
+def _newest_per_account(files: list[dict]) -> list[dict]:
+    """Each broker account's newest holdings file (the Worker keeps only that one, but builds don't rely on it)."""
+    best: dict[tuple, dict] = {}
+    for f in files:
+        key = (f.get("broker"), f.get("account") or f.get("id"))
+        cur = best.get(key)
+        if cur is None or str(f.get("as_of") or "") >= str(cur.get("as_of") or ""):
+            best[key] = f
+    return list(best.values())
+
+
+def _broker_asset_type(isin: str) -> str:
+    return "mutual_fund" if isin.startswith("INF") else "equity_or_bond"
+
+
+def _broker_rows(files: list[dict], cdsl: dict | None, rta: dict | None) -> tuple[list[dict], dict[str, list[dict]], list[dict]]:
+    """A member's broker holdings files → (rows to add to the merged holdings, buy prices by ISIN, notes).
+
+    Rule 1: with a CDSL statement, CDSL's quantities win; the files only give buy prices, and a share that is only in a
+    file newer than the statement gets a note ("bought after your CDSL statement"). Rule 2: without one, quantities
+    add up across broker accounts (each account's newest file). The as-on date of a row is its newest file's.
+    """
+    files = _newest_per_account(files)
+    costs: dict[str, list[dict]] = {}
+    for f in files:
+        for h in f.get("holdings") or []:
+            if h.get("isin") and h.get("qty"):
+                costs.setdefault(h["isin"], []).append({"qty": h["qty"], "avg_price": h.get("avg_price"), "as_of": f.get("as_of")})
+    if cdsl:
+        held = {h["isin"] for h in cdsl.get("holdings", [])} | {h["isin"] for h in (rta or {}).get("holdings", [])}
+        stmt = _as_of(cdsl)
+        notes: dict[str, dict] = {}
+        for f in files:
+            if str(f.get("as_of") or "") <= stmt:
+                continue
+            for h in f.get("holdings") or []:
+                if h.get("isin") and h["isin"] not in held:
+                    notes.setdefault(h["isin"], {"isin": h["isin"], "name": display_name(h.get("name") or h["isin"]),
+                                                 "broker": f.get("broker_name") or f.get("broker"), "as_of": f.get("as_of")})
+        return [], costs, sorted(notes.values(), key=lambda n: n["name"])
+    rta_isins = {h["isin"] for h in (rta or {}).get("holdings", [])}
+    rows: dict[str, dict] = {}
+    for f in sorted(files, key=lambda f: str(f.get("as_of") or "")):
+        name = f.get("broker_name") or f.get("broker") or ""
+        for h in f.get("holdings") or []:
+            isin, qty = h.get("isin"), float(h.get("qty") or 0)
+            if not isin or qty <= 0 or isin in rta_isins:
+                continue
+            r = rows.get(isin)
+            if r is None:
+                rows[isin] = r = {"isin": isin, "raw_name": h.get("name") or isin, "amc": "", "asset_type": _broker_asset_type(isin),
+                                  "units": 0.0, "nav": None, "value": 0.0, "as_of": "", "pledged": 0, "broker": "", "folio": None,
+                                  "invested": None, "sources": [], "cashflows": None}
+            r["units"] = round(r["units"] + qty, 6)
+            r["as_of"] = max(r["as_of"], str(f.get("as_of") or ""))
+            if h.get("close"):
+                r["nav"] = h["close"]  # the newest file's closing price, until the exchange series arrives
+            if name and name not in r["sources"]:
+                r["sources"].append(name)
+            r["broker"] = ", ".join(r["sources"])
+    for r in rows.values():
+        r["value"] = round(r["units"] * r["nav"], 2) if r["nav"] else 0.0
+    return list(rows.values()), costs, []
+
+
+def _tradebook_rows(trades: list[dict], corp: "equity.Market", today: date) -> list[dict]:
+    """Shares a member holds by their tradebooks alone (no CDSL statement and no holdings file): the units left after
+    replaying every trade, valued at the last trade price until the exchange series arrives. The as-on date is the
+    last trade's, so build-time corporate actions after it still apply."""
+    pos = equity.derived_positions(trades, corp, today)
+    return [{"isin": p["isin"], "raw_name": p["name"], "amc": "", "asset_type": _broker_asset_type(p["isin"]),
+             "units": p["units"], "nav": p["price"], "value": round(p["units"] * p["price"], 2) if p["price"] else 0.0,
+             "as_of": p["as_of"], "pledged": 0, "broker": p["broker"], "folio": None, "invested": None,
+             "sources": ["Tradebook"], "cashflows": None} for p in pos]
+
+
+def _stage(statements: list[dict], broker_holdings: list[dict] | None, trades: list[dict] | None,
+           members: list[dict] | None, corp: "equity.Market", today: date) -> tuple[dict, list]:
+    """by_member (statements plus members known only from broker files or tradebooks) and the staged rows:
+    [(member_id, cdsl, rta, merged rows, total, CDSL history, broker costs, notes)]."""
+    by_member = _latest_by_member(statements)
+    files_by: dict[str, list[dict]] = {}
+    for f in broker_holdings or []:
+        files_by.setdefault(f.get("member_id"), []).append({**f, "as_of": str(f.get("as_of") or today.isoformat())[:10]})
+    trades_by: dict[str, list[dict]] = {}
+    for tb in trades or []:
+        for t in tb.get("trades") or []:
+            trades_by.setdefault(tb.get("member_id"), []).append({**t, "broker": tb.get("broker")})
+    names = {m.get("member_id"): m.get("name") for m in members or []}
+    for mid in list(files_by) + list(trades_by):
+        if mid and mid not in by_member:
+            holder = next((f.get("holder_name") for f in files_by.get(mid, []) if f.get("holder_name")), None)
+            by_member[mid] = {"pan": "", "name": names.get(mid) or (holder.title() if holder else None)}
+    staged = []
+    for mid, kinds in by_member.items():
+        cdsl, rta = kinds.get("CDSL"), kinds.get("RTA")
+        merged = _merge_holdings(cdsl, rta)
+        extra, costs, notes = _broker_rows(files_by.get(mid, []), cdsl, rta)
+        merged += extra
+        if not cdsl and not files_by.get(mid) and trades_by.get(mid):
+            have = {h["isin"] for h in merged}
+            merged += [r for r in _tradebook_rows(trades_by[mid], corp, today) if r["isin"] not in have]
+        staged.append((mid, cdsl, rta, merged, sum(h["value"] for h in merged), _full_history(kinds.get("CDSL_ALL", [])), costs, notes))
+    return by_member, staged
+
+
+def market_requirements(statements: list[dict], isin_to_code: dict[str, str] | None = None,
+                        broker_holdings: list[dict] | None = None, trades: list[dict] | None = None,
+                        symbols: list[dict] | None = None, today: date | None = None) -> dict:
     """What market data a build of these statements can use, so the caller sends only that.
 
     {"codes": AMFI codes whose NAV series are needed (benchmark included),
@@ -307,8 +417,8 @@ def market_requirements(statements: list[dict], isin_to_code: dict[str, str] | N
      "held_isins": every ISIN held (stock data is only used for the equity ones),
      "price_isins": shares and bonds held in demat, whose exchange-price series are needed (M20)}
     """
-    staged = [(mid, k.get("CDSL"), k.get("RTA"), _merge_holdings(k.get("CDSL"), k.get("RTA")))
-              for mid, k in _latest_by_member(statements).items()]
+    corp = equity.Market.from_data(None, symbols)
+    _, staged = _stage(statements, broker_holdings, trades, None, corp, today or date.today())
     codes = _fund_codes(staged, isin_to_code or {})
     held = {h["isin"] for st in staged for h in st[3]}
     return {
@@ -339,7 +449,8 @@ def _overrides_by_member(overrides: list[dict] | None) -> dict[str, dict]:
 
 def build_portfolio(statements: list[dict], market_data: dict | None = None, today: date | None = None,
                     overrides: list[dict] | None = None, trades: list[dict] | None = None,
-                    stock_costs: list[dict] | None = None) -> dict:
+                    stock_costs: list[dict] | None = None, broker_holdings: list[dict] | None = None,
+                    members_in: list[dict] | None = None) -> dict:
     """Newest CDSL + newest CAMS/KFintech statement per member, merged into one family view.
 
     statements:  [{"member_id", "pan", "name"?, "data"}]: decrypted parsed statements of one household.
@@ -352,17 +463,16 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
     trades:      broker tradebooks (M21), [{"member_id", "broker", "trades": [...]}] (parsers/tradebook.py).
     stock_costs: manual average buy prices (M21), [{"member_id", "isin", "avg_price", "since"?}].
                  market_data also carries "corp_actions", "symbols" and "fmv_2018" for them (equity.py).
+    broker_holdings: broker holdings statements (M34), [{"member_id", "broker", "broker_name", "account", "as_of",
+                 "holder_name"?, "holdings": [{isin, name, qty, avg_price, close}]}] (parsers/broker_holdings.py).
+    members_in:  [{"member_id", "name"}] for members with no statement (their name; a PAN-less member, D29).
     """
     market_data = market_data or {}
     today = today or date.today()
-    by_member = _latest_by_member(statements)
+    corp = equity.Market.from_data(market_data.get("corp_actions"), market_data.get("symbols"), market_data.get("fmv_2018"))
+    by_member, staged = _stage(statements, broker_holdings, trades, members_in, corp, today)
 
     members, holdings, activity, sips = [], [], [], []
-    staged = []
-    for mid, kinds in by_member.items():
-        cdsl, rta = kinds.get("CDSL"), kinds.get("RTA")
-        merged = _merge_holdings(cdsl, rta)
-        staged.append((mid, cdsl, rta, merged, sum(h["value"] for h in merged), _full_history(kinds.get("CDSL_ALL", []))))
 
     codes = _fund_codes(staged, market_data.get("isin_to_code") or {})
     navs = market.series_map(market_data.get("navs"))
@@ -372,7 +482,6 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
     user_overrides = _overrides_by_member(overrides)
     waiting = {str(c) for c in market_data.get("refresh") or []}  # codes whose NAV backfill is still running
     scores = market_data.get("scores") or {}  # benchmark scores by ISIN, computed by the Worker (M28)
-    corp = equity.Market.from_data(market_data.get("corp_actions"), market_data.get("symbols"), market_data.get("fmv_2018"))
     trades_by: dict[str, list[dict]] = {}
     for tb in trades or []:
         for t in tb.get("trades") or []:
@@ -383,9 +492,9 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
             costs_by.setdefault(c["member_id"], {})[c["isin"]] = c
     t_iso = today.isoformat()
 
-    for mid, cdsl, rta, merged, total, full_hist in sorted(staged, key=lambda s: -s[4]):
+    for mid, cdsl, rta, merged, total, full_hist, broker_costs, broker_notes in sorted(staged, key=lambda s: -s[4]):
         pan = by_member[mid]["pan"]
-        name = by_member[mid]["name"] or ((cdsl or {}).get("holder_name") or (rta or {}).get("holder_name") or "").title() or _mask_pan(pan)
+        name = by_member[mid]["name"] or ((cdsl or {}).get("holder_name") or (rta or {}).get("holder_name") or "").title() or _mask_pan(pan) or "Member"
         hist = (cdsl or {}).get("valuation_history", [])
         cdsl_isins = {h["isin"] for h in (cdsl or {}).get("holdings", [])}
         rta_isins = {s["isin"] for s in (rta or {}).get("schemes", [])}
@@ -407,7 +516,11 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
             # fixes them); "estimated": some stay that way (no NAV history exists). None: every month at daily NAVs.
             "history_note": rebuilt_note if use_rta else None,
             "sources": sorted({k if k == "CDSL" else (st.get("file_type") or "RTA")
-                               for k, st in (("CDSL", cdsl), ("RTA", rta)) if st}),
+                               for k, st in (("CDSL", cdsl), ("RTA", rta)) if st}
+                              | {s for h in merged if "CDSL" not in h["sources"] for s in h["sources"]
+                                 if s not in ("CAMS", "KFINTECH", "RTA")}),
+            # shares only in a broker file newer than the CDSL statement: not counted (rule 1), a newer one is asked for
+            "broker_notes": broker_notes,
             "accounts": [
                 {"depository": a["depository"], "broker": a["dp_name"].title(), "funds": a["num_isins"], "value": a["value"]}
                 for a in (cdsl or {}).get("accounts", [])
@@ -427,7 +540,7 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
                 close[h["isin"]] = (series.dates[-1], series.navs[-1])
             elif h.get("nav"):
                 close[h["isin"]] = (h["as_of"], h["nav"])
-        eq = equity.member_stocks(merged, trades_by.get(mid, []), costs_by.get(mid, {}), corp, first_seen, today, close)
+        eq = equity.member_stocks(merged, trades_by.get(mid, []), costs_by.get(mid, {}), corp, first_seen, today, close, broker_costs)
         analysis = member_analysis(rta, cdsl, merged, today, eq["realised"],
                                    {i: x["tax"] for i, x in eq["holdings"].items() if x.get("tax")})
         members[-1]["analysis"] = {k: v for k, v in analysis.items() if k != "unrealised"}

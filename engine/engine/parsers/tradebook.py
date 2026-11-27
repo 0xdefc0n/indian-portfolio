@@ -83,6 +83,11 @@ def _cell(v: object) -> object:
 
 def read_rows(data: bytes, passwords: list[str] | None = None) -> list[list]:
     """Every sheet's rows (first sheet with a known header wins later), as lists of cells."""
+    return [row for s in read_sheets(data, passwords) for row in s + [[]]]
+
+
+def read_sheets(data: bytes, passwords: list[str] | None = None) -> list[list[list]]:
+    """Each sheet's rows in workbook order (a CSV is one sheet). Raises TradebookError."""
     if data.startswith(OLE_MAGIC):
         data = _decrypt(data, passwords or [])
     if data.startswith(b"PK\x03\x04") or data.startswith(OLE_MAGIC):
@@ -94,7 +99,7 @@ def read_rows(data: bytes, passwords: list[str] | None = None) -> list[list]:
             for name in wb.sheet_names:
                 rows = wb.get_sheet_by_name(name).to_python(skip_empty_area=False)
                 sheets.append([[_cell(c) for c in r] for r in rows[:MAX_ROWS]])
-            return [row for s in _order_sheets(sheets) for row in s + [[]]]
+            return _order_sheets(sheets)
         except (zipfile.BadZipFile, ValueError, OSError, Exception) as e:  # calamine raises its own classes
             if isinstance(e, TradebookError):
                 raise
@@ -108,7 +113,7 @@ def read_rows(data: bytes, passwords: list[str] | None = None) -> list[list]:
             continue
     sample = (text or "")[:4096]
     delim = "\t" if sample.count("\t") > sample.count(",") else (";" if sample.count(";") > sample.count(",") else ",")
-    return [r for r in csv.reader(io.StringIO(text or ""), delimiter=delim)][:MAX_ROWS]
+    return [[r for r in csv.reader(io.StringIO(text or ""), delimiter=delim)][:MAX_ROWS]]
 
 
 def _order_sheets(sheets: list[list[list]]) -> list[list[list]]:
@@ -370,7 +375,7 @@ PROFILES: list[Profile] = [
 BROKERS = {p.slug: p.name for p in PROFILES}
 
 
-def _find_header(rows: list[list]) -> tuple[Profile, int, list[str]] | None:
+def find_header(rows: list[list]) -> tuple[Profile, int, list[str]] | None:
     """The first row (in each sheet's first HEADER_SCAN_ROWS) that matches a profile."""
     since_blank = 0
     for i, row in enumerate(rows):
@@ -391,9 +396,14 @@ def _find_header(rows: list[list]) -> tuple[Profile, int, list[str]] | None:
 def parse_tradebook(data: bytes, passwords: list[str] | None = None) -> dict:
     """{broker, broker_name, pan, period_from, period_to, trades, counts}. Raises TradebookError."""
     rows = read_rows(data, passwords)
-    found = _find_header(rows)
+    found = find_header(rows)
     if not found:
         raise TradebookError("unrecognised", "Not a tradebook we know")
+    return parse_tradebook_rows(rows, found)
+
+
+def parse_tradebook_rows(rows: list[list], found: tuple[Profile, int, list[str]]) -> dict:
+    """parse_tradebook() on rows already read, with the header found (M34 reads a broker file once for both kinds)."""
     prof, at, names = found
     pans = {m for row in rows[:at] for c in row if c is not None for m in PAN_RE.findall(str(c).upper())}
     counts = Counts()

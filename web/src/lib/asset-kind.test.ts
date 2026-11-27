@@ -24,4 +24,9 @@ describe("holdingKind", () => {
     expect(holdingKind({ isin: "INF000S02ET2", name: "Synth Nifty 50 ETF", sebi_category: null, ...rta })).toBe("mf")
     expect(holdingKind({ isin: "INF000S02ET2", name: "Synth Nifty 50 ETF", sebi_category: null, sources: ["CDSL", "KFINTECH"], folio: null })).toBe("mf")
   })
+
+  it("an ETF from a broker file (M34) is held in demat: an ETF", () => {
+    expect(holdingKind({ isin: "INF000S02ET2", name: "Synth Nifty 50 ETF", sebi_category: null, sources: ["Groww"], folio: null })).toBe("etf")
+    expect(holdingKind({ isin: "INF000S02ET2", name: "Synth Nifty 50 ETF", sebi_category: null, sources: ["Tradebook"], folio: null })).toBe("etf")
+  })
 })

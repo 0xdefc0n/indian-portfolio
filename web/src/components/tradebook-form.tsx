@@ -91,7 +91,7 @@ export function TradebookForm({ onDone }: { onDone: () => void }) {
   }
 
   if (members && !members.length) {
-    return <p className="text-sm text-muted-foreground">Add a CDSL statement first. A tradebook adds buy prices to the shares it shows.</p>
+    return <p className="text-sm text-muted-foreground">Add the tradebook under Stocks & ETFs instead: on its own, it shows the shares it still holds.</p>
   }
 
   return (

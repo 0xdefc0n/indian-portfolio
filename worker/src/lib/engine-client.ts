@@ -57,10 +57,11 @@ export type ParsedStatement = Record<string, unknown> & {
   warnings?: unknown[]
 }
 export type EngineParse =
-  | { ok: true; kind: 'CDSL' | 'RTA' | 'TRADEBOOK'; source: string; pan: string | null; statement: ParsedStatement; version: string }
+  | { ok: true; kind: 'CDSL' | 'RTA' | 'TRADEBOOK' | 'HOLDINGS'; source: string; pan: string | null; statement: ParsedStatement; version: string }
   | { ok: false; code: string }
 
-export type ParseRequest = { bytes: Uint8Array<ArrayBuffer>; password: string; kind: 'CDSL' | 'RTA' | 'TRADEBOOK' }
+/** kind BROKER (M34): a holdings statement or tradebook; `password` is then a JSON list of candidates. */
+export type ParseRequest = { bytes: Uint8Array<ArrayBuffer>; password: string; kind: 'CDSL' | 'RTA' | 'TRADEBOOK' | 'BROKER' }
 
 /** base64url of the UTF-8 password, the X-Pdf-Password header format (engine/engine/server.py). */
 export function passwordHeader(password: string): string {
