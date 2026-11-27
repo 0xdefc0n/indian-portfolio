@@ -627,7 +627,7 @@ export default function App({ me }: { me: Me }) {
       <LegalFooter className={ready ? "pb-28 md:pb-8" : undefined} />
       {/* the "Add statement" shortcut; the header and onboarding have their own buttons */}
       <AddStatementDialog onAdded={load} trigger={null} open={adding} onOpenChange={setAdding} />
-      <AssetDialogs state={assetDlg} members={pickMembers} rates={assets.rates} onClose={() => setAssetDlg(null)} onSaved={assets.reload} />
+      <AssetDialogs state={assetDlg} members={pickMembers} rates={assets.rates} onClose={() => setAssetDlg(null)} onSaved={assets.reload} onState={setAssetDlg} />
       {ready && <BottomNav tab={tab} onChange={setTab} />}
       <FundDialog
         holding={fund}

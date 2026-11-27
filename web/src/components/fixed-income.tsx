@@ -48,7 +48,7 @@ function RowMenu({ row, onAction, onChanged }: { row: AssetRow; onAction: (s: As
       setBusy(false)
     }
   }
-  const act = (kind: "edit" | "close" | "stop" | "adjust" | "delete") => () => onAction({ kind, asset: row })
+  const act = (kind: "details" | "edit" | "close" | "stop" | "adjust" | "delete") => () => onAction({ kind, asset: row })
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -57,6 +57,7 @@ function RowMenu({ row, onAction, onChanged }: { row: AssetRow; onAction: (s: As
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem onSelect={act("details")}>Details and projection</DropdownMenuItem>
         <DropdownMenuItem onSelect={act("edit")}>Edit</DropdownMenuItem>
         {row.type === "fd" &&
           (row.inputs.closed ? (
@@ -96,7 +97,13 @@ export function FixedIncomeList({ rows, memberName, onAction, onChanged, compact
           <li key={r.id} className={cn("grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3", compact ? "py-1.5" : "py-3")}>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-1.5">
-                <span className="truncate text-[14px] font-medium">{r.name}</span>
+                <button
+                  type="button"
+                  onClick={() => onAction({ kind: "details", asset: r })}
+                  className="-my-1.5 truncate rounded-sm py-1.5 text-left text-[14px] font-medium underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                >
+                  {r.name}
+                </button>
                 <Badge variant="secondary">Approximate</Badge>
                 {status && <Badge variant="outline">{status}</Badge>}
                 {r.v.provisional && <Badge variant="outline">Provisional rate</Badge>}

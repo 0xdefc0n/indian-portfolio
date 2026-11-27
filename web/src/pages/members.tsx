@@ -307,7 +307,7 @@ export function MembersPage({ me }: { me: Me }) {
           <FixedIncomeList rows={unassigned} onAction={setAssetDlg} onChanged={assets.reload} />
         </section>
       )}
-      <AssetDialogs state={assetDlg} members={pick} rates={assets.rates} onClose={() => setAssetDlg(null)} onSaved={assets.reload} />
+      <AssetDialogs state={assetDlg} members={pick} rates={assets.rates} onClose={() => setAssetDlg(null)} onSaved={assets.reload} onState={setAssetDlg} />
       <AddStatementDialog trigger={null} open={adding} onOpenChange={setAdding} onAdded={reload} />
       <RenameDialog key={`r-${renaming?.id}`} member={renaming} onClose={() => setRenaming(null)} onDone={() => { setRenaming(null); load() }} />
       <DeleteDialog key={`d-${deleting?.id}`} member={deleting} assets={rows.filter((r) => r.member_id === deleting?.id).length} onClose={() => setDeleting(null)}

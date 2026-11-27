@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   addMonths, assetName, epfValue, fdMaturity, fdValue, type FdInputs, parseInputs, ppfDeposits, ppfValue, type PpfInputs,
-  type RateTable, RATES, TENURE_CHIPS, tenureChip, tenureLabel, valueAsset,
+  projectAsset, projectionEnd, projectionStart, type RateTable, RATES, TENURE_CHIPS, tenureChip, tenureLabel, valueAsset,
 } from '../src/lib/manual-assets'
 
 const fd = (over: Partial<FdInputs> = {}): FdInputs => ({
@@ -217,5 +217,39 @@ describe('the rate table and the inputs', () => {
     expect(bad('ppf', { ...ppfOk, overrides: Array.from({ length: 61 }, (_, i) => ({ fy: 2000 + i, amount: 0 })) })).toEqual({ ok: false, field: 'overrides' })
     expect(bad('epf', { balance: 1, as_of: today, monthly: -1 })).toEqual({ ok: false, field: 'monthly' })
     expect(bad('epf', { balance: 1, as_of: today, monthly: 1, rate: 'x' })).toEqual({ ok: false, field: 'rate' })
+  })
+})
+
+describe('projection (the details view)', () => {
+  it('an FD ends at its maturity amount; a payout FD keeps the principal and adds up the interest paid out', () => {
+    const asset = { type: 'fd' as const, inputs: fd() }
+    const end = projectionEnd(asset, '2025-06-01')
+    expect(end).toBe('2026-01-15')
+    const pts = projectAsset(asset, projectionStart(asset), end)
+    expect(pts[0]).toEqual({ date: '2025-01-15', value: 100_000, invested: 100_000, received: 0 })
+    expect(pts.map((p) => p.date).slice(1, 3)).toEqual(['2025-01-31', '2025-02-28']) // month ends
+    expect(pts.at(-1)!.value).toBeCloseTo(107_185.9, 2) // = maturity amount
+    expect(pts.every((p, i) => i === 0 || p.value >= pts[i - 1]!.value)).toBe(true)
+    const payout = { type: 'fd' as const, inputs: fd({ amount: 200_000, rate: 7.5, start: '2025-02-01', payout: 'quarterly' }) }
+    const last = projectAsset(payout, '2025-02-01', projectionEnd(payout, '2025-02-01')).at(-1)!
+    expect(last).toMatchObject({ date: '2026-02-01', value: 200_000, received: 15_000 }) // 4 × 3,750
+  })
+
+  it('a PPF runs to its 15-year maturity, then (extended) a chosen number of years from today', () => {
+    const asset = { type: 'ppf' as const, inputs: ppf({ balance: 100_000, as_of: '2026-04-01', opened_year: 2018, yearly: 150_000 }) }
+    const end = projectionEnd(asset, '2026-11-27')
+    expect(end).toBe('2034-04-01')
+    const pts = projectAsset(asset, projectionStart(asset), end)
+    expect(pts.at(-1)!.value).toBeCloseTo(ppfValue(asset.inputs, end).value, 6) // the same calculator, as of that day
+    expect(pts.at(-1)!.invested).toBe(100_000 + 8 * 150_000) // FY 2026-27 … 2033-34 deposits
+    expect(projectionEnd({ type: 'ppf', inputs: ppf({ opened_year: 2005 }) }, '2026-11-27', 5)).toBe('2031-11-27')
+  })
+
+  it('an EPF runs the chosen years; contributions stop when stopped, interest carries on', () => {
+    const asset = { type: 'epf' as const, inputs: { balance: 100_000, as_of: '2025-03-31', monthly: 5_000, stopped: '2025-06-15', rate: null } }
+    expect(projectionEnd(asset, '2026-11-27', 5)).toBe('2031-11-27')
+    const pts = projectAsset(asset, projectionStart(asset), '2027-03-31')
+    expect(pts.at(-1)!.invested).toBe(110_000) // Apr and May only
+    expect(pts.at(-1)!.value).toBeGreaterThan(pts.at(-2)!.value)
   })
 })

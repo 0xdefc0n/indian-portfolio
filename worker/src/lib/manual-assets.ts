@@ -490,3 +490,56 @@ export function parseInputs(type: unknown, raw: unknown, today: string): ParseRe
   if (stopped !== null && !dateOk(stopped)) return bad('stopped')
   return { ok: true, inputs: { balance: raw.balance, as_of: raw.as_of, monthly: raw.monthly, stopped, rate } }
 }
+
+// ─── Projection (the details view: where the money goes from here) ─────────────────────────────────────────────
+
+export type ProjectionPoint = {
+  date: string
+  /** The value on that date (an FD with payouts: the principal). */
+  value: number
+  /** Money put in by then. */
+  invested: number
+  /** FD interest paid out by then (0 for the others). */
+  received: number
+}
+
+/** Where a projection starts: the FD's start, or the PPF/EPF balance date. */
+export const projectionStart = (asset: Asset) => (asset.type === 'fd' ? asset.inputs.start : asset.inputs.as_of)
+
+/**
+ * Where a projection ends by default: an FD's maturity (or its closing date); a PPF's 15-year maturity, or `years`
+ * past today once it's extended (and when asked); an EPF `years` from today.
+ */
+export function projectionEnd(asset: Asset, today: string, years = 10): string {
+  if (asset.type === 'fd') return asset.inputs.closed?.on ?? fdMaturity(asset.inputs.start, asset.inputs.tenure)
+  if (asset.type === 'ppf') {
+    const maturity = isoOf(asset.inputs.opened_year + 16, 4, 1)
+    return maturity > today ? maturity : addMonths(today, 12 * years)
+  }
+  return addMonths(today, 12 * years)
+}
+
+/**
+ * Month-end values from `from` to `until` (both included), each worked out as if that date were today: future
+ * deposits and contributions as entered, future years at today's rate (the table's last rate, provisional). At most
+ * 50 years of points.
+ */
+export function projectAsset(asset: Asset, from: string, until: string, rates: RateTable = RATES): ProjectionPoint[] {
+  const point = (date: string): ProjectionPoint => {
+    const v = valueAsset(asset, date, rates)
+    return { date, value: v.value, invested: v.invested, received: v.received }
+  }
+  if (until <= from) return [point(from)]
+  const out = [point(from)]
+  const [fy, fm] = ymd(from)
+  for (let i = 0; i < 600; i++) {
+    const idx = fy * 12 + fm - 1 + i
+    const y = Math.floor(idx / 12)
+    const m = (idx % 12) + 1
+    const end = isoOf(y, m, monthDays(y, m))
+    if (end >= until) break
+    if (end > from) out.push(point(end))
+  }
+  out.push(point(until))
+  return out
+}

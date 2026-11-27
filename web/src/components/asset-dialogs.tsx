@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Segmented } from "@/components/ui/segmented"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { AssetDetails } from "@/components/asset-details"
 import { ApiFailure, api, SignedOut } from "@/lib/api"
 import type { AssetRow } from "@/lib/assets"
 import { day, inr } from "@/lib/format"
@@ -22,7 +23,7 @@ import { cn } from "@/lib/utils"
 
 export type AssetDialogState =
   | { kind: "add"; member?: string | null }
-  | { kind: "edit" | "close" | "stop" | "adjust" | "delete"; asset: AssetRow }
+  | { kind: "details" | "edit" | "close" | "stop" | "adjust" | "delete"; asset: AssetRow }
   | null
 
 export type PickMember = { id: string; name: string }
@@ -439,12 +440,14 @@ function DeleteDialog({ asset, onClose, onSaved }: { asset?: AssetRow; onClose: 
 }
 
 /** Every asset dialog, driven by one state value. Each opens fresh (keyed), so nothing typed lingers. */
-export function AssetDialogs({ state, members, rates, onClose, onSaved }: {
+export function AssetDialogs({ state, members, rates, onClose, onSaved, onState }: {
   state: AssetDialogState
   members: PickMember[]
   rates: RateTable
   onClose: () => void
   onSaved: () => void
+  /** Move from one dialog to another (details → edit). */
+  onState: (s: AssetDialogState) => void
 }) {
   const done = () => { onClose(); onSaved() }
   const asset = state && state.kind !== "add" ? state.asset : undefined
@@ -456,6 +459,7 @@ export function AssetDialogs({ state, members, rates, onClose, onSaved }: {
       <CloseDialog key={`c-${key}`} asset={state?.kind === "close" ? asset : undefined} onClose={onClose} onSaved={done} />
       <StopDialog key={`s-${key}`} asset={state?.kind === "stop" ? asset : undefined} onClose={onClose} onSaved={done} />
       <AdjustDialog key={`a-${key}`} asset={state?.kind === "adjust" ? asset : undefined} onClose={onClose} onSaved={done} />
+      <AssetDetails key={`i-${key}`} asset={state?.kind === "details" ? asset : undefined} rates={rates} onClose={onClose} onEdit={(a) => onState({ kind: "edit", asset: a })} />
       <DeleteDialog key={`d-${key}`} asset={state?.kind === "delete" ? asset : undefined} onClose={onClose} onSaved={done} />
     </>
   )
