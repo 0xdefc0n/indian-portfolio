@@ -18,6 +18,7 @@
 import { quotaCounts, type QuotaSpec, quotaWindow, takeQuota } from '../lib/quota'
 import { amcCovers, enabledAdapters, targetMonth } from './amc/coverage'
 import { mffKey, mffPass } from './mfforecast'
+import { sectorStatement } from './score'
 import { TRACKED_UNSEEN_MS } from './store'
 
 export const BHARATSTOCK_URL = 'https://bharatstockapi.com'
@@ -475,6 +476,8 @@ async function storeHoldings(env: StocksEnv, isins: string[], got: { month: stri
     db.prepare('UPDATE stock_match SET month = ?2, fetched_at = ?3, failed_at = NULL WHERE isin IN (SELECT value FROM json_each(?1))').bind(JSON.stringify(isins), got.month, now),
     db.prepare('UPDATE stock_state SET version = version + 1 WHERE id = 1'),
   )
+  const sectors = sectorStatement(db, got.rows, now) // the stock score's sector line (M28)
+  if (sectors) writes.push(sectors)
   await db.batch(writes)
 }
 

@@ -26,6 +26,7 @@ import { requestAmc } from '../market/amc-scrape'
 import { mffKey } from '../market/mfforecast'
 import { sendPrices } from '../market/jobs'
 import { EQUITY_ISIN, pricesPending, priceVersion, trackEquities } from '../market/prices'
+import { scoresFor, scoreVersion } from '../market/score'
 import { apiKey, budgetLeft, recordWants, requestStocks, stockData, stocksEnabled, stocksVersion } from '../market/stocks'
 import { blobKeys, deleteBlobs, getJsonBlob, isUuid } from './blob'
 import { FLAG_GZIP, hmacHex, toBytes, type Vault } from './crypto'
@@ -40,10 +41,10 @@ import { Tenant } from './tenant'
 /**
  * Bump to rebuild every snapshot (a change in what the Worker sends to /build, or in what the engine builds).
  * 2: stock data (M11). 3: units timelines, estimated SIPs and values at the latest NAV (M12). 4: the SIP mandate day
- * follows a date change (M12 fix). 5: shares and bonds at the latest exchange price (M20). An older snapshot is stale,
+ * follows a date change (M12 fix). 5: shares and bonds at the latest exchange price (M20). 6: benchmark scores (M28). An older snapshot is stale,
  * so it rebuilds on its next read (snapshot.version).
  */
-export const SNAPSHOT_VERSION = 5
+export const SNAPSHOT_VERSION = 6
 /** Debounce: every trigger's message arrives this much later (§10.2). */
 export const REBUILD_DELAY_S = 10
 /** A claim outlives the engine call (100 s) and matches the batch lease (120 s). */
@@ -142,8 +143,9 @@ export function usedStatements(rows: StatementRow[]): StatementRow[] {
  * `stocks`: stock_state.version, so a build after the stocks job stored something isn't skipped as current.
  * `holidays`: exchange holidays for SIP run days (M12); a new one rebuilds.
  * `prices`: price_state.version (M20), so new exchange closes rebuild.
+ * `scores`: score_state.version (M28), so new benchmark scores rebuild.
  */
-export type MarketInputs = { marketDate: string; navKey: string; stocks?: number; holidays?: string[]; prices?: number }
+export type MarketInputs = { marketDate: string; navKey: string; stocks?: number; holidays?: string[]; prices?: number; scores?: number }
 
 /** The user's SIP skips and cancels (M12): `sip_enc` is sealed {isin, folio}. */
 export type OverrideRow = { id: string; member_id: string; kind: 'skip' | 'cancel'; due: string; sip_enc: number[] }
@@ -166,6 +168,7 @@ export async function inputsHash(env: { PAN_PEPPER: string }, market: MarketInpu
     nav: market.navKey,
     st: market.stocks ?? 0,
     px: market.prices ?? 0,
+    sc: market.scores ?? 0,
     hol: market.holidays ?? [],
     o: overrides.map((o) => o.id).sort(),
     s: statements.map((s) => s.id).sort(),
@@ -216,13 +219,14 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
   if (!household || !snap) return done(env, msg, 'gone')
   const loadedAt = now
   // Fresh, not the 5-minute edge copy: right after a day turns final, prebuild messages must see the new nav_key.
-  const [status, stocks, holidays, prices] = await Promise.all([
+  const [status, stocks, holidays, prices, scores] = await Promise.all([
     marketStatus(env),
     stocksVersion(env),
     holidayDates(env, addDays(istToday(now), -HOLIDAY_LOOKBACK_DAYS)),
     priceVersion(env),
+    scoreVersion(env),
   ])
-  const market = { ...marketInputs(status, now), stocks, holidays, prices }
+  const market = { ...marketInputs(status, now), stocks, holidays, prices, scores }
   const used = usedStatements(sRes!.results as StatementRow[])
   const members = mRes!.results as MemberRow[]
   const overrides = oRes!.results as OverrideRow[]
@@ -456,6 +460,7 @@ async function buildRequest(env: Env, vault: Vault, used: StatementRow[], member
       holidays: market.holidays ?? [],
       price_key: `${market.navKey}|px${market.prices ?? 0}`,
       price_refresh: pending,
+      scores: await scoresFor(env, [...isins]), // benchmark scores by ISIN (M28)
     },
     today: ymdToIso(istToday(now)),
     format: 'gzip',

@@ -9,6 +9,8 @@ import { estimateNote, isBuy, unitsText } from "@/lib/activity"
 import { inProgress, movedNote, nextRun } from "@/lib/sips"
 import { STOCK_TYPES } from "@/components/stock-exposure"
 import { holdingFlows, xirr } from "@/lib/xirr"
+import { asOfText, band, excessLine, noScoreText, scoreLine, sectorLine, toneClass } from "@/lib/score"
+import type { Score } from "@/lib/api"
 
 type Props = {
   holding: Holding | null
@@ -196,6 +198,8 @@ function Body({ h, member, showMember, activity, sips, benchmark, stocks, allTxn
         </Section>
       )}
 
+      {h.score && <ScoreSection s={h.score} />}
+
       {topStocks.length > 0 && (
         <Section title="Top holdings" aside={stocks?.month ? `${stockWeights.length} stocks, ${month(stocks.month, true)}` : undefined}>
           <ul className="space-y-2 text-sm">
@@ -252,3 +256,47 @@ function Body({ h, member, showMember, activity, sips, benchmark, stocks, allTxn
     </>
   )
 }
+
+/** The benchmark score (M28, plan §21.4): number and band, the plain lines, 3/5/10-year CAGRs against the index. */
+function ScoreSection({ s }: { s: Score }) {
+  if (s.score == null) {
+    const why = noScoreText(s)
+    return why ? (
+      <Section title="Benchmark score">
+        <p className="text-sm text-muted-foreground">{why}</p>
+      </Section>
+    ) : null
+  }
+  const b = band(s.score)
+  const lines = [scoreLine(s), excessLine(s), sectorLine(s)].filter(Boolean)
+  return (
+    <Section title="Benchmark score" aside={`vs ${s.index}, ${asOfText(s)}`}>
+      <div className="flex items-baseline gap-3">
+        <span className={cn("text-2xl font-semibold tabular-nums", toneClass(b))}>{s.score}</span>
+        <span className="text-sm text-muted-foreground">/ 100 · {b.label}</span>
+      </div>
+      {lines.map((l) => (
+        <p key={l} className="mt-1.5 text-sm">{l}</p>
+      ))}
+      {!!s.horizons?.length && (
+        <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+          {s.horizons.map((x) => (
+            <div key={x.years} className="rounded-lg bg-muted/50 px-2 py-2.5">
+              <div className="text-xs text-muted-foreground">{x.years}Y yearly</div>
+              <div className={cn("font-semibold", x.fund >= x.index ? "text-gain" : "text-loss")}>{signed(x.fund, (n) => pct(n))}</div>
+              <div className="text-xs text-muted-foreground">Index {signed(x.index, (n) => pct(n))}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="mt-3 text-xs text-muted-foreground">
+        Half risk-adjusted return against the index, half how often it beat the index over rolling 3- and 5-year periods,
+        on month-end values{s.months ? ` (${Math.round(s.months / 12)} years)` : ""}.
+        {s.growth_option && " Shown for the growth option of this fund, since payouts lower this option's NAV."}
+        {s.price_only && " Share prices only: dividends aren't counted."}
+        {" "}Not investment advice. Past performance doesn't predict future returns.
+      </p>
+    </Section>
+  )
+}
+

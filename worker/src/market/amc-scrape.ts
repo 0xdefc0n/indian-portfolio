@@ -20,6 +20,7 @@ import { adapterFor } from './amc'
 import { enabledAdapters, targetMonth } from './amc/coverage'
 import type { AmcAdapter } from './amc/types'
 import { holdingsKey, prevMonth, requestStocks, score, type StockRow } from './stocks'
+import { sectorStatement } from './score'
 import { TRACKED_UNSEEN_MS } from './store'
 
 /** The daily run: 07:30 IST, before the 09:30 IST BharatStock run and the 10:00 IST final NAV run and prebuild. */
@@ -276,6 +277,8 @@ async function storeRun(env: AmcEnv, run: AmcScrape, want: WantRow[], matched: M
         .bind(isins, now, month, JSON.stringify(Object.fromEntries(Object.entries(matched).map(([i, m]) => [i, m.scheme_name])))),
     )
     if (Object.keys(matched).length) writes.push(db.prepare('UPDATE stock_state SET version = version + 1 WHERE id = 1'))
+    const sectors = sectorStatement(db, Object.values(matched).flatMap((m) => m.rows), now) // the stock score's sector line (M28)
+    if (sectors) writes.push(sectors)
   } else {
     writes.push(db.prepare('UPDATE stock_match SET amc_at = ?2 WHERE isin IN (SELECT value FROM json_each(?1))').bind(isins, now))
     // A blocked or failing AMC leaves its funds to BharatStock: the next build's state changes, so rebuild.

@@ -26,8 +26,8 @@ import { TRACKED_UNSEEN_MS } from './store'
 export const EQUITY_ISIN = /^IN[E9][0-9A-Z]{9}$/
 export const PRICE_CRONS = ['30 17 * * *', '30 1 * * *'] // 23:00 IST (today's close) and 07:00 IST (the official one)
 export const ISINS_PER_MESSAGE = 50
-/** Backfill depth, as for NAVs (§10.4.3). */
-export const PRICE_HISTORY_DAYS = 5 * 365
+/** Backfill depth: 10 years, so a share gets a 10-year score part (owner, M28; Upstox serves it in one call). */
+export const PRICE_HISTORY_DAYS = 10 * 365
 /** Each incremental fetch reads back this many days it already has, to catch adjustments and late corrections. */
 export const OVERLAP_DAYS = 10
 /** A stored close this far off the source's on the same date means the history was adjusted: replace it all. */

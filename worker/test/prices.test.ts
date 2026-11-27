@@ -158,7 +158,7 @@ describe('the price job', () => {
     const r = await runPrices(env, [REL], { now: ist(13), ...noSleep })
     expect(r).toMatchObject({ replaced: 1, changed: 1 })
     expect(calls).toHaveLength(2) // the incremental read, then the full history again
-    expect(calls[1]).toBe(`/v3/historical-candle/NSE_EQ|${REL}/days/1/2026-11-27/2021-11-28`)
+    expect(calls[1]).toBe(`/v3/historical-candle/NSE_EQ|${REL}/days/1/2026-11-27/2016-11-29`) // 10 years back (M28)
     const closes = (await env.MARKET.prepare('SELECT close FROM stock_price WHERE isin = ?1 ORDER BY date').bind(REL).all<{ close: number }>()).results
     expect(closes).toHaveLength(18)
     expect(closes.at(-1)!.close).toBe(698.1)

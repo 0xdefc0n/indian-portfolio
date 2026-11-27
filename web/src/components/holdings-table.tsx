@@ -6,6 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { DayChange, Holding, Member } from "@/lib/api"
 import { categoryColor, inr, nav, pct, per, signed, units } from "@/lib/format"
 import { useOpenFund } from "@/lib/fund-context"
+import { band, toneClass } from "@/lib/score"
 import { cn } from "@/lib/utils"
 import { holdingFlows, xirr } from "@/lib/xirr"
 
@@ -79,6 +80,7 @@ export function HoldingsTable({ holdings, total, members, showMember, highlight,
                     {h.category}
                   </span>
                   {showMember && <span>{members.get(h.member_id)?.name.split(" ")[0]}</span>}
+                  {h.score?.score != null && <ScoreChip score={h.score.score} index={h.score.index} />}
                   {h.sip && (
                     <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary">
                       <RepeatIcon className="size-3" />
@@ -147,5 +149,15 @@ export function FundButton({ children, className }: { children: React.ReactNode;
     >
       {children}
     </button>
+  )
+}
+
+/** The benchmark score on a row (M28): the number in its band's colour; the dialog explains it. */
+function ScoreChip({ score, index }: { score: number; index: string | null }) {
+  const b = band(score)
+  return (
+    <span className={cn("rounded-full border px-2 py-0.5 font-medium tabular-nums", toneClass(b))} title={`${b.label}${index ? ` (${index})` : ""}. Not investment advice.`}>
+      Score {score}
+    </span>
   )
 }

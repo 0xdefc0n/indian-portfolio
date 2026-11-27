@@ -7,6 +7,7 @@ import { EngineBusy, runAmc } from './amc-scrape'
 import { runStocks } from './stocks'
 import { metalRates, REF_CODES } from './metals'
 import { ISINS_PER_MESSAGE, type PricesMessage, requestPrices, runPrices } from './prices'
+import { type IndicesMessage, planScores, runIndices, runScores, type ScoresMessage } from './score'
 import { amcId } from './amc-ids'
 import { addDays, AmfiFormatError, anomalies, istToday, type NavRow, parseAmfiNav, parseMfapi, type Ymd, ymdToAmfi, ymdToIso } from './amfi'
 import {
@@ -53,6 +54,8 @@ export type MarketMessage =
   | { type: 'stocks' } // the BharatStock job (src/market/stocks.ts, M11)
   | { type: 'amc' } // the AMC disclosure scrapers (src/market/amc-scrape.ts, M18)
   | PricesMessage // exchange prices for shares and bonds (src/market/prices.ts, M20)
+  | IndicesMessage // index total-return levels, then the score plan (src/market/score.ts, M28)
+  | ScoresMessage // benchmark scores for held funds and shares (M28)
 
 /** pf-market sends, through one object so tests can capture them instead of the real queue. */
 export const marketQueue = {
@@ -197,9 +200,13 @@ export async function refreshMetals(env: Env, now = Date.now()): Promise<void> {
   if (run.backfills.length) await marketQueue.sendBatch(env, run.backfills.map((code): MarketMessage => ({ type: 'backfill', code }))).catch(() => undefined)
 }
 
-/** The 23:00 and 07:00 IST runs: every live share and bond to pf-market (M20). Never throws. */
+/**
+ * The 23:00 and 07:00 IST runs: every live share and bond to pf-market (M20), and one `indices` message (M28: index
+ * levels, then the scores that need computing). Never throws.
+ */
 export async function requestAllPrices(env: Env, now = Date.now()): Promise<void> {
   await requestPrices(env, now, (msgs) => marketQueue.sendBatch(env, msgs)).catch((e) => console.error('prices_request_failed', errorClass(e)))
+  await marketQueue.sendBatch(env, [{ type: 'indices' }]).catch((e) => console.error('indices_request_failed', errorClass(e)))
 }
 
 /** The upload path: one prices message per 50 ISINs whose history isn't stored yet. */
@@ -378,6 +385,11 @@ export async function handleMarketBatch(batch: MessageBatch<MarketMessage>, env:
         await writeSeries(env, body.codes.filter((c) => Number.isSafeInteger(c) && c > 0).slice(0, SERIES_CODES_PER_MESSAGE))
       } else if (body?.type === 'prices' && Array.isArray(body.isins)) {
         await runPrices(env, body.isins.filter((i): i is string => typeof i === 'string'))
+      } else if (body?.type === 'indices') {
+        await runIndices(env)
+        await planScores(env, Date.now(), (msgs) => marketQueue.sendBatch(env, msgs))
+      } else if (body?.type === 'scores' && Array.isArray(body.keys)) {
+        await runScores(env, body.keys.filter((k): k is string => typeof k === 'string'))
       } else if (body?.type === 'repair' && validYmd(body.date)) {
         await runRepair(env, body.date)
       } else if (body?.type === 'amc') {

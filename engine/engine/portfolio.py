@@ -344,7 +344,8 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
     statements:  [{"member_id", "pan", "name"?, "data"}]: decrypted parsed statements of one household.
     market_data: {"navs": {amfi_code: [[iso_date, nav], ...]}, "isin_to_code": {isin: amfi_code},
                   "prices": {isin: [[iso_date, close], ...]} for shares and bonds (M20),
-                  "stocks": stock data (see stocks.py) or None}. Missing pieces degrade gracefully.
+                  "stocks": stock data (see stocks.py) or None,
+                  "scores": {isin: benchmark score view} (M28, copied onto the holding)}. Missing pieces degrade gracefully.
     today:       the build date (the caller's clock), so builds are reproducible.
     overrides:   the user's SIP changes the statements can't show yet: skip one instalment, or cancel (M12).
     """
@@ -366,6 +367,7 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
     hols = holidays.calendar(market_data.get("holidays"))
     user_overrides = _overrides_by_member(overrides)
     waiting = {str(c) for c in market_data.get("refresh") or []}  # codes whose NAV backfill is still running
+    scores = market_data.get("scores") or {}  # benchmark scores by ISIN, computed by the Worker (M28)
 
     for mid, cdsl, rta, merged, total, full_hist in sorted(staged, key=lambda s: -s[4]):
         pan = by_member[mid]["pan"]
@@ -418,6 +420,7 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
                 "invested": h["invested"], "as_of": h["as_of"], "cashflows": h["cashflows"],
                 "tax": analysis["unrealised"].get(h["isin"]),  # long/short-term split, when lots are known
                 "returns": market.trailing_returns(navs.get(codes.get(h["isin"], ""))),
+                "score": scores.get(h["isin"]),
             })
             code = codes.get(h["isin"])
             est = _carry_forward(holdings[-1], h, code, navs.get(code or ""), member_sips.get(h["isin"], []), rta,

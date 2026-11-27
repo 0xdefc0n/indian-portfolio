@@ -104,6 +104,25 @@ export type Holding = {
   price_source?: "nav" | "exchange" | "statement"
   units_exact?: boolean
   estimated?: (EstimatedTotals & { since: string; units: number }) | null
+  /** M28: how the fund or share did against its index (market data, the same for everyone). Absent on older builds. */
+  score?: Score | null
+}
+
+/** A benchmark score (worker/src/market/score.ts `ScoreView`). Percentages are numbers like 12.34 (= 12.34%). */
+export type Score = {
+  score: number | null
+  reason: "young" | "unmapped" | "index_fund" | "not_equity" | "no_data" | "waiting" | "idcw_no_twin" | null
+  index: string | null
+  as_of: string
+  months?: number
+  since?: string
+  excess?: number // risk-adjusted, points a year
+  consistency?: number
+  horizons?: { years: number; fund: number; index: number }[]
+  rolling?: { years: number; windows: number; beat: number }[]
+  sector?: { index: string; years: number; windows: number; beat: number; excess: number } | null
+  growth_option?: boolean
+  price_only?: boolean
 }
 
 /** 1Y absolute, 3Y / 5Y annualised, as fractions; null when the fund is younger. */

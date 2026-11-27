@@ -64,7 +64,7 @@ be verified during implementation are marked ⚠️ VERIFY, with what to check a
 | D20 | Disposable emails 🔒 (owner, 2026-11-27) | **New accounts can't use a disposable address.** A bundled open-source domain list is checked at email sign-in; existing users still sign in; Google isn't checked (§21.7, M22). | Less abuse of the free tier and the email quota. Turnstile is already on the form (M5) and stays as it is. |
 | D21 | Premium design refresh 🔒 (owner, 2026-11-27) | **Design system v2**, with a gold accent and a glass-like premium feel, replaces the `089634a` system everywhere, including a redesigned dashboard and a new two-part wordmark ("Pocket" plain, "folio" on a gold glass block) (§21.1, M24). | Owner: the current look reads as "vibe coded". One system for the app and the public pages. |
 | D22 | Public growth pages before launch 🔒 (owner, 2026-11-27) | **Competitor research, a landing page, SEO, a blog, a public FIRE calculator and a social playbook all ship before launch** (M23–M27, M30). Public pages are prerendered HTML (§21.2). | Search and AI-search indexing takes weeks, so the pages should be live on day one, and M16 hardens them too. |
-| D23 | Benchmark score 🔒 (owner, 2026-11-27) | **0–100 score per fund and stock against its category's index**, from rolling 1/3/5-year returns and consistency, with a plain-language line (§21.4, M28). | Owner request. A single number is easy to scan; the line explains it. |
+| D23 | Benchmark score 🔒 (owner, 2026-11-27) | **0–100 score per fund and stock against its category's index**: half Morningstar-style risk-adjusted excess (MRAR γ = 2, 3/5/10 years), half the share of rolling 3- and 5-year periods it beat the index; 3 years of history needed; with a plain-language line (§21.4, M28; method chosen from research, owner 2026-11-27). | Owner request. A single number is easy to scan; the line explains it. |
 | D24 | Gold and silver 🔒 (owner, 2026-11-27) | **Physical gold/silver (grams, purity) and Sovereign Gold Bonds**, entered by hand and valued at a daily per-gram rate. Not digital gold. Gold ETFs and funds already come in through statements (§21.5, M29). | Owner choice. |
 | D25 | Corporate actions 🔒 (owner, 2026-11-27) | **Hybrid:** splits and bonuses after the statement date are applied automatically; mergers, demergers and MF scheme mergers ask for a newer statement (§21.6, M21). | Splits and bonuses are mechanical and common. Mergers have many edge cases, and a new statement has the right answer. |
 | D26 | AI portfolio analysis 🔒 (owner, 2026-11-27) | **The model is decided after the cost study (M31).** It ships after launch (M32), with identities never sent to the model (§21.8). | Owner: decide from the cost per user. |
@@ -2447,126 +2447,168 @@ encryption, and demo data only in every screenshot, image and post.
   the best inputs and outputs. India-specific: inflation, step-up SIPs, the tax on withdrawals, EPF/PPF.
 
 ### 21.4 Benchmark score (D23, M28)
-- **0–100 per fund and stock**, against the category's index (map in M28). Combines rolling 1/3/5-year excess
-  return, how often it beat the index, and downside capture. Less than 1 year of history: no score.
-- **Index data:** TRI from niftyindices.com (⚠️ VERIFY access and terms). Fallback: a direct-plan index fund's NAV
-  from our NAV store, as `market.py` already does for Nifty 50.
-- **Market data, not user data:** computed nightly once per scheme in the market DB. Labelled "not investment advice".
+- **0–100 per fund and stock**, against the category's index. Market data, the same for everyone, computed in the
+  market DB, never per household. Labelled "not investment advice".
 
-**Draft from M28's first session (2026-11-27). WAITING FOR THE OWNER'S OK; nothing is built yet.** The questions are
-at the end. Public market data only: a score is keyed by scheme code or ISIN and never says who holds it.
+Drafted in M28's first session, then decided by the owner on 2026-11-27 (decisions in bold) and built the same day.
+Public market data only: a score is keyed by scheme code or ISIN and never says who holds it.
+
+**Owner's decisions (2026-11-27):**
+- **Index data: TRI from niftyindices.com.** ⚠️ Its terms of use forbid "systematic or automated data collection …
+  without our express written consent". **The owner is getting that consent**, and it's an M17 owner item. Until
+  then it runs on staging only. The source sits in one section of `worker/src/market/score.ts`, so a licensed feed
+  can replace it.
+- **The formula: researched rather than invented** (owner: "do deep research about how other people are doing it").
+  See "Score" below.
+- **Stocks: one score against Nifty 50, with the sector index as a second line.**
+- **Stock history: 10 years**, not 5 (`PRICE_HISTORY_DAYS`). Migration 0009 marks the shares already stored for one
+  full re-fetch.
+- **Not scored at launch:** index funds and ETFs, hybrid, debt and money market, FoFs and overseas, gold/silver,
+  solution-oriented, children's, retirement and life-cycle funds.
 
 **⚠️ VERIFY results (2026-11-27, live):**
-- ✅ **The M9 parse keeps the category.** `scheme.category` holds the normalised AMFI header, e.g.
-  `Open Ended Schemes (Equity Scheme - Large Cap Fund)`, and the upsert rewrites it when it changes. Today's NAVAll
-  uses **two vocabularies side by side**: the old SEBI names (`Equity Scheme - Large Cap Fund`, `Equity Scheme - ELSS`,
-  `Equity Scheme - Sectoral/ Thematic`) and newer ones (`Equity Schemes - Large Cap Fund`, `Equity Schemes - ELSS-
-  Tax Saver Fund`, `Equity Schemes - Sectoral Fund` / `Thematic Fund`). The map matches on the part after ` - `,
-  lower-cased, so both land on the same index.
-- ❌ **niftyindices.com TRI.** Its `POST /BackPage/getTotalReturnIndexString` answers a plain client (one test call:
-  Nifty 50 TRI for Nov 2026, 0.2 s), and its page limits a request to one year. But its **Terms of Use forbid
-  "systematic or automated data collection (including scraping, data mining, data extraction and data harvesting)
-  without our express written consent"**, and the disclaimer forbids storing its data without written permission.
-  So we don't use it. **Fallback (§0.6): index-fund and ETF NAVs from our own NAV store**, as `market.py` does for
-  Nifty 50. A licensed NSE Indices feed (or their written OK) can replace this later; the proxy series has the same
-  shape, so only the source changes.
-- **What the fallback means:** an index fund's NAV is the index's total return **minus the fund's costs** (about
-  0.1–0.5 % a year) and tracking error. So the score compares a fund with **the index fund you could have bought
-  instead**, which is a fair question for an investor, and the screen says "via an index fund". Oldest proxies found
-  (first NAV in mfapi): Nifty 50 `120716` (Jan 2013), Nifty 100 `123004` (ETF, Jun 2014), Bank `140087` (Nov 2016),
-  Infrastructure `140102` (Nov 2016), India Consumption `128331` (Apr 2014), **Midcap 150 `146271` (ETF, Feb 2019),
-  Smallcap 250 `147623` and Nifty 500 `147625` (Sep 2019)**, IT `148408` (Jun 2020), Pharma `149008` (Jul 2021),
-  FMCG `149072` (Aug 2021). **So mid, small, flexi, multi, ELSS and focused funds are scored on about 7 years, not
-  their whole life**, and their 5-year part has 26–33 monthly windows today (it grows by one a month).
-- ✅ **Stock history:** M20 already stores 5 years of closes per ISIN on first fetch (Upstox gives 10 in one call).
-  So stocks get 1- and 3-year parts at once; the 5-year part waits until a stock has 5½ years stored, unless the
-  first fetch goes to 10 years (question 4). Upstox closes are adjusted for splits and bonuses but **not dividends**,
-  while the index-fund proxy includes them, so a high-dividend stock is scored a little low (about its yield a year).
-  The dialog says "price only, dividends not counted" until M21 adds dividends.
-- **Stock sectors:** we already have one, from fund portfolio disclosures (M11 BharatStock and M18 AMC files carry
-  `sector` per stock ISIN, AMFI's industry names such as `Banks`, `IT - Software`). A stock that no fund holds has
-  no sector and gets only the Nifty 50 comparison.
+- ✅ **The M9 parse keeps the category** (`scheme.category`, the normalised AMFI header). Today's NAVAll uses **two
+  vocabularies side by side**: the old SEBI names (`Equity Scheme - ELSS`, `Equity Scheme - Sectoral/ Thematic`) and
+  newer ones (`Equity Schemes - ELSS- Tax Saver Fund`, `Equity Schemes - Sectoral Fund` / `Thematic Fund`). Both map.
+- ✅ **niftyindices.com:** `POST https://www.niftyindices.com/BackPage/getTotalReturnIndexString` with
+  `{"cinfo": "{'name':'NIFTY 50','startDate':'01-Jan-2010','endDate':'26-Nov-2026','indexName':'NIFTY 50'}"}`.
+  - The page limits a request to one year, but the endpoint answers **16 years in one call** (4,193 rows, ~600 KB,
+    0.3 s).
+  - The answer is a JSON array (served as `text/html`), newest first: `{"Index Name", "Date": "26 Nov 2026",
+    "TotalReturnsIndex": "39363.60", "NTR_Value", "RequestNumber"}`. An unknown name answers `[]`.
+  - All 23 indices we use answer from Jan 2010, except Defence (Apr 2018). The healthcare index's name there is
+    `NIFTY HEALTHCARE` (not `… INDEX`).
+  - **It stalls any user agent containing "fetch" or starting with "Mozilla"** (no answer in 30 s), so the AMFI UA
+    can't be reused. `market-data/1.0` answers in ~0.2 s.
+- ✅ **Stock sectors** come from the fund portfolio disclosures we already store (M11 BharatStock, M18 AMC files carry
+  AMFI industry names per stock ISIN). They are now also written to `stock_sector` as they arrive. A share no fund
+  holds has no sector, so it gets no sector line.
 
-**Category → index** (SEBI's tier-1 benchmark for the category, as AMCs must use since 2021, so a fund is judged
-against the index it chose to be judged by):
-| AMFI category (after ` - `) | Index | Proxy series |
-|---|---|---|
-| Large Cap | Nifty 100 | ETF `123004` |
-| Large & Mid Cap | Nifty LargeMidcap 250 | **built**: 50 % Nifty 100 + 50 % Midcap 150, rebalanced quarterly (how the index is made; ⚠️ check against `149343` over their overlap, ≤ 1 % a year apart) |
-| Mid Cap | Nifty Midcap 150 | ETF `146271` |
-| Small Cap | Nifty Smallcap 250 | `147623` |
-| Multi Cap | Nifty 500 Multicap 50:25:25 | **built**: 50 % Nifty 100 + 25 % Midcap 150 + 25 % Smallcap 250, quarterly |
-| Flexi Cap, Focused, ELSS (all spellings, open and close ended), Value, Contra, Dividend Yield | Nifty 500 | `147625` |
-| Sectoral / Thematic | by **name keywords**: bank/banking/financial → Nifty Financial Services; technology/IT/digital → Nifty IT; pharma/healthcare → Nifty Healthcare; infrastructure → Nifty Infrastructure; consumption/consumer/FMCG → Nifty India Consumption; manufacturing → Nifty India Manufacturing; auto/EV → Nifty Auto; energy/power → Nifty Energy; PSU → Nifty PSE; MNC → Nifty MNC; defence → Nifty India Defence; anything else (ESG, business cycle, innovation, quant, special situations …) → Nifty 500 | the oldest direct-growth index fund or ETF for that index (codes in code). A sector whose proxy has under 1 year of history falls back to Nifty 500 |
-| `Close Ended Schemes (Growth)`, `Open Ended Schemes (Growth)` (old equity funds) | Nifty 500 | `147625` |
-| **Not scored:** index funds and ETFs (they track their index; shown as "Tracks Nifty Midcap 150"), hybrid (CRISIL hybrid and arbitrage indices have no free series or index fund), debt and money market, FoFs and overseas, gold/silver, solution-oriented, children's, retirement, life cycle | — | "No score: …" with the reason |
+**How others do it** (the research behind the formula):
+- **Morningstar** (its rating methodology document): MRAR(γ) = [mean over months of (1 + ER)^−γ]^(−12/γ) − 1, with
+  **γ = 2** ("consistent with the risk tolerances of typical retail investors"). It penalises downside more than
+  upside. Overall rating: 36–59 months → 100% 3-year; 60–119 → 60% 5-year + 40% 3-year; 120+ → 50% 10-year, 30%
+  5-year, 20% 3-year. Stars are peer-relative (10 / 22.5 / 35 / 22.5 / 10%).
+- **Value Research** (its rating FAQ, 2023): peer-relative return score minus risk score, recomputed monthly. Equity
+  funds under 3 years aren't rated; the 3- and 5-year periods are weighted. Direct and regular plans are rated
+  separately.
+- **freefincal:** "consistency score" = the share of rolling 3–5-year windows in which a fund beat its index (70%+
+  highlighted). It warns that 1-year windows are too noisy.
+- **What we take:** both stars are **peer-relative**, which needs full history for every scheme in a category. We
+  only backfill held schemes, and the owner asked for a comparison **against the index**. So the score is
+  index-relative, built from the two ideas that work against an index: Morningstar's risk-adjusted excess and
+  freefincal's consistency. The 3-year minimum follows both raters. **This drops the draft's 1-year windows, its
+  "under 1 year" threshold and its separate downside-capture part:** MRAR(2) already penalises falls.
 
-A category the map doesn't know is logged (count only) and left unscored until it's added. A golden test runs the
-map over every category header in the committed NAVAll fixture and fails on an equity category with no index.
+**Score** (pure functions in `worker/src/market/score.ts`, golden-tested):
+1. **Points:** month-end values of the fund (NAV) or share (close) and the index (TRI). They run back from the score's
+   month-end while both have a value, for at most 120 monthly returns. A missing month ends the run. **Under 36
+   months: no score** ("young").
+2. **Risk-adjusted excess:** MRAR(2) of the fund minus MRAR(2) of the index over the last 3, 5 and 10 years.
+   - No risk-free rate is taken off. It is the same for both sides, so the difference barely moves.
+   - The three are weighted by Morningstar's overall-rating weights for the months available.
+   - The result in points a year maps to `clamp(50 + 10 × points, 0, 100)`.
+3. **Consistency:** the share of rolling 3-year windows (one ending at every month-end) in which the fund's CAGR beat
+   the index's, and the same for 5-year windows when there are at least 12. An exact tie counts half; the two shares
+   are averaged.
+4. **Score = round(½ × excess part + ½ × 100 × consistency).**
+   - **A fund identical to its index scores 50.**
+   - 3 points a year ahead of a flat index in every month scores 90; 3 behind scores 10.
+5. **Bands** (existing colour tokens): 70–100 "Ahead of its index" (gain), 40–69 "Close to its index" (muted), 0–39
+   "Behind its index" (loss).
+6. **Plain lines:**
+   - "Beat Nifty Midcap 150 in 7 of every 10 rolling 5-year periods since Oct 2016." (the longest rolling period)
+   - "2.1 points a year ahead after adjusting for risk."
+   - For shares: "Against Nifty IT: beat it in 3 of every 10 rolling 5-year periods (−1.5 points a year)."
+7. **Month-ends only.** A score uses the last month-end before the latest Nifty 50 level, so it changes once a month,
+   as Value Research's and Morningstar's do.
 
-**Score** (pure functions in `worker/src/market/score.ts`, golden-tested on synthetic series):
-1. **Points:** month-end values of the fund and the proxy (the last date on or before each month-end where both
-   have one), over at most the **last 10 years** they overlap. Under 1 year of overlap: not scored.
-2. **Rolling windows** for 1, 3 and 5 years, one ending at every month-end. For each, the **excess return**
-   `e = fund CAGR − index CAGR` (percentage points a year). A horizon counts only with at least 6 windows (1 year:
-   at least 1), so a fund aged 1–3 years has only a 1-year part and is marked "Early score".
-3. **Per horizon:** `excess part = clamp(50 + 10 × median e, 0, 100)` (+5 points a year → 100, −5 → 0) and
-   `beat part = 100 × share of windows with e > 0` (an exact tie counts half). Horizon score = average of the two.
-4. **Returns part** = weighted average of the horizons present: 1y 20 %, 3y 40 %, 5y 40 % (re-weighted over the
-   ones that count).
-5. **Downside part:** over the same points, `capture = mean fund monthly return ÷ mean index monthly return, in the
-   months the index fell`, × 100. `downside part = clamp(150 − capture, 0, 100)` (falls as much as the index → 50,
-   falls 20 % less → 70). Fewer than 6 down months: left out.
-6. **Score** = round(0.8 × returns part + 0.2 × downside part). **A fund identical to its index scores 50.** A fund
-   that beat it by 3 points a year in every window and fell 10 % less scores 84.
-7. **Bands** with existing colour tokens: 70–100 "Ahead of its index" (gain colour), 40–69 "Close to its index"
-   (neutral), 0–39 "Behind its index" (loss colour).
-8. **Plain line**, from the longest horizon that counts: "Beat Nifty Midcap 150 in 7 of every 10 rolling 3-year
-   periods since Feb 2019, by 2.1 points a year at the median." (rounded to tenths of the share).
-- **Per scheme code:** a regular plan scores below its direct twin by its extra cost, which is right for the person
-  holding it. **IDCW options** lose NAV at each payout, so they show the score of the growth option of the same
-  scheme and plan (matched by name in the same AMC; ⚠️ check the match rate in the build), labelled "Score of the
-  growth option"; no match → not scored.
-- **Calibration:** before the screens are built, the build prints the score distribution for every equity scheme
-  (counts per band and quartiles: public data) so the owner can see that the bands aren't all one colour. The
-  constants (10 per point, the weights) change only with the owner's OK.
+- **Per scheme code:** a regular plan scores below its direct twin by its extra cost, which is right for its holder.
+- **IDCW options:** their NAV drops at each payout, so they show **the growth option's score**. The growth option is
+  found by the same name, plan and AMC. In today's file, 1,071 of 1,082 equity IDCW name/plan pairs have one. The
+  growth option is added to `tracked_scheme` (public ids only), so its history is backfilled and kept. Until then
+  the IDCW option shows no score ("waiting"); no twin → "idcw_no_twin".
+- **Calibration** (2026-11-27, public data, the real code). Every direct-growth scheme in the large, mid, small,
+  large & mid, flexi, multi cap and ELSS categories: 257 schemes, of which 203 scored (51 under 3 years, 2 no data,
+  1 index fund).
+  - **Bands: 87 ahead / 70 close / 46 behind; median 64; 10th–90th percentile 25–96.**
+  - Every category uses all three bands. Multi and small cap lean ahead over this period, large & mid cap lean
+    behind.
+  - Regular plans will sit lower. Only surviving schemes are in a file of today's NAVs, so the past looks a little
+    kinder than it was.
+  - The constants were kept.
 
-**Stocks:** the same score against **Nifty 50** (`120716`), from M20's closes. The sector index, when the stock's
-sector maps to one, adds a second line: "Against Nifty IT: beat it in 4 of every 10 rolling years." (question 3).
+**Category → index** (`fundIndex()`): SEBI's tier-1 benchmark for the category, which AMCs must use since 2021.
+| AMFI category (after ` - `, either vocabulary) | Index |
+|---|---|
+| Large Cap | Nifty 100 |
+| Large & Mid Cap | Nifty LargeMidcap 250 |
+| Mid Cap | Nifty Midcap 150 |
+| Small Cap | Nifty Smallcap 250 |
+| Multi Cap | Nifty 500 Multicap 50:25:25 |
+| Flexi Cap, Focused, ELSS (open and close ended), Value, Contra, Dividend Yield, old "Growth" schemes | Nifty 500 |
+| Sectoral / Thematic | from the name (`themeIndex()`): bank/financial → Nifty Financial Services; pharma/health → Nifty Healthcare; technology/IT/digital → Nifty IT; infrastructure → Nifty Infrastructure; consumption/FMCG → Nifty India Consumption; manufacturing → Nifty India Manufacturing; auto/mobility/EV → Nifty Auto; energy/power/oil → Nifty Energy; PSU/PSE → Nifty PSE; MNC → Nifty MNC; defence → Nifty India Defence; metal → Nifty Metal; realty/housing → Nifty Realty; anything else (ESG, business cycle, innovation, …) → Nifty 500 |
+| Index funds, ETFs (by category or "index fund"/"ETF"/"BeES" in the name) | not scored: "tracks its index" |
+| Debt, hybrid, FoF, solution-oriented, life cycle, … | not scored: "only equity funds and shares for now" |
 
-**Jobs and storage** (`pocketfolio-market`, migration `migrations/market/0009_score.sql`):
-- `score` (key `mf:{amfi_code}` or `eq:{isin}`, `index_id`, `as_of` YYYYMMDD month-end, `score` nullable, `reason`
-  for no score, `parts` JSON: per-horizon median excess, beat share and window count, downside capture, the line's
-  numbers; `computed_at`). `score_state` holds a version bumped when any score changes.
-- The ~20 proxy codes join the tracked set (like `120716`), so they are backfilled and kept.
-- **Windows end at month-ends, so a score changes once a month.** The nightly job (after nav-ingest makes a date
-  final) recomputes only keys whose inputs changed: the first final date after a month-end (all tracked keys), a
-  new backfill or a newly tracked scheme or ISIN, a proxy series rewrite. Work goes through `pf-market`, 20 keys per
-  message, reading the R2 series (`market/nav/`, `market/px/`), so no D1 history scans. Writes are upserts that skip
-  unchanged rows (a re-run writes 0).
-- **Into the snapshot**, like M20's prices: the build reads the scores for the held keys through the market gateway
-  (`GET http://market.internal/score?keys=…`), `score_state` joins the inputs hash, and the next rebuild carries
-  them. No extra D1 read per dashboard request (§0.7). `SNAPSHOT_VERSION` 6.
-- Logs carry counts and error classes, never scheme codes or ISINs (§0.1).
+A golden test runs the map over every one of today's 104 category headers (`test/fixtures/amfi/NAVAll-categories-
+20261127.txt`, through the real parser). All 28 equity ones get an index, and none is left "unmapped".
 
-**Screens** (current design system, §13; M24 restyles later): a small score chip on each fund and stock row in the
-holdings lists (number in the band colour, "Early" when only 1 year counts, nothing for not scored); in the fund
-dialog (and the stock row's details) a Score block: number, band, the plain line, a small table (1y / 3y / 5y:
-median excess, beat share, windows), downside capture, "Compared with {index} via an index fund · as of 31 Oct
-2026", the stock's "price only" note, and **"Not investment advice. Past performance doesn't predict future
-returns."** Checked at 360 px and desktop, dark and light.
+**Shares:** against Nifty 50 TRI from M20's closes. Closes are adjusted for splits and bonuses but not dividends, so
+the dialog says "Share prices only: dividends aren't counted". A high-dividend share scores a little low until M21
+adds dividends. The sector line uses `sectorIndex()` on the stored industry name (Banks → Nifty Bank, IT - Software →
+Nifty IT, Pharmaceuticals → Nifty Pharma, Automobiles → Nifty Auto, Petroleum Products → Nifty Energy, Diversified
+FMCG → Nifty FMCG, Cement/Construction/Telecom → Nifty Infrastructure, …; anything else: no line).
 
-**Questions for the owner:**
-1. **OK to use index-fund/ETF NAVs** (niftyindices.com's terms rule out the TRI), with mid/small/Nifty 500 funds
-   scored on about 7 years? (The alternative is a paid NSE Indices licence, which could replace it later.)
-2. **OK on the formula** (steps 1–8: 80 % rolling excess and beat share, 1y/3y/5y at 20/40/40, 20 % downside;
-   identical to the index = 50; bands 70/40), with the calibration printout before the screens?
-3. **Stocks:** one score against **Nifty 50** with the sector as a second line (recommended: Nifty 50 is the
-   alternative anyone can buy, and sector data is missing for stocks no fund holds), or score against the sector
-   index where known?
-4. **Stock history:** raise M20's first fetch from 5 to 10 years (one call per ISIN either way; about 2× the
-   `stock_price` rows, ~2.5M more for 2,000 ISINs) so stocks get a 5-year part now? Recommended: yes.
-5. **Not scored at launch:** index funds/ETFs, hybrid, debt and the other groups in the table. OK?
+**Storage** (`migrations/market/0009_score.sql`):
+- `index_level` (index id, YYYYMMDD, TRI; WITHOUT ROWID).
+- `score` (key `mf:{code}` / `eq:{isin}`, month-end `as_of`, `score` or NULL with a `reason`, the shown JSON `data`,
+  `computed_at`).
+- `stock_sector`, and `score_state` (a version in the snapshot inputs hash).
+- R2 `market/idx/{id}.json` = `{id, dates, tris}`.
+
+**Jobs** (`pf-market`):
+- **`indices`:** the 23:00 and 07:00 IST crons (with the price requests) send one `indices` message. The first fetch
+  of each of the 23 indices starts in Jan 2010; later fetches start 10 days before the latest stored level. Levels
+  are upserted only when they change, so a re-run writes 0 rows, and a changed index's R2 series is rewritten. Then
+  `planScores`.
+- **`planScores`** picks the held funds (`tracked_scheme`, 90 days) and listed shares (`tracked_equity`, history
+  stored) that need a score:
+  - no score yet;
+  - an older month-end;
+  - a NAV backfill or share history stored since the last score;
+  - waiting for a growth option.
+
+  It sends them 20 per `scores` message.
+- **`scores`:** reads the R2 series (`market/nav/`, `market/px/`, `market/idx/`), so there are no D1 history scans.
+  Rows are upserted only when the shown data changes (a re-run writes 0), and `score_state` goes up when one does.
+- Logs carry counts and error classes, never codes or ISINs (§0.1).
+
+**Into the snapshot:** the rebuild consumer reads the held ISINs' scores (`scoresFor()`, one query per build, never
+per dashboard request, §0.7) into `market.scores`. The engine copies each onto its holding (`holding.score`).
+`score_state` joins the inputs hash, so a new month's scores rebuild. `SNAPSHOT_VERSION` 6.
+
+**Screens** (current design system):
+- **Holdings rows:** a "Score 78" pill in the band colour. Its tooltip gives the band and the index, plus "Not
+  investment advice".
+- **The fund dialog** (also used for shares) gets a **Benchmark score** section, with "vs {index}, as of {date}" as
+  its aside. It shows:
+  - the number and band;
+  - the plain lines;
+  - 3Y / 5Y / 10Y yearly returns against the index's;
+  - how the score is made;
+  - the growth-option and price-only notes;
+  - "Not investment advice. Past performance doesn't predict future returns."
+- **No score:** the dialog gives the reason ("Scored once it has 3 years of history (it has 20 months)", "An index
+  fund or ETF tracks its index…"). Nothing is shown while a score is being worked out.
+- Checked headless at 360 px and 1440 px, dark and light: 0 page errors, no sideways scroll.
+
+**Later:**
+- Cleanup (M14) doesn't delete `score` rows of keys unseen for 90 days (a few hundred bytes each).
+- Sector lines appear for shares as their sector arrives with the next monthly disclosure (`stock_sector` starts
+  empty).
+- Scores of regular plans and of funds that changed category are worth a look after the first real month on staging.
+- M16: 23 niftyindices requests per run, twice a night.
 
 ### 21.5 Gold and silver (D24, M29)
 Drafted in M29's first session; the owner's decisions of 2026-11-27 are in bold. Built on M19 (§21.12): same table,
