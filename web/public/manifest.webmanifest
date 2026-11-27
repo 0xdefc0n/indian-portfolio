@@ -10,8 +10,16 @@
   "theme_color": "#0B0D12",
   "categories": ["finance"],
   "icons": [
+    { "src": "/icons/icon-48.png", "sizes": "48x48", "type": "image/png" },
+    { "src": "/icons/icon-72.png", "sizes": "72x72", "type": "image/png" },
+    { "src": "/icons/icon-96.png", "sizes": "96x96", "type": "image/png" },
+    { "src": "/icons/icon-128.png", "sizes": "128x128", "type": "image/png" },
+    { "src": "/icons/icon-144.png", "sizes": "144x144", "type": "image/png" },
     { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-256.png", "sizes": "256x256", "type": "image/png" },
+    { "src": "/icons/icon-384.png", "sizes": "384x384", "type": "image/png" },
     { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
     { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "screenshots": [
@@ -19,7 +27,7 @@
     { "src": "/screens/desktop-overview.png", "sizes": "1920x1080", "type": "image/png", "form_factor": "wide", "label": "Family overview" }
   ],
   "shortcuts": [
-    { "name": "Today's change", "url": "/?view=today&source=shortcut", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
-    { "name": "Add statement", "url": "/?action=add-statement&source=shortcut", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] }
+    { "name": "Today's change", "url": "/?view=today&source=shortcut", "icons": [{ "src": "/icons/icon-96.png", "sizes": "96x96", "type": "image/png" }, { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Add asset", "url": "/?action=add-statement&source=shortcut", "icons": [{ "src": "/icons/icon-96.png", "sizes": "96x96", "type": "image/png" }, { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] }
   ]
 }

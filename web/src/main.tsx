@@ -75,7 +75,7 @@ function SignedIn({ page: Page }: { page: React.ComponentType<{ me: Me }> }) {
         Couldn't load your account: {error}. Reload to try again.
       </p>
     )
-  if (!me) return <Skeleton className="mx-auto mt-24 h-40 max-w-md rounded-[22px]" />
+  if (!me) return <Skeleton className="mx-auto mt-24 h-40 max-w-md rounded-[24px]" />
   if (!me.consent_ok) return <ConsentPage me={me} onAccepted={accepted} />
   return (
     <>
@@ -98,7 +98,7 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
       <TooltipProvider delayDuration={150}>
-        <Suspense fallback={<Skeleton className="mx-auto mt-24 h-40 max-w-md rounded-[22px]" />}>
+        <Suspense fallback={<Skeleton className="mx-auto mt-24 h-40 max-w-md rounded-[24px]" />}>
         <Switch>
           <Route path="/login/verify" component={VerifyLinkPage} />
           <Route path="/login" component={LoginPage} />

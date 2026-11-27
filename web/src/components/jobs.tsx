@@ -135,7 +135,7 @@ export function ProcessingList({ jobs, onRetry, onChange }: { jobs: Job[]; onRet
   }
 
   return (
-    <section className="rounded-[22px] bg-surface p-5 ring-1 ring-border sm:p-6" aria-labelledby="processing-title">
+    <section className="glass rounded-[24px] p-5 sm:p-6" aria-labelledby="processing-title">
       <h2 id="processing-title" className="mb-2 text-[15px] font-semibold tracking-tight">Processing</h2>
       <ul className="divide-y divide-border">
         {shown.map((j) => {

@@ -58,7 +58,7 @@ function Approve({ code, onRestart }: { code: string; onRestart: () => void }) {
     }
   }
 
-  if (phase.kind === "loading") return <Skeleton className="h-72 rounded-[22px]" />
+  if (phase.kind === "loading") return <Skeleton className="h-72 rounded-[24px]" />
   if (phase.kind === "error" || phase.kind === "denied") {
     return (
       <Panel title={phase.kind === "denied" ? "Declined" : "Can't link this device"}>

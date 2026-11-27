@@ -141,17 +141,14 @@ export function AllocationStrip({ slices, active, onHover, onSelect, selected, h
               onBlur={() => onHover(null)}
               onClick={() => onSelect(selected === s.category ? null : s.category)}
               className={cn(
-                "relative min-w-[6px] overflow-hidden rounded-[5px] transition-[opacity,transform] duration-200 first:rounded-l-xl last:rounded-r-xl",
+                // v2: a slim 12 px bar inside a 44 px tap area; the legend carries the percentages
+                "group/seg flex min-w-[6px] items-center rounded-md transition-opacity duration-300",
                 "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
                 focus && focus !== s.category && "opacity-25",
               )}
-              style={{ flexGrow: s.value, flexBasis: 0, background: categoryColor(s.category) }}
+              style={{ flexGrow: s.value, flexBasis: 0 }}
             >
-              {s.share >= 9 && (
-                <span className={cn("absolute inset-y-0 left-3 items-center", s.share >= 18 ? "flex" : "hidden sm:flex", " text-sm font-semibold text-white/95 [text-shadow:0_1px_2px_rgb(0_0_0/0.25)]")}>
-                  {Math.round(s.share)}%
-                </span>
-              )}
+              <span className="h-3 w-full rounded-[3px] group-first/seg:rounded-l-full group-last/seg:rounded-r-full" style={{ background: categoryColor(s.category) }} />
             </button>
           )
           if (!detail) return <span key={s.category} className="contents">{segment}</span>
@@ -172,7 +169,7 @@ export function AllocationStrip({ slices, active, onHover, onSelect, selected, h
         })}
       </div>
 
-      <ul className="mt-3 flex flex-wrap gap-x-6 gap-y-0.5 text-sm">
+      <ul className="mt-1 flex flex-wrap gap-x-6 gap-y-0.5 text-sm">
         {slices.map((s) => (
           <li key={s.category}>
             <button
@@ -181,13 +178,13 @@ export function AllocationStrip({ slices, active, onHover, onSelect, selected, h
               onMouseLeave={() => onHover(null)}
               onClick={() => onSelect(selected === s.category ? null : s.category)}
               className={cn(
-                "flex min-h-8 items-center gap-2 rounded-md transition-opacity",
+                "flex min-h-8 items-center gap-2 rounded-md transition-opacity pointer-coarse:min-h-11",
                 "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
                 focus && focus !== s.category && "opacity-40",
               )}
             >
               <span className="size-2.5 rounded-full" style={{ background: categoryColor(s.category) }} />
-              <span className="font-medium">{s.category}</span>
+              <span>{s.category}</span>
               <span className="text-muted-foreground">{pct(s.share)}</span>
             </button>
           </li>

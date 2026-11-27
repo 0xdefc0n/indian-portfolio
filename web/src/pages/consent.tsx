@@ -54,7 +54,7 @@ export function ConsentPage({ me, onAccepted }: { me: Me; onAccepted: () => void
       {/* the viewport minus the 68 px header */}
       <main className="mx-auto flex h-[calc(100svh-68px)] max-w-2xl flex-col px-4 pt-1 pb-4 sm:px-7 sm:pt-4 sm:pb-8">
         <section
-          className="flex min-h-0 flex-1 flex-col rounded-[22px] bg-surface p-4 ring-1 ring-border sm:flex-initial sm:p-7"
+          className="flex min-h-0 flex-1 flex-col glass rounded-[24px] p-4 sm:flex-initial sm:p-7"
           aria-labelledby="consent-title"
         >
           <span className="eyebrow">Before you start</span>

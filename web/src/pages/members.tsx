@@ -5,7 +5,7 @@ import { FileTextIcon, Loader2Icon, PencilIcon, Trash2Icon, UsersIcon } from "lu
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 
-import { AddStatementDialog } from "@/components/add-statement-dialog"
+import { type AddPick, AddAssetDialog, AddAssetTrigger, type Have } from "@/components/add-asset-dialog"
 import { type AssetDialogState, AssetDialogs, type AssetGroup } from "@/components/asset-dialogs"
 import { AddAssetButton, FixedIncomeList } from "@/components/fixed-income"
 import { ProcessingList } from "@/components/jobs"
@@ -186,7 +186,7 @@ function MemberCard({ member, onRename, onDelete, onDeleteStatement, assets }: {
 }) {
   const name = displayName(member)
   return (
-    <section className="flex min-w-0 flex-col rounded-[22px] bg-surface p-5 ring-1 ring-border sm:p-6">
+    <section className="flex min-w-0 flex-col glass rounded-[24px] p-5 sm:p-6">
       <div className="mb-4 flex items-start justify-between gap-3">
         <h2 className="grid min-w-0 gap-0.5 text-[15px] font-semibold tracking-tight">
           <span className="truncate">{name}</span>
@@ -224,7 +224,7 @@ function MemberCard({ member, onRename, onDelete, onDeleteStatement, assets }: {
   )
 }
 
-function EmptyMembers({ onAdded }: { onAdded: () => void }) {
+function EmptyMembers({ onAdd }: { onAdd: () => void }) {
   return (
     <div className="mx-auto mt-16 max-w-md text-center">
       <div className="mx-auto mb-6 grid size-14 place-items-center rounded-2xl bg-surface ring-1 ring-border">
@@ -235,7 +235,7 @@ function EmptyMembers({ onAdded }: { onAdded: () => void }) {
         Members appear when you add a statement. Add any family member's statement and we'll file it under the right person automatically.
       </p>
       <div className="mt-8">
-        <AddStatementDialog onAdded={onAdded} trigger={<Button size="lg" className="h-11 px-4">Add a statement</Button>} />
+        <Button size="lg" className="h-11 px-4" onClick={onAdd}>Add asset</Button>
       </div>
     </div>
   )
@@ -258,17 +258,27 @@ export function MembersPage({ me }: { me: Me }) {
   // Queued uploads: a finished one reloads the members (plan §13 item 5).
   const { jobs, refresh: refreshJobs } = useJobs(load)
   const reload = useCallback(() => { load(); refreshJobs() }, [load, refreshJobs])
-  // "Try again" (here, or in the failed-upload toast: /members?add=1) opens the add-statement dialog.
-  const [adding, setAdding] = useState(() => new URLSearchParams(window.location.search).get("add") === "1")
+  // "Try again" (here, or in the failed-upload toast: /members?add=1) opens Add asset on the statement upload.
+  const [add, setAdd] = useState<AddPick | "list" | null>(() => new URLSearchParams(window.location.search).get("add") === "1" ? "mf" : null)
   useEffect(() => {
-    if (adding && window.location.search) window.history.replaceState(null, "", window.location.pathname)
-  }, [adding])
+    if (add && window.location.search) window.history.replaceState(null, "", window.location.pathname)
+  }, [add])
 
   // FD, PPF and EPF (M19), gold, silver and SGBs (M29), valued in the browser with the shared calculator.
   const assets = useAssets()
   const rows = useMemo(() => valued(assets.assets ?? [], assets.rates), [assets.assets, assets.rates])
   const [assetDlg, setAssetDlg] = useState<AssetDialogState>(null)
   const pick = useMemo(() => (members ?? []).map((m) => ({ id: m.id, name: displayName(m) })), [members])
+  // what's here already, for the Add asset list (this page has statements, not holdings: CAMS / KFintech → funds, CDSL → shares)
+  const have = useMemo<Have>(() => {
+    const h: Have = { counting: "statements" }
+    for (const m of members ?? []) for (const st of m.statements) {
+      if (st.kind === "CDSL") h.listed = (h.listed ?? 0) + 1
+      else h.mf = (h.mf ?? 0) + 1
+    }
+    for (const a of assets.assets ?? []) h[a.type] = (h[a.type] ?? 0) + 1
+    return h
+  }, [members, assets.assets])
   const unassigned = rows.filter((r) => !r.member_id || !members?.some((m) => m.id === r.member_id))
   const section = (memberId: string | null, list: AssetRow[]) => (
     <AssetSection rows={list} onAdd={(group) => setAssetDlg({ kind: "add", member: memberId, group })} onAction={setAssetDlg} onChanged={assets.reload} />
@@ -279,9 +289,9 @@ export function MembersPage({ me }: { me: Me }) {
     <PageShell me={me}>
       <div className="flex flex-wrap items-end justify-between gap-4">
         <PageTitle title="Members" detail={members && n ? `${n} ${n === 1 ? "person" : "people"} in your family portfolio` : undefined} />
-        {members && n > 0 && <AddStatementDialog onAdded={reload} />}
+        {members && n > 0 && <AddAssetTrigger onClick={() => setAdd("list")} />}
       </div>
-      <ProcessingList jobs={jobs} onRetry={() => setAdding(true)} onChange={reload} />
+      <ProcessingList jobs={jobs} onRetry={() => setAdd("mf")} onChange={reload} />
       {error && (
         <p className="rounded-xl bg-surface p-4 text-sm text-loss ring-1 ring-border" role="alert">
           Couldn't load members: {error}. Reload to try again.
@@ -289,11 +299,11 @@ export function MembersPage({ me }: { me: Me }) {
       )}
       {!members && !error && (
         <div className="grid gap-4 md:grid-cols-2">
-          <Skeleton className="h-44 rounded-[22px]" />
-          <Skeleton className="h-44 rounded-[22px]" />
+          <Skeleton className="h-44 rounded-[24px]" />
+          <Skeleton className="h-44 rounded-[24px]" />
         </div>
       )}
-      {members && n === 0 && <EmptyMembers onAdded={reload} />}
+      {members && n === 0 && <EmptyMembers onAdd={() => setAdd("list")} />}
       {members && n > 0 && (
         <div className="grid gap-4 md:grid-cols-2">
           {members.map((m) => (
@@ -304,14 +314,15 @@ export function MembersPage({ me }: { me: Me }) {
         </div>
       )}
       {members && unassigned.length > 0 && (
-        <section className="rounded-[22px] bg-surface p-5 ring-1 ring-border sm:p-6" aria-label="Not filed under a member">
+        <section className="glass rounded-[24px] p-5 sm:p-6" aria-label="Not filed under a member">
           <h2 className="text-[15px] font-semibold tracking-tight">Not filed under a member</h2>
           <p className="mt-1 text-sm text-muted-foreground">Added before any statement. Edit one to pick whose it is.</p>
           <FixedIncomeList rows={unassigned} onAction={setAssetDlg} onChanged={assets.reload} />
         </section>
       )}
       <AssetDialogs state={assetDlg} members={pick} rates={assets.rates} onClose={() => setAssetDlg(null)} onSaved={assets.reload} onState={setAssetDlg} />
-      <AddStatementDialog trigger={null} open={adding} onOpenChange={setAdding} onAdded={reload} />
+      <AddAssetDialog trigger={null} open={!!add} start={add && add !== "list" ? add : undefined} onOpenChange={(o) => { if (!o) setAdd(null) }}
+        onAdded={reload} onAssetSaved={assets.reload} members={pick} rates={assets.rates} have={have} />
       <RenameDialog key={`r-${renaming?.id}`} member={renaming} onClose={() => setRenaming(null)} onDone={() => { setRenaming(null); load() }} />
       <DeleteDialog key={`d-${deleting?.id}`} member={deleting} assets={rows.filter((r) => r.member_id === deleting?.id).length} onClose={() => setDeleting(null)}
         onDone={() => { setDeleting(null); load(); assets.reload() }} />

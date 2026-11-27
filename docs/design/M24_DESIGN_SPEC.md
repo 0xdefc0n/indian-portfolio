@@ -11,7 +11,7 @@ Plan §13 is the working reference; this file records the decisions and the cont
 - **Logo:** the "Glass tile" wordmark: "Pocket" in plain Geist, "folio" on a soft-cornered gold block with a glass
   sheen on its top half.
 - **App icon:** the owner's stacked design: "Pocket" over the gold "folio" block on a dark tile with a faint gold
-  border. It stays legible down to about 48 px. At 32/16 px (favicon) it falls back to the gold block alone.
+  border. It is the favicon too (owner, 2026-11-28), with larger lettering at small sizes.
 - **Dashboard:** direction "A": dark warm ink, gold glass, Geist. The layout follows the approved v2 boards:
   - the hero, whose chart drives the big number;
   - Family (Everyone first, then each member, tap to focus) and Upcoming SIPs beside it;
@@ -66,8 +66,9 @@ variable font at weight 600). No file depends on a loaded font.
 
 - `public/brand/wordmark-dark.svg`, `wordmark-light.svg`
 - `public/brand/app-icon.svg` (the stacked icon)
-- `public/favicon.svg` + `favicon.ico` (16/32/48)
-- `public/icons/icon-192.png`, `icon-512.png`, `icon-maskable-512.png` (content inside the 80 % safe circle),
-  `apple-touch-icon-180.png`
-- `public/brand/google-consent-120.png`, for the Google OAuth consent screen. The owner uploads it in Google Cloud
-  Console.
+- `public/favicon.svg` (the app icon, vector) + `favicon.ico` (16/32/48)
+- `public/icons/icon-{48,72,96,128,144,192,256,384,512}.png` and `icon-maskable-{192,512}.png` (content inside the
+  80 % safe circle), `apple-touch-icon-180.png`. Each is rasterised at its own size, with larger lettering at 128 px
+  and under, so browsers and launchers never rescale a far larger or smaller file (that was the blur).
+- `public/brand/google-consent-120.png` (and `-512.png`, sharper if the console takes it), for the Google OAuth
+  consent screen. The owner uploads it in Google Cloud Console.

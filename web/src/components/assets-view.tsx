@@ -6,14 +6,16 @@ import type { AssetDialogState } from "@/components/asset-dialogs"
 import { AllocationStrip, type Slice } from "@/components/allocation-strip"
 import { AddAssetButton, FixedIncome, GoldSilver } from "@/components/fixed-income"
 import { HoldingsTable } from "@/components/holdings-table"
+import { ReturnBoxes } from "@/components/overview"
 import { PageTitle, Panel } from "@/components/panel"
 import { SipTable, sipSummary } from "@/components/sip-table"
 import type { DayChange, Holding, Member, Sip } from "@/lib/api"
 import { type AssetKind, holdingKind, KIND_LABEL } from "@/lib/asset-kind"
-import type { AssetRow } from "@/lib/assets"
+import { type AssetRow, assetFlows, assetTotals } from "@/lib/assets"
 import { day, inr, monthly, pct } from "@/lib/format"
 import { nextRun } from "@/lib/sips"
 import { cn } from "@/lib/utils"
+import { holdingFlows, xirr } from "@/lib/xirr"
 
 type Props = {
   holdings: Holding[]
@@ -108,6 +110,65 @@ function KindTabs({ groups, total, current, onPick }: {
   )
 }
 
+/** What a holding or hand-entered asset is called in the coverage note. */
+const NOUN: Record<AssetKind, [string, string]> = {
+  mf: ["fund", "funds"], etf: ["ETF", "ETFs"], stock: ["holding", "holdings"], fixed: ["account", "accounts"], gold: ["holding", "holdings"],
+}
+/** What would make returns known, when nothing in the section has a cost yet. */
+const NONE: Record<AssetKind, string> = {
+  mf: "you add a CAMS / KFintech statement that goes back to the first investment",
+  etf: "you add your broker's tradebook from Add asset (it has the buy prices)",
+  stock: "you add your broker's tradebook from Add asset (it has the buy prices)",
+  fixed: "the amounts are entered",
+  gold: "you enter the price paid",
+}
+/** Why the rest aren't in the figures, when some are. */
+const REST: Record<AssetKind, string> = {
+  mf: "were bought before your CAMS / KFintech statement starts",
+  etf: "have no buy price yet (add your broker's tradebook from Add asset)",
+  stock: "have no buy price yet (add your broker's tradebook from Add asset)",
+  fixed: "need their amounts",
+  gold: "have no price paid entered",
+}
+
+/**
+ * Invested, value now, returns and XIRR for one kind (owner, 2026-11-28), over what has a known cost: funds with full
+ * history, shares with a buy price, hand-entered assets with their amounts. Same maths as the overview.
+ */
+function KindReturns({ kind, holdings, rows }: { kind: AssetKind; holdings: Holding[]; rows: AssetRow[] }) {
+  const value = holdings.reduce((s, h) => s + h.value, 0) + rows.reduce((s, r) => s + r.v.value, 0)
+  if (value <= 0) return null
+  const withCost = holdings.filter((h) => h.invested != null && h.cashflows?.length)
+  const known = rows.filter((r) => !r.v.cost_unknown)
+  const t = assetTotals(known)
+  const invested = withCost.reduce((s, h) => s + (h.invested ?? 0), 0) + t.invested
+  const current = withCost.reduce((s, h) => s + h.value, 0) + t.costValue
+  const n = holdings.length + rows.length
+  const covered = withCost.length + known.length
+  const [one, many] = NOUN[kind]
+  if (!covered || invested <= 0) {
+    return (
+      <p className="glass rounded-[24px] p-5 text-sm text-muted-foreground sm:p-6">
+        Returns show here once {NONE[kind]}.
+      </p>
+    )
+  }
+  return (
+    <section className="glass rounded-[24px] p-5 sm:p-6" aria-label="Returns">
+      <ReturnBoxes
+        showValue
+        valueLabel={covered < n ? `Value of these ${covered === 1 ? one : many}` : "Current value"}
+        returns={{ invested, current, gain: current - invested, xirr: xirr([...holdingFlows(withCost), ...assetFlows(known)]), funds: covered, complete: covered === n }}
+      />
+      {covered < n && (
+        <p className="mt-4 border-t pt-3 text-[12.5px] text-muted-foreground">
+          Covers {covered} of {n} {many}: the rest {REST[kind]}.
+        </p>
+      )}
+    </section>
+  )
+}
+
 /** Under the Stocks & bonds table (M20): the price date, and which ones keep the statement's price. */
 export function PriceNote({ holdings }: { holdings: Holding[] }) {
   const priced = holdings.filter((h) => h.price_source === "exchange")
@@ -144,6 +205,7 @@ export function AssetsView(p: Props) {
   if (current === "fixed") {
     body = (
       <>
+        <KindReturns kind="fixed" holdings={[]} rows={p.fixed} />
         {p.fixed.length > 0 && <AllocationStrip slices={slicesOf(p.fixed.map((r) => ({ category: r.category, value: r.v.value })))} active={p.hovered} onHover={p.onHover} selected={null} onSelect={() => undefined} />}
         <Panel
           title={KIND_LABEL.fixed}
@@ -158,6 +220,7 @@ export function AssetsView(p: Props) {
     const items = [...demat.map((h) => ({ category: h.category, value: h.value })), ...p.metals.map((r) => ({ category: r.category, value: r.v.value }))]
     body = (
       <>
+        <KindReturns kind="gold" holdings={demat} rows={p.metals} />
         {items.length > 0 && <AllocationStrip slices={slicesOf(items)} active={p.hovered} onHover={p.onHover} selected={null} onSelect={() => undefined} />}
         {demat.length > 0 && (
           <Panel title="SGBs in demat" aside={`${demat.length} · ${inr(sum(demat))}`}>
@@ -182,6 +245,7 @@ export function AssetsView(p: Props) {
     const activeSips = p.sips.filter((x) => x.status === "active")
     body = (
       <>
+        <KindReturns key={`${current}-${p.category}`} kind={current} holdings={rows} rows={[]} />
         <AllocationStrip slices={slicesOf(all)} active={p.hovered} onHover={p.onHover} selected={p.category} onSelect={p.onCategory} holdings={all} />
         <Panel
           title={p.category ?? KIND_LABEL[current]}

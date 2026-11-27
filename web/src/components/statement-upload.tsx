@@ -1,23 +1,13 @@
-import { CheckIcon, ChevronDownIcon, FileUpIcon, Loader2Icon, PlusIcon } from "lucide-react"
+// The statement upload (plan §13 item 5): a CDSL or CAMS / KFintech PDF and an optional password. Shown inside the
+// Add asset dialog (add-asset-dialog.tsx) for mutual funds and for stocks & ETFs.
+import { CheckIcon, ChevronDownIcon, FileUpIcon, Loader2Icon } from "lucide-react"
 import { type FormEvent, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { QueuedUpload } from "@/components/jobs"
-import { RequestStatementForm } from "@/components/request-statement-form"
-import { TradebookForm } from "@/components/tradebook-form"
 import { type AddedStatement, ApiFailure, api, type QueuedUpload as Queued, SignedOut, waitForPortfolio } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
@@ -88,7 +78,12 @@ function UpdatingDashboard({ added, onDone }: { added: AddedStatement; onDone: (
  * Only the file and an optional password (D19). Members' PANs and pending passwords are tried on the server. Every
  * check the user could fix happens before anything is queued, so a queued upload never needs them again (§10.1 A).
  */
-function UploadForm({ onDone, onQueued }: { onDone: () => void; onQueued: () => void }) {
+export function UploadForm({ onDone, onQueued, kind = "mf" }: {
+  onDone: () => void
+  onQueued: () => void
+  /** Which help to show: funds (CAMS / KFintech first) or shares (CDSL). The upload is the same. */
+  kind?: "mf" | "listed"
+}) {
   const [busy, setBusy] = useState(false)
   const [phase, setPhase] = useState<Phase>("uploading")
   const [added, setAdded] = useState<AddedStatement | null>(null)
@@ -170,17 +165,29 @@ function UploadForm({ onDone, onQueued }: { onDone: () => void; onQueued: () => 
           <input id="u-file" type="file" accept="application/pdf" required className="sr-only"
             onChange={(e) => { setFile(e.target.files?.[0] ?? null); setProblem(null) }} />
         </label>
-        <p className="text-xs text-muted-foreground">
-          A{" "}
-          <a className="-my-2 py-2 text-primary underline-offset-4 hover:underline" href="https://www.cdslindia.com/CAS/LoginCAS.aspx" target="_blank" rel="noopener noreferrer">
-            CDSL
-          </a>{" "}
-          statement, or a{" "}
-          <a className="-my-2 py-2 text-primary underline-offset-4 hover:underline" href="https://www.camsonline.com" target="_blank" rel="noopener noreferrer">
+        {kind === "mf" ? (
+          <p className="text-xs text-muted-foreground">
+            A{" "}
+            <a className="-my-2 py-2 text-primary underline-offset-4 hover:underline" href="https://www.camsonline.com" target="_blank" rel="noopener noreferrer">
             CAMS / KFintech
           </a>{" "}
-          one. Choose “Detailed” with the earliest start date to see gains.
-        </p>
+            statement has every fund with its full history: choose “Detailed” with the earliest start date to see
+            returns. A{" "}
+            <a className="-my-2 py-2 text-primary underline-offset-4 hover:underline" href="https://www.cdslindia.com/CAS/LoginCAS.aspx" target="_blank" rel="noopener noreferrer">
+            CDSL
+          </a>{" "}
+            statement works too.
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            A{" "}
+            <a className="-my-2 py-2 text-primary underline-offset-4 hover:underline" href="https://www.cdslindia.com/CAS/LoginCAS.aspx" target="_blank" rel="noopener noreferrer">
+            CDSL
+          </a>{" "}
+            eCAS lists every share and ETF in your demat account, with its funds. The password is usually the PAN in
+            capital letters.
+          </p>
+        )}
       </div>
       {showPassword ? (
         <div className="grid gap-2">
@@ -211,104 +218,5 @@ function UploadForm({ onDone, onQueued }: { onDone: () => void; onQueued: () => 
         </Button>
       )}
     </form>
-  )
-}
-
-/** CDSL OTP fetch isn't deployed (D8): shown as coming soon (plan §13 item 5). */
-function OtpComingSoon({ onUpload }: { onUpload: () => void }) {
-  return (
-    <div className="grid gap-4 text-sm">
-      <div className="flex items-center gap-2">
-        <span className="font-medium">Fetch from CDSL with OTP</span>
-        <Badge variant="secondary">Coming soon</Badge>
-      </div>
-      <p className="text-muted-foreground">
-        Soon you'll be able to fetch a CDSL statement with the OTP sent to your phone. For now, download it from{" "}
-        <a className="-my-2 py-2 text-primary underline-offset-4 hover:underline" href="https://www.cdslindia.com/CAS/LoginCAS.aspx" target="_blank" rel="noopener noreferrer">
-          CDSL
-        </a>{" "}
-        and upload the PDF.
-      </p>
-      <Button type="button" variant="outline" className="h-11" onClick={onUpload}>Upload a PDF</Button>
-    </div>
-  )
-}
-
-type Tab = "upload" | "otp" | "request" | "broker"
-
-export function AddStatementDialog({
-  onAdded,
-  trigger,
-  defaultTab = "upload",
-  open: controlledOpen,
-  onOpenChange,
-}: {
-  /** A statement was added, or a queued upload changed (queued, cancelled, failed): reload. */
-  onAdded: () => void
-  /** null: no trigger (the page opens it with `open`). */
-  trigger?: React.ReactNode | null
-  defaultTab?: Tab
-  /** Optional control from the page ("Try again" in the Processing list opens it). */
-  open?: boolean
-  onOpenChange?: (open: boolean) => void
-}) {
-  const [ownOpen, setOwnOpen] = useState(false)
-  const open = controlledOpen ?? ownOpen
-  const setOpen = (o: boolean) => {
-    setOwnOpen(o)
-    onOpenChange?.(o)
-  }
-  const [tab, setTab] = useState<Tab>(defaultTab)
-  const done = () => {
-    setOpen(false)
-    onAdded()
-  }
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        setOpen(o)
-        if (o) setTab(defaultTab)
-      }}
-    >
-      {trigger !== null && (
-        <DialogTrigger asChild>
-          {trigger ?? (
-            <Button aria-label="Add statement" className="h-11 rounded-xl px-4 max-sm:w-11 max-sm:px-0">
-              <PlusIcon className="size-[18px]" />
-              <span className="max-sm:sr-only">Add statement</span>
-            </Button>
-          )}
-        </DialogTrigger>
-      )}
-      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Add a statement</DialogTitle>
-          <DialogDescription>
-            Add any family member's statement. We'll file it under the right person automatically.
-          </DialogDescription>
-        </DialogHeader>
-        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="mt-2">
-          <TabsList className="h-10 w-full">
-            <TabsTrigger value="upload">Upload<span className="hidden sm:inline">&nbsp;PDF</span></TabsTrigger>
-            <TabsTrigger value="otp"><span className="hidden sm:inline">Fetch with&nbsp;</span>OTP</TabsTrigger>
-            <TabsTrigger value="request">Request</TabsTrigger>
-            <TabsTrigger value="broker">Broker</TabsTrigger>
-          </TabsList>
-          <TabsContent value="upload" className="pt-4">
-            <UploadForm onDone={done} onQueued={onAdded} />
-          </TabsContent>
-          <TabsContent value="otp" className="pt-4">
-            <OtpComingSoon onUpload={() => setTab("upload")} />
-          </TabsContent>
-          <TabsContent value="request" className="pt-4">
-            <RequestStatementForm onUpload={() => setTab("upload")} />
-          </TabsContent>
-          <TabsContent value="broker" className="pt-4">
-            <TradebookForm onDone={onAdded} />
-          </TabsContent>
-        </Tabs>
-      </DialogContent>
-    </Dialog>
   )
 }

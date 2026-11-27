@@ -69,6 +69,7 @@ be verified during implementation are marked ⚠️ VERIFY, with what to check a
 | D26 | AI portfolio analysis 🔒 (owner, 2026-11-27) | **The model is decided after the cost study (M31).** It ships after launch (M32), with identities never sent to the model (§21.8). | Owner: decide from the cost per user. |
 | D27 | Admin panel 🔒 (owner, 2026-11-27) | **Email allowlist only** (`ADMIN_EMAILS`). Health, aggregate usage, support actions with counts only, limits and feature flags. **No financial data, ever.** Built last, after launch (§21.9, M33). | Owner choice. |
 | D28 | Manual assets 🔒 (owner, 2026-11-27) | **FD, PPF and EPF entered by hand with the fewest fields the maths needs** (no bank name, label or PAN), owned by the household with an existing member picked. Only the inputs are stored, sealed; the value is computed live by one shared calculator. A separate `GET /api/assets`; two XIRRs: Funds & stocks (default) and Overall (§21.12, M19). | Owner: easy to manage, no breaking change to members, and it never feels like we're collecting private data. |
+| D29 | Broker files as a source 🔒 (owner, 2026-11-28) | **A broker holdings statement or tradebook can be anyone's first upload**, and the app shows whatever can be worked out from it. Shares with an average buy price but no buy dates show invested, value and returns; their XIRR shows "—" (needs buy dates) and they're left out of portfolio XIRR. A first broker file creates the member from the file's name once the user confirms it (an exception to D19, since these files have no PAN); a later statement with the same name asks "Is this the same person?". **CDSL quantities win** when there is a CDSL statement; broker files then add buy prices only (§21.13, M34). | Owner: be open to any file a user has, show what the data allows, and never double count. |
 
 ---
 
@@ -1755,10 +1756,19 @@ account was deleted", the inactivity notice) are in `src/lib/email.ts`. Breach p
 3. **Consent screen**: a full-page panel with the notice, an 18+ checkbox and **I agree**.
 4. **Onboarding (empty household)**:
    - A bento-style welcome panel explaining the two statement types (CDSL eCAS, CAMS/KFintech CAS).
-   - The **Add statement** primary action.
-   - Under it, "Don't have one? Get your CAMS/KFintech statement" (the guided manual flow), and **Fetch from CDSL with
-     OTP — Coming soon** shown disabled with a `Badge`.
-5. **Add statement dialog** (existing `add-statement-dialog.tsx`):
+   - The **Add asset** primary action.
+   - "Fetch with OTP" and the KFintech "Request" flow are hidden until those features ship (owner, 2026-11-28). The
+     request form (`request-statement-form.tsx`) stays in the code for then.
+5. **Add asset dialog** (`add-asset-dialog.tsx`, owner 2026-11-28): the one place to add anything, from the header,
+   onboarding and Members.
+   - A short list first, then the form for what was picked, with "All assets" to go back:
+     - from a statement: **Mutual funds** and **Stocks & ETFs** (both open the statement upload below, with help for
+       CAMS / KFintech or CDSL), and **Buy prices for shares** (the broker tradebook, §21.6), shown only while some
+       shares have no buy price;
+     - entered by hand: **Fixed deposit, PPF, EPF, Gold, Silver, Gold bonds** (the §21.12 / §21.5 forms, type preset).
+   - First time in (nothing added yet): the list leads with a statement and folds the hand-entered kinds into one row.
+     After that, kinds not added yet come first, and added ones show "N added".
+   - **The statement upload** (`statement-upload.tsx`):
    - **Only the file and an optional password (D19).** No PAN field and no member picker. Copy: "Add any family
      member's statement. We'll file it under the right person automatically."
    - The password field is collapsed by default ("Has a password? Add it"). It opens automatically when the server
@@ -1828,7 +1838,7 @@ no app store at launch.
   ],
   "shortcuts": [
     { "name": "Today's change", "url": "/?view=today&source=shortcut" },
-    { "name": "Add statement", "url": "/?action=add-statement&source=shortcut" }
+    { "name": "Add asset", "url": "/?action=add-statement&source=shortcut" }
   ]
 }
 ```
@@ -3101,3 +3111,47 @@ contributions stopped; Overall XIRR with funds plus manual assets.
   member); Members lists those under "Not filed under a member" until one is picked in Edit.
 
 **Later:** RD, NSC, SCSS, NPS, bonds; rates fetched automatically; tax views (TDS, 80C).
+
+### 21.13 Broker files as a source (D29, M34)
+
+**Why.** Many people have only their broker app. Its holdings statement already has what returns need: quantity and
+average buy price for each share. Asking for a CDSL statement first, or a tradebook per year, loses them.
+
+**Groww's holdings statement** (Excel; layout from the owner's file, 2026-11-28, no values copied): a preamble with
+`Name`, `Unique Client Code` and `Holdings statement for stocks as on DD-MM-YYYY`, a `Summary` block (`Invested Value`,
+`Closing Value`, `Unrealised P&L`), then the header row `Stock Name, ISIN, Quantity, Average buy price, Buy value,
+Closing price, Closing value, Unrealised P&L` and one row per holding (ETFs included, with their INF ISIN). Other
+brokers' holdings exports (Zerodha Console, Upstox, Angel One, Dhan) offer quantity and average price too; profiles are
+added as header rows come in.
+
+**What each source gives.**
+
+| Source | Quantity | Buy price | Buy dates (XIRR, tax lots) | Sold shares |
+|---|---|---|---|---|
+| CDSL statement | ✅ every demat account | no | no | no |
+| Broker holdings statement | ✅ that broker account | ✅ average | no | no |
+| Broker tradebook | derived (may be partial) | ✅ per trade | ✅ | ✅ |
+| Manual average price | no | ✅ | optional month | no |
+
+**Counting rules (no double counts).**
+1. Per member and ISIN, quantity comes from the latest CDSL statement when the member has one. Broker files then only
+   supply the buy price.
+2. Without a CDSL statement, quantity is the sum over broker accounts, each account's newest holdings file only (an
+   account is keyed by an HMAC of broker + client code; the code itself is never stored).
+3. Buy price per share: tradebook lots first (exact), then the holdings file's average for units the tradebook doesn't
+   cover, then a manual average price. Two broker accounts' averages combine weighted by their quantities.
+4. A share in a broker file newer than the CDSL statement but not in it gets a note ("bought after your CDSL statement:
+   upload a newer one"); it isn't added (rule 1).
+5. The same file twice is refused (content hash, as statements).
+
+**Members.** A broker file carries a name and client code but no PAN. If the household has no matching member, the
+upload asks "Whose is this?" with the file's name filled in (or an existing member). When a CDSL/CAMS statement later
+arrives for a new PAN whose holder name matches a PAN-less member, the upload asks "Is this the same person?"; yes
+merges the PAN-less member into the new one.
+
+**Returns.** Value = quantity × latest price (M20). Invested and returns from the buy price. XIRR only where buy dates
+exist; shares without them show "—" ("needs buy dates") and stay out of portfolio XIRR. Tax views skip them.
+
+**Privacy.** Like tradebooks: the file is read once and never kept; only ISIN, quantity, average price and the as-on
+date are stored, sealed. The name is used only as the member's name.
+

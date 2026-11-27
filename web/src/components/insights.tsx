@@ -62,7 +62,8 @@ function sumBy(hs: Holding[], key: (h: Holding) => string): Row[] {
  * Asset class and fund house splits, with plain-language concentration notes. `fixedIncome`: FD, PPF and EPF entered
  * by hand (M19), counted under Debt in the asset-class split only.
  */
-export function AllocationBreakdown({ holdings, total, fixedIncome = 0, gold = 0 }: { holdings: Holding[]; total: number; fixedIncome?: number; gold?: number }) {
+/** `stacked`: asset class above fund house (beside the donut), instead of side by side. */
+export function AllocationBreakdown({ holdings, total, fixedIncome = 0, gold = 0, stacked = false }: { holdings: Holding[]; total: number; fixedIncome?: number; gold?: number; stacked?: boolean }) {
   const classes = sumBy(holdings, (h) => h.asset_class)
   const addTo = (label: string, value: number) => {
     if (value <= 0) return
@@ -83,7 +84,7 @@ export function AllocationBreakdown({ holdings, total, fixedIncome = 0, gold = 0
 
   return (
     <div>
-      <div className="grid gap-8 md:grid-cols-2">
+      <div className={cn("grid gap-8", !stacked && "md:grid-cols-2")}>
         <section>
           <h3 className="mb-3 text-sm font-medium text-muted-foreground">Asset class</h3>
           <BarList rows={assets} total={total + fixedIncome + gold} />
@@ -428,15 +429,18 @@ export function FundReturns({ holdings, benchmark }: { holdings: Holding[]; benc
     .filter((h) => PERIODS.some((p) => h.returns?.[p] != null))
     .sort((a, b) => (b.returns["3y"] ?? b.returns["1y"] ?? -9) - (a.returns["3y"] ?? a.returns["1y"] ?? -9))
   if (!funds.length) return <p className="text-sm text-muted-foreground">NAV history isn't available right now.</p>
+  // only periods some fund (or the index) has: a column of dashes says nothing (5Y before funds are five years old)
+  const shown = PERIODS.filter((p) => funds.some((h) => h.returns?.[p] != null) || benchmark?.returns[p] != null)
+  const last = shown.at(-1)
   const cell = (v: number | null, ref: number | null | undefined, compare: boolean) => (
     <span className={cn(v != null && compare && ref != null && (v >= ref ? "text-gain" : "text-loss"))}>
       {v == null ? "—" : signed(v * 100, (n) => pct(n))}
     </span>
   )
   const periods = (r: Returns, ref: Returns | undefined, compare: boolean) => (
-    <dl className="mt-2 grid grid-cols-3 gap-2 text-sm">
-      {PERIODS.map((p) => (
-        <div key={p} className={p === "5y" ? "text-right" : undefined}>
+    <dl className="mt-2 grid gap-2 text-sm" style={{ gridTemplateColumns: `repeat(${shown.length}, minmax(0, 1fr))` }}>
+      {shown.map((p) => (
+        <div key={p} className={p === last ? "text-right" : undefined}>
           <dt className="eyebrow">{p.toUpperCase()}</dt>
           <dd className="mt-0.5 tabular-nums">{cell(r[p], ref?.[p], compare)}</dd>
         </div>
@@ -467,8 +471,8 @@ export function FundReturns({ holdings, benchmark }: { holdings: Holding[]; benc
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead className="w-full pl-0">Fund</TableHead>
-            {PERIODS.map((p) => (
-              <TableHead key={p} className={cn("text-right", p === "5y" ? "pr-0" : "px-3")}>{p.toUpperCase()}</TableHead>
+            {shown.map((p) => (
+              <TableHead key={p} className={cn("text-right", p === last ? "pr-0" : "px-3")}>{p.toUpperCase()}</TableHead>
             ))}
           </TableRow>
         </TableHeader>
@@ -476,8 +480,8 @@ export function FundReturns({ holdings, benchmark }: { holdings: Holding[]; benc
           {benchmark && (
             <TableRow className="bg-muted/50 hover:bg-muted/50">
               <TableCell className="py-3 pr-3 pl-0 font-medium whitespace-normal">{benchmark.name}</TableCell>
-              {PERIODS.map((p) => (
-                <TableCell key={p} className={cn("text-right font-medium", p === "5y" ? "pr-0" : "px-3")}>{cell(benchmark.returns[p], null, false)}</TableCell>
+              {shown.map((p) => (
+                <TableCell key={p} className={cn("text-right font-medium", p === last ? "pr-0" : "px-3")}>{cell(benchmark.returns[p], null, false)}</TableCell>
               ))}
             </TableRow>
           )}
@@ -487,8 +491,8 @@ export function FundReturns({ holdings, benchmark }: { holdings: Holding[]; benc
                 <FundButton className="font-normal">{h.name}</FundButton>
                 <div className="mt-0.5 text-xs text-muted-foreground">{h.sebi_category?.replace(/\s+Fund$/i, "") ?? h.category}</div>
               </TableCell>
-              {PERIODS.map((p) => (
-                <TableCell key={p} className={cn("text-right", p === "5y" ? "pr-0" : "px-3")}>
+              {shown.map((p) => (
+                <TableCell key={p} className={cn("text-right", p === last ? "pr-0" : "px-3")}>
                   {cell(h.returns[p], benchmark?.returns[p], h.asset_class === "Equity")}
                 </TableCell>
               ))}
