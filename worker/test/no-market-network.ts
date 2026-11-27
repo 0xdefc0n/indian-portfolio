@@ -8,7 +8,7 @@ import { ADAPTERS } from '../src/market/amc'
 import { amcQueue } from '../src/market/amc-scrape'
 import { stocksQueue } from '../src/market/stocks'
 
-const MARKET_HOSTS = /(^|\.)(amfiindia\.com|mfapi\.in|bharatstockapi\.com|upstox\.com|rapidapi\.com)$/
+const MARKET_HOSTS = /(^|\.)(amfiindia\.com|mfapi\.in|bharatstockapi\.com|upstox\.com|rapidapi\.com|niftyindices\.com)$/
 const AMC_HOSTS = new Set(ADAPTERS.flatMap((a) => a.hosts))
 const realFetch = globalThis.fetch
 ;(globalThis as { pfRealFetch?: typeof fetch }).pfRealFetch = realFetch // test/stocks.live.test.ts only

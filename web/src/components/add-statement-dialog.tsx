@@ -17,6 +17,7 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { QueuedUpload } from "@/components/jobs"
 import { RequestStatementForm } from "@/components/request-statement-form"
+import { TradebookForm } from "@/components/tradebook-form"
 import { type AddedStatement, ApiFailure, api, type QueuedUpload as Queued, SignedOut, waitForPortfolio } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
@@ -233,7 +234,7 @@ function OtpComingSoon({ onUpload }: { onUpload: () => void }) {
   )
 }
 
-type Tab = "upload" | "otp" | "request"
+type Tab = "upload" | "otp" | "request" | "broker"
 
 export function AddStatementDialog({
   onAdded,
@@ -292,6 +293,7 @@ export function AddStatementDialog({
             <TabsTrigger value="upload">Upload<span className="hidden sm:inline">&nbsp;PDF</span></TabsTrigger>
             <TabsTrigger value="otp"><span className="hidden sm:inline">Fetch with&nbsp;</span>OTP</TabsTrigger>
             <TabsTrigger value="request">Request</TabsTrigger>
+            <TabsTrigger value="broker">Broker</TabsTrigger>
           </TabsList>
           <TabsContent value="upload" className="pt-4">
             <UploadForm onDone={done} onQueued={onAdded} />
@@ -301,6 +303,9 @@ export function AddStatementDialog({
           </TabsContent>
           <TabsContent value="request" className="pt-4">
             <RequestStatementForm onUpload={() => setTab("upload")} />
+          </TabsContent>
+          <TabsContent value="broker" className="pt-4">
+            <TradebookForm onDone={onAdded} />
           </TabsContent>
         </Tabs>
       </DialogContent>

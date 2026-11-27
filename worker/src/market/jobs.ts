@@ -6,6 +6,9 @@ import { prebuild } from '../lib/snapshot'
 import { EngineBusy, runAmc } from './amc-scrape'
 import { runStocks } from './stocks'
 import { metalRates, REF_CODES } from './metals'
+import { ISINS_PER_MESSAGE, type PricesMessage, requestPrices, runPrices } from './prices'
+import { CORP_CRON, type CorpMessage, requestCorp, runCorp, runSymbols } from './corp'
+import { type IndicesMessage, planScores, runIndices, runScores, type ScoresMessage } from './score'
 import { amcId } from './amc-ids'
 import { addDays, AmfiFormatError, anomalies, istToday, type NavRow, parseAmfiNav, parseMfapi, type Ymd, ymdToAmfi, ymdToIso } from './amfi'
 import {
@@ -51,6 +54,10 @@ export type MarketMessage =
   | { type: 'repair'; date: Ymd }
   | { type: 'stocks' } // the BharatStock job (src/market/stocks.ts, M11)
   | { type: 'amc' } // the AMC disclosure scrapers (src/market/amc-scrape.ts, M18)
+  | PricesMessage // exchange prices for shares and bonds (src/market/prices.ts, M20)
+  | IndicesMessage // index total-return levels, then the score plan (src/market/score.ts, M28)
+  | ScoresMessage // benchmark scores for held funds and shares (M28)
+  | CorpMessage // NSE corporate actions and symbols (src/market/corp.ts, M21)
 
 /** pf-market sends, through one object so tests can capture them instead of the real queue. */
 export const marketQueue = {
@@ -193,6 +200,24 @@ export async function navIngest(env: Env, opts: { cron?: string; now?: number } 
 export async function refreshMetals(env: Env, now = Date.now()): Promise<void> {
   const run = await metalRates(env, now)
   if (run.backfills.length) await marketQueue.sendBatch(env, run.backfills.map((code): MarketMessage => ({ type: 'backfill', code }))).catch(() => undefined)
+}
+
+/**
+ * The 23:00 and 07:00 IST runs: every live share and bond to pf-market (M20), and one `indices` message (M28: index
+ * levels, then the scores that need computing). Never throws.
+ */
+export async function requestAllPrices(env: Env, now = Date.now(), cron?: string): Promise<void> {
+  await requestPrices(env, now, (msgs) => marketQueue.sendBatch(env, msgs)).catch((e) => console.error('prices_request_failed', errorClass(e)))
+  // Corporate actions (M21): with the morning run, after the exchange's day is done.
+  if (cron === undefined || cron === CORP_CRON) {
+    await requestCorp(env, now, (msgs) => marketQueue.sendBatch(env, msgs)).catch((e) => console.error('corp_request_failed', errorClass(e)))
+  }
+  await marketQueue.sendBatch(env, [{ type: 'indices' }]).catch((e) => console.error('indices_request_failed', errorClass(e)))
+}
+
+/** The upload path: one prices message per 50 ISINs whose history isn't stored yet. */
+export async function sendPrices(env: { Q_MARKET: Queue }, isins: string[]): Promise<void> {
+  await marketQueue.sendBatch(env, chunk(isins, ISINS_PER_MESSAGE).map((c): MarketMessage => ({ type: 'prices', isins: c })))
 }
 
 const chunk = <T>(rows: T[], size: number): T[][] => Array.from({ length: Math.ceil(rows.length / size) }, (_, i) => rows.slice(i * size, (i + 1) * size))
@@ -364,6 +389,17 @@ export async function handleMarketBatch(batch: MessageBatch<MarketMessage>, env:
         if (out.status === 'done' && REF_CODES.includes(body.code)) await refreshMetals(env)
       } else if (body?.type === 'series' && Array.isArray(body.codes)) {
         await writeSeries(env, body.codes.filter((c) => Number.isSafeInteger(c) && c > 0).slice(0, SERIES_CODES_PER_MESSAGE))
+      } else if (body?.type === 'prices' && Array.isArray(body.isins)) {
+        await runPrices(env, body.isins.filter((i): i is string => typeof i === 'string'))
+      } else if (body?.type === 'indices') {
+        await runIndices(env)
+        await planScores(env, Date.now(), (msgs) => marketQueue.sendBatch(env, msgs))
+      } else if (body?.type === 'scores' && Array.isArray(body.keys)) {
+        await runScores(env, body.keys.filter((k): k is string => typeof k === 'string'))
+      } else if (body?.type === 'corp' && ISO_DAY.test(String(body.from)) && ISO_DAY.test(String(body.to))) {
+        await runCorp(env, body.from, body.to)
+      } else if (body?.type === 'symbols') {
+        await runSymbols(env)
       } else if (body?.type === 'repair' && validYmd(body.date)) {
         await runRepair(env, body.date)
       } else if (body?.type === 'amc') {
@@ -398,6 +434,8 @@ export async function handleMarketBatch(batch: MessageBatch<MarketMessage>, env:
     }
   }
 }
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/
 
 function validYmd(v: unknown): Ymd | undefined {
   return typeof v === 'number' && Number.isSafeInteger(v) && v >= 19900101 && v <= 22001231 ? v : undefined

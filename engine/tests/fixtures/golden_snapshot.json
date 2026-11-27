@@ -743,13 +743,16 @@
    "member_id": "m-alpha",
    "name": "Synth Flexi Cap Fund",
    "nav": 66.8679,
+   "notice": null,
    "payouts": [],
    "pledged": 0,
+   "price_source": "nav",
    "returns": {
     "1y": 0.13902,
     "3y": 0.13924,
     "5y": null
    },
+   "score": null,
    "sebi_category": null,
    "sip": {
     "amount": 5000.0,
@@ -997,13 +1000,16 @@
    "member_id": "m-alpha",
    "name": "Synth Liquid Fund",
    "nav": 3093.8568,
+   "notice": null,
    "payouts": [],
    "pledged": 0,
+   "price_source": "nav",
    "returns": {
     "1y": 0.06709,
     "3y": 0.06723,
     "5y": null
    },
+   "score": null,
    "sebi_category": null,
    "sip": null,
    "sources": [
@@ -1058,13 +1064,16 @@
    "member_id": "m-alpha",
    "name": "Synth Nifty 50 Index Fund",
    "nav": 233.6834,
+   "notice": null,
    "payouts": [],
    "pledged": 0,
+   "price_source": "nav",
    "returns": {
     "1y": 0.11904,
     "3y": 0.11924,
     "5y": null
    },
+   "score": null,
    "sebi_category": null,
    "sip": null,
    "sources": [
@@ -1103,13 +1112,16 @@
    "member_id": "m-beta",
    "name": "Synth Nifty 50 Index Fund",
    "nav": 233.6834,
+   "notice": null,
    "payouts": [],
    "pledged": 0,
+   "price_source": "nav",
    "returns": {
     "1y": 0.11904,
     "3y": 0.11924,
     "5y": null
    },
+   "score": null,
    "sebi_category": null,
    "sip": null,
    "sources": [
@@ -1139,26 +1151,32 @@
   {
    "amc": "Synth Industries",
    "amfi_code": null,
-   "as_of": "2026-10-31",
+   "as_of": "2026-11-24",
    "asset_class": "Stocks & bonds",
    "benchmark_value": null,
    "broker": "Synth Broking Limited",
    "cashflows": null,
    "category": "Stocks & bonds",
+   "corp_actions_tracked": false,
+   "cost_source": "none",
+   "dividends": [],
    "estimated": null,
    "folio": null,
    "invested": null,
    "isin": "INE000S01EQ1",
    "member_id": "m-alpha",
    "name": "Synth Industries Limited",
-   "nav": 1500.0,
+   "nav": 1501.2822,
+   "notice": null,
    "payouts": [],
    "pledged": 5.0,
+   "price_source": "exchange",
    "returns": {
     "1y": null,
     "3y": null,
     "5y": null
    },
+   "score": null,
    "sebi_category": null,
    "sip": null,
    "sources": [
@@ -1173,8 +1191,14 @@
    "tax": null,
    "units": 10.0,
    "units_exact": false,
-   "units_timeline": null,
-   "value": 15000.0
+   "units_timeline": [
+    [
+     "2026-10-31",
+     10.0
+    ]
+   ],
+   "unknown_units": 10.0,
+   "value": 15012.82
   },
   {
    "amc": "Synth",
@@ -1192,13 +1216,16 @@
    "member_id": "m-beta",
    "name": "Synth Flexi Cap Fund",
    "nav": 66.8679,
+   "notice": null,
    "payouts": [],
    "pledged": 0,
+   "price_source": "nav",
    "returns": {
     "1y": 0.13902,
     "3y": 0.13924,
     "5y": null
    },
+   "score": null,
    "sebi_category": null,
    "sip": null,
    "sources": [
@@ -1529,9 +1556,11 @@
      "tds": 0.0
     },
     "realised_funds": 1,
+    "realised_stocks": 0,
     "replayed_funds": 2
    },
    "as_of": "2026-11-20",
+   "dividend_income": [],
    "estimated": {
     "amount": 0,
     "in_progress": 0,
@@ -1579,7 +1608,14 @@
     "KFINTECH"
    ],
    "statement_total": 468220.38,
-   "total": 469453.27,
+   "stocks": {
+    "intraday_qty": 0.0,
+    "sold_elsewhere": 0,
+    "trades": 0,
+    "unknown_sold": 0,
+    "unmatched": 0
+   },
+   "total": 469466.09,
    "value_date": "2026-11-24"
   },
   {
@@ -1633,9 +1669,11 @@
      "tds": 0.0
     },
     "realised_funds": 0,
+    "realised_stocks": 0,
     "replayed_funds": 0
    },
    "as_of": "2026-10-31",
+   "dividend_income": [],
    "estimated": {
     "amount": 0,
     "in_progress": 0,
@@ -1678,6 +1716,13 @@
     "CDSL"
    ],
    "statement_total": 26592.12,
+   "stocks": {
+    "intraday_qty": 0.0,
+    "sold_elsewhere": 0,
+    "trades": 0,
+    "unknown_sold": 0,
+    "unmatched": 0
+   },
    "total": 26711.74,
    "value_date": "2026-11-24"
   }

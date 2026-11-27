@@ -23,7 +23,8 @@ F2 = {"isin": "INF000S02LQ2", "amfi": "900002", "name": "SYNTH LIQUID FUND - DIR
 F3 = {"isin": "INF000S03NX3", "amfi": "900003", "name": "SYNTH NIFTY 50 INDEX FUND - DIRECT PLAN - GROWTH",
       "amc": "SYNTH MUTUAL FUND", "cdsl_amc": "SYNTH AMC LTD", "type": "EQUITY", "base": 150.0, "growth": 0.12}
 BENCH = {"amfi": "120716", "base": 120.0, "growth": 0.11}
-EQ = {"isin": "INE000S01EQ1", "name": "SYNTH INDUSTRIES LIMITED", "issuer": "SYNTH INDUSTRIES LTD"}
+EQ = {"isin": "INE000S01EQ1", "name": "SYNTH INDUSTRIES LIMITED", "issuer": "SYNTH INDUSTRIES LTD",
+      "base": 1200.0, "growth": 0.06}  # a listed share: daily exchange closes from the price store (M20)
 
 START, END = date(2022, 12, 1), date(2026, 11, 24)
 TODAY = date(2026, 11, 25)
@@ -171,5 +172,6 @@ def market() -> dict:
     return {
         "navs": {f["amfi"]: nav_series(f) for f in (F1, F2, F3, BENCH)},
         "isin_to_code": {F3["isin"]: F3["amfi"]},  # demat-only fund: code from the scheme table
+        "prices": {EQ["isin"]: nav_series(EQ)},  # the share's exchange closes (M20)
         "stocks": None,
     }

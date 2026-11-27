@@ -9,6 +9,7 @@ export type AuditEvent =
   | 'consent_given' | 'export' | 'account_deleted' | 'account_erased_inactive' | 'inactivity_notice'
   | 'device_linked' | 'device_denied' | 'device_signed_out'
   | 'asset_added' | 'asset_changed' | 'asset_deleted'
+  | 'tradebook_added' | 'tradebook_deleted' | 'stock_cost_set' | 'stock_cost_deleted'
 
 /** Security-log rows are kept this long (DPDP Rule 6(1)(e) and 8(3): at least a year), then cleanup deletes them. */
 export const AUDIT_RETENTION_MS = 400 * 86_400_000

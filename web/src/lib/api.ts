@@ -99,8 +99,45 @@ export type Holding = {
   // M12: units / nav / value / as_of are at the latest NAV, estimated SIP units included; the statement's own figures:
   statement?: { units: number | null; nav: number | null; value: number; as_of: string }
   amfi_code?: string | null
+  /** M20: "exchange" = a share or bond at its latest exchange close; "nav" = a fund at its latest NAV; "statement" =
+   *  the statement's own price (unlisted, or no price yet). */
+  price_source?: "nav" | "exchange" | "statement"
   units_exact?: boolean
   estimated?: (EstimatedTotals & { since: string; units: number }) | null
+  /** M28: how the fund or share did against its index (market data, the same for everyone). Absent on older builds. */
+  score?: Score | null
+  /** M21 (shares and ETFs): where the buy price comes from. "partial": some shares have no known price. */
+  cost_source?: "tradebook" | "manual" | "partial" | "tradebook+manual" | "none"
+  /** Shares whose buy price isn't known (bought before the tradebook covers, or no buy price added). */
+  unknown_units?: number
+  avg_price?: number | null
+  /** M21: a merger or demerger after the statement (shares), or a fund whose NAV stopped (a possible scheme merger). */
+  notice?: { kind: "merger" | "demerger" | "fund_merger"; ex_date: string | null; text: string } | null
+  /** M21: estimated dividends since the first statement, [ex-date, ₹] (before TDS). */
+  dividends?: [string, number][]
+  /** M21: false for a share NSE doesn't list (BSE only): splits and bonuses aren't tracked for it. */
+  corp_actions_tracked?: boolean
+}
+
+/** GET /api/tradebooks (M21): broker tradebooks (parsed trades only) and manual average buy prices. */
+export type Tradebook = { id: string; member_id: string; broker: string; broker_name: string; period_from: string | null; period_to: string | null; trades_count: number }
+export type StockCost = { member_id: string; isin: string; avg_price: number; since: string | null }
+
+/** A benchmark score (worker/src/market/score.ts `ScoreView`). Percentages are numbers like 12.34 (= 12.34%). */
+export type Score = {
+  score: number | null
+  reason: "young" | "unmapped" | "index_fund" | "not_equity" | "no_data" | "waiting" | "idcw_no_twin" | null
+  index: string | null
+  as_of: string
+  months?: number
+  since?: string
+  excess?: number // risk-adjusted, points a year
+  consistency?: number
+  horizons?: { years: number; fund: number; index: number }[]
+  rolling?: { years: number; windows: number; beat: number }[]
+  sector?: { index: string; years: number; windows: number; beat: number; excess: number } | null
+  growth_option?: boolean
+  price_only?: boolean
 }
 
 /** 1Y absolute, 3Y / 5Y annualised, as fractions; null when the fund is younger. */
@@ -279,6 +316,14 @@ const MESSAGES: Record<string, string> = {
   bad_input: "Check the amounts and dates and try again.",
   reauth_required: "For your safety, sign in again to delete your account.",
   consent_required: "Accept the privacy notice to continue.",
+  // Stock gains (M21)
+  not_tradebook: "That doesn't look like a tradebook we can read. Download the equity tradebook (CSV or Excel) from your broker.",
+  tradebook_locked: "This file is password-protected and the member's PAN didn't open it. Download it again without a password.",
+  no_trades: "This tradebook has no share trades in it.",
+  engine_busy: "We're busy reading other files. Try again in a minute.",
+  tradebook_limit: "This member already has the most tradebooks we keep. Delete an old one first.",
+  stock_cost_limit: "You've added the most buy prices we keep.",
+  bad_since: "Pick a month that isn't in the future.",
   // QR device login (M13)
   qr_limit: "Too many QR codes from this network. Wait a bit, or sign in with Google or email.",
   link_limit: "Too many tries. Wait a few minutes, then scan the code again.",
@@ -565,4 +610,15 @@ export const api = {
   updateAsset: (id: string, body: Partial<Pick<AssetBody, "inputs" | "member_id">>) =>
     call<{ asset: ManualAsset }>(`/api/assets/${encodeURIComponent(id)}`, { ...json(body), method: "PATCH" }),
   deleteAsset: (id: string) => call<{ ok: true }>(`/api/assets/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** Stock gains (M21): broker tradebooks and manual average buy prices. The dashboard rebuilds after each change. */
+  tradebooks: () => call<{ tradebooks: Tradebook[]; costs: StockCost[] }>("/api/tradebooks"),
+  addTradebook: (file: File, memberId: string) => {
+    const fd = new FormData()
+    fd.append("member_id", memberId)
+    fd.append("file", file)
+    return call<{ tradebook: Tradebook }>("/api/tradebooks", { method: "POST", body: fd })
+  },
+  deleteTradebook: (id: string) => call<{ ok: true }>(`/api/tradebooks/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  setStockCost: (body: StockCost) => call<{ cost: StockCost }>("/api/stocks/cost", { ...json(body), method: "PUT" }),
+  deleteStockCost: (member_id: string, isin: string) => call<{ ok: true }>("/api/stocks/cost", { ...json({ member_id, isin }), method: "DELETE" }),
 }

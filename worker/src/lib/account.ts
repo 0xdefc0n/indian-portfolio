@@ -11,6 +11,7 @@
 // sign-in codes and links, the per-address sign-in rate limit. The security log (audit_event) is kept: it holds
 // only random ids, a country and a UA hash, DPDP Rule 6(1)(e) and 8(3) want logs for a year, and cleanup deletes
 // rows older than AUDIT_RETENTION_MS.
+import { stockCostKey } from './tradebooks'
 import { AUDIT_RETENTION_MS, type AuditEvent } from './audit'
 import { blobKeys, deletePrefix, openJson } from './blob'
 import { type Bytes, hmacHex, Vault } from './crypto'
@@ -114,7 +115,7 @@ export async function exportAccount(
 ): Promise<ReadableStream<Uint8Array>> {
   const db = env.DB
   const { userId, householdId } = who
-  const [user, accounts, sessions, consents, household, members, statements, sips, jobs, pending, audit, assets] = await db.batch<Row>([
+  const [user, accounts, sessions, consents, household, members, statements, sips, jobs, pending, audit, assets, tradebooks, costs] = await db.batch<Row>([
     db.prepare('SELECT id, name, email, "emailVerified" AS email_verified, image, "createdAt" AS created_at FROM user WHERE id = ?1').bind(userId),
     db.prepare('SELECT "providerId" AS provider, "createdAt" AS created_at FROM account WHERE "userId" = ?1 ORDER BY "createdAt"').bind(userId),
     db
@@ -138,6 +139,10 @@ export async function exportAccount(
       .prepare('SELECT event, ip_country, at FROM audit_event WHERE (user_id = ?1 OR household_id = ?2) AND at > ?3 ORDER BY at')
       .bind(userId, householdId, now - AUDIT_RETENTION_MS),
     db.prepare('SELECT id, type, member_id, inputs_enc, created_at, updated_at FROM manual_asset WHERE household_id = ?1 ORDER BY created_at, id').bind(householdId),
+    db
+      .prepare('SELECT id, member_id, broker, period_from, period_to, trades_count, parser_version, created_at, blob_key FROM tradebook WHERE household_id = ?1 ORDER BY created_at')
+      .bind(householdId),
+    db.prepare('SELECT id, member_id, cost_enc, updated_at FROM stock_cost WHERE household_id = ?1 ORDER BY updated_at').bind(householdId),
   ])
   const h = household?.results[0] as { id: string; created_at: number; last_active_at: number; dek_wrapped: Bytes; kek_version: number } | undefined
   const u = user?.results[0]
@@ -211,6 +216,13 @@ export async function exportAccount(
         }
       }),
     ),
+    // Manual average buy prices of shares (M21), as typed.
+    stock_buy_prices: await Promise.all(
+      (costs?.results ?? []).map(async (c) => {
+        const v = JSON.parse((await open(stockCostKey(c.id as string), c.cost_enc)) ?? '{}') as { isin?: string; avg_price?: number; since?: string | null }
+        return { member_id: c.member_id, isin: v.isin ?? null, average_price: v.avg_price ?? null, since: v.since ?? null, updated_at: iso(c.updated_at as number) }
+      }),
+    ),
     uploads: (jobs?.results ?? []).map((j) => ({
       id: j.id,
       member_id: j.member_id ?? null,
@@ -230,6 +242,8 @@ export async function exportAccount(
   }
 
   const list = (statements?.results ?? []) as (Row & { id: string; blob_key: string })[]
+  // Broker tradebooks (M21): their parsed trades (the files themselves are never kept), after the statements.
+  const books = (tradebooks?.results ?? []) as (Row & { id: string; blob_key: string })[]
   const enc = new TextEncoder()
   let i = -1
   return new ReadableStream<Uint8Array>({
@@ -237,16 +251,18 @@ export async function exportAccount(
       try {
         if (i === -1) {
           ctl.enqueue(enc.encode(`${JSON.stringify(head, null, 1).slice(0, -2)},\n "statements": [`))
-        } else if (i < list.length) {
-          const s = list[i]!
+        } else if (i < list.length + books.length) {
+          const inBooks = i >= list.length
+          const s = inBooks ? books[i - list.length]! : list[i]!
           const obj = await env.BUCKET.get(s.blob_key)
-          if (!obj) throw new ExportError('statement blob missing')
+          if (!obj) throw new ExportError(inBooks ? 'tradebook blob missing' : 'statement blob missing')
           const data = await openJson(vault, s.blob_key, await obj.arrayBuffer())
           const { blob_key: _key, ...meta } = s
           const out = { ...meta, created_at: iso(s.created_at as number), data }
-          ctl.enqueue(enc.encode(`${i ? ',' : ''}\n  ${JSON.stringify(out)}`))
+          const lead = inBooks && i === list.length ? '\n ],\n "tradebooks": [' : (inBooks ? i > list.length : i > 0) ? ',' : ''
+          ctl.enqueue(enc.encode(`${lead}\n  ${JSON.stringify(out)}`))
         } else {
-          ctl.enqueue(enc.encode('\n ]\n}\n'))
+          ctl.enqueue(enc.encode(books.length ? '\n ]\n}\n' : '\n ],\n "tradebooks": []\n}\n'))
           ctl.close()
         }
         i++

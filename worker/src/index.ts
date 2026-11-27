@@ -9,7 +9,8 @@ import { withEngine } from './lib/engine-client'
 import { ApiError } from './lib/errors'
 import { handleParseBatch, type ParseMessage, TMP_SWEEP_CRON, tmpSweep } from './lib/jobs'
 import { handleRebuildBatch, PREBUILD_CRON, prebuild, type RebuildMessage } from './lib/snapshot'
-import { handleMarketBatch, type MarketMessage, NAV_INGEST_CRONS, NAV_REPAIR_CRON, navIngest, navRepair } from './market/jobs'
+import { handleMarketBatch, type MarketMessage, NAV_INGEST_CRONS, NAV_REPAIR_CRON, navIngest, navRepair, requestAllPrices } from './market/jobs'
+import { PRICE_CRONS } from './market/prices'
 import { refreshHolidays } from './market/holidays'
 import { AMC_CRON, requestAmc } from './market/amc-scrape'
 import { requestStocks, STOCKS_CRON } from './market/stocks'
@@ -25,6 +26,7 @@ import { metricRoutes } from './routes/metrics'
 import { portfolioRoutes } from './routes/portfolio'
 import { sipRoutes } from './routes/sips'
 import { statementRoutes } from './routes/statements'
+import { tradebookRoutes } from './routes/tradebooks'
 import type { AppBindings, AppEnv } from './types'
 
 export { EngineBatch, EngineFast } from './engine'
@@ -103,6 +105,7 @@ app.route('/', jobRoutes)
 app.route('/', portfolioRoutes)
 app.route('/', sipRoutes)
 app.route('/', assetRoutes)
+app.route('/', tradebookRoutes)
 app.route('/', metricRoutes)
 
 app.notFound((c) => c.json({ ok: false, code: 'not_found' }, 404))
@@ -141,6 +144,8 @@ export default {
     }
     if (NAV_INGEST_CRONS.includes(cron)) {
       ctx.waitUntil(navIngest(env, { cron, now: controller.scheduledTime }).then(() => undefined))
+      // Exchange prices for shares and bonds (M20): today's close at 23:00 IST, the official one at 07:00 IST.
+      if (PRICE_CRONS.includes(cron)) ctx.waitUntil(requestAllPrices(env, controller.scheduledTime, cron))
       return
     }
     if (cron === PREBUILD_CRON) {

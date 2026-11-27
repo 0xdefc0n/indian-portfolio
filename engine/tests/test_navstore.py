@@ -19,10 +19,12 @@ KEY = "test-engine-key"
 
 
 class Store:
-    """A local stand-in for the Worker's market gateway: GET /nav/{code}.json → the R2 series format."""
+    """A local stand-in for the Worker's market gateway: GET /nav/{code}.json and /px/{isin}.json (M20) → the R2
+    series formats."""
 
-    def __init__(self, series: dict[str, list]):
+    def __init__(self, series: dict[str, list], prices: dict[str, list] | None = None):
         self.series = series
+        self.prices = prices or {}
         self.requests: list[str] = []
         self.fail = False
         store = self
@@ -30,17 +32,19 @@ class Store:
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):  # noqa: N802
                 store.requests.append(self.path)
-                code = self.path.removeprefix("/nav/").removesuffix(".json")
+                px = self.path.startswith("/px/")
+                code = self.path.removeprefix("/px/" if px else "/nav/").removesuffix(".json")
                 if store.fail:
                     self.send_response(500)
                     self.end_headers()
                     return
-                rows = store.series.get(code)
+                rows = (store.prices if px else store.series).get(code)
                 if rows is None:
                     self.send_response(404)
                     self.end_headers()
                     return
-                body = json.dumps({"amfi_code": int(code), "dates": [d for d, _ in rows], "navs": [n for _, n in rows]}).encode()
+                head = {"isin": code} if px else {"amfi_code": int(code)}
+                body = json.dumps({**head, "dates": [d for d, _ in rows], ("closes" if px else "navs"): [n for _, n in rows]}).encode()
                 self.send_response(200)
                 self.send_header("content-type", "application/json")
                 self.send_header("content-length", str(len(body)))
@@ -60,7 +64,7 @@ class Store:
 
 @pytest.fixture
 def store(monkeypatch):
-    s = Store(synthetic.market()["navs"])
+    s = Store(synthetic.market()["navs"], synthetic.market()["prices"])
     monkeypatch.setenv("NAV_STORE_URL", s.url)
     monkeypatch.setattr(navstore, "CACHE", navstore.NavCache())
     yield s
@@ -74,7 +78,7 @@ def client(monkeypatch):
 
 
 def _body(**extra):
-    market = {k: v for k, v in synthetic.market().items() if k != "navs"}
+    market = {k: v for k, v in synthetic.market().items() if k not in ("navs", "prices")}
     return {"statements": synthetic.statements(), "market": {**market, "market_date": "2026-11-24"},
             "today": synthetic.TODAY.isoformat(), **extra}
 
@@ -87,20 +91,21 @@ def test_build_reads_navs_from_the_store_and_matches_golden(client, store):
     r = _post(client, _body())
     assert r.status_code == 200 and r.json()["ok"] is True
     assert_same(r.json()["snapshot"], json.loads((FIXTURES / "golden_snapshot.json").read_text()), "NAV-store build vs golden")
-    # only the needed codes (the benchmark included), each once
-    assert sorted(store.requests) == sorted(f"/nav/{c}.json" for c in ("900001", "900002", "900003", "120716"))
+    # only the needed codes (the benchmark included) and the held share's prices, each once
+    assert sorted(store.requests) == sorted([*(f"/nav/{c}.json" for c in ("900001", "900002", "900003", "120716")),
+                                             f"/px/{synthetic.EQ['isin']}.json"])
 
 
 def test_cache_per_nav_key(client, store):
     assert _post(client, _body()).status_code == 200
     assert _post(client, _body()).status_code == 200
-    assert len(store.requests) == 4  # second build: all four from the cache (nav_key defaults to the market date)
+    assert len(store.requests) == 5  # second build: all five from the cache (nav_key defaults to the market date)
     nxt = _body()
     nxt["market"]["nav_key"] = "2026-11-24|1|99.5"  # the night's rows landed: same date, new key
     assert _post(client, nxt).status_code == 200
-    assert len(store.requests) == 8
+    assert len(store.requests) == 10
     metrics = _post(client, nxt).json()["metrics"]["nav_cache"]
-    assert metrics["hits"] >= 8 and metrics["misses"] == 8
+    assert metrics["hits"] >= 10 and metrics["misses"] == 10
 
 
 def test_refresh_codes_and_missing_series_are_not_cached(client, store):
@@ -161,3 +166,28 @@ def test_cache_is_bounded_by_points():
 def test_codes_are_validated(store):
     out = navstore.load(["900001", "../secret", "12a"], "2026-11-24|1|100")
     assert list(out) == ["900001"] and store.requests == ["/nav/900001.json"]
+
+
+def test_share_prices_come_from_the_store_cached_by_price_key(client, store):
+    """M20: the held share is read from /px/, cached by price_key; a pending one (price_refresh) is read fresh."""
+    body = _body()
+    body["market"]["price_key"] = "2026-11-24|1|99|px3"
+    snap = _post(client, body).json()["snapshot"]
+    eq = next(h for h in snap["holdings"] if h["isin"] == synthetic.EQ["isin"])
+    assert eq["price_source"] == "exchange" and eq["as_of"] == "2026-11-24"
+    assert _post(client, body).status_code == 200
+    px = f"/px/{synthetic.EQ['isin']}.json"
+    assert store.requests.count(px) == 1  # the second build used the cache
+    body["market"]["price_key"] = "2026-11-24|1|99|px4"  # new closes stored: a new key
+    assert _post(client, body).status_code == 200 and store.requests.count(px) == 2
+    body["market"]["price_refresh"] = [synthetic.EQ["isin"]]
+    for _ in range(2):
+        assert _post(client, body).status_code == 200
+    assert store.requests.count(px) == 4
+
+
+def test_a_share_with_no_prices_keeps_the_statement_value(client, store):
+    store.prices.clear()
+    snap = _post(client, _body()).json()["snapshot"]
+    eq = next(h for h in snap["holdings"] if h["isin"] == synthetic.EQ["isin"])
+    assert eq["price_source"] == "statement" and eq["value"] == eq["statement"]["value"] and eq["units_timeline"] is None

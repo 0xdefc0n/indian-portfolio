@@ -64,7 +64,7 @@ be verified during implementation are marked ⚠️ VERIFY, with what to check a
 | D20 | Disposable emails 🔒 (owner, 2026-11-27) | **New accounts can't use a disposable address.** A bundled open-source domain list is checked at email sign-in; existing users still sign in; Google isn't checked (§21.7, M22). | Less abuse of the free tier and the email quota. Turnstile is already on the form (M5) and stays as it is. |
 | D21 | Premium design refresh 🔒 (owner, 2026-11-27) | **Design system v2**, with a gold accent and a glass-like premium feel, replaces the `089634a` system everywhere, including a redesigned dashboard and a new two-part wordmark ("Pocket" plain, "folio" on a gold glass block) (§21.1, M24). | Owner: the current look reads as "vibe coded". One system for the app and the public pages. |
 | D22 | Public growth pages before launch 🔒 (owner, 2026-11-27) | **Competitor research, a landing page, SEO, a blog, a public FIRE calculator and a social playbook all ship before launch** (M23–M27, M30). Public pages are prerendered HTML (§21.2). | Search and AI-search indexing takes weeks, so the pages should be live on day one, and M16 hardens them too. |
-| D23 | Benchmark score 🔒 (owner, 2026-11-27) | **0–100 score per fund and stock against its category's index**, from rolling 1/3/5-year returns and consistency, with a plain-language line (§21.4, M28). | Owner request. A single number is easy to scan; the line explains it. |
+| D23 | Benchmark score 🔒 (owner, 2026-11-27) | **0–100 score per fund and stock against its category's index**: half Morningstar-style risk-adjusted excess (MRAR γ = 2, 3/5/10 years), half the share of rolling 3- and 5-year periods it beat the index; 3 years of history needed; with a plain-language line (§21.4, M28; method chosen from research, owner 2026-11-27). | Owner request. A single number is easy to scan; the line explains it. |
 | D24 | Gold and silver 🔒 (owner, 2026-11-27) | **Physical gold/silver (grams, purity) and Sovereign Gold Bonds**, entered by hand and valued at a daily per-gram rate. Not digital gold. Gold ETFs and funds already come in through statements (§21.5, M29). | Owner choice. |
 | D25 | Corporate actions 🔒 (owner, 2026-11-27) | **Hybrid:** splits and bonuses after the statement date are applied automatically; mergers, demergers and MF scheme mergers ask for a newer statement (§21.6, M21). | Splits and bonuses are mechanical and common. Mergers have many edge cases, and a new statement has the right answer. |
 | D26 | AI portfolio analysis 🔒 (owner, 2026-11-27) | **The model is decided after the cost study (M31).** It ships after launch (M32), with identities never sent to the model (§21.8). | Owner: decide from the cost per user. |
@@ -1437,6 +1437,67 @@ consumer):
     merger, IDCW record date, or an AMFI typo.
   - Daily returns show flagged days with a ⚠ note (§10.5).
 
+#### 10.4.5 Exchange prices for shares and bonds (M20)
+Shares and bonds in CDSL statements (INE/IN9 ISINs, the engine's `equity_or_bond`) are valued at their latest exchange
+close and join daily returns. Funds **and ETFs** are INF ISINs: CDSL tags them `mutual_fund`, so since M12 they're
+already valued at their AMFI NAV (an ETF's NAV tracks its market price closely). SGBs (IN00…) stay on the gold rate
+(§21.5). Public market data only: nothing here links to a user.
+
+**Source** (⚠️ VERIFY results, 2026-11-27, live):
+- ❌ **NSE/BSE end-of-day files** (bhavcopy), the plan's first choice: both turn away automated clients. NSE's archive
+  drops the connection (HTTP/2 INTERNAL_ERROR) and BSE answers 403. We don't pose as a browser to get round that.
+- ✅ **Upstox's public candle API** (owner's choice, 2026-11-27; Upstox's holiday API already serves §10.5.1), by ISIN,
+  no key: `GET https://api.upstox.com/v3/historical-candle/{NSE_EQ|BSE_EQ}|{ISIN}/days/1/{to}/{from}`. 10 years of
+  daily candles in one call (2,479 rows, 168 KB, 0.15 s; CDN-cached), newest first, `[ts, open, high, low, close,
+  volume, oi]`. NSE shares, BSE shares and ETFs answer. Holidays have no row (24 Nov 2026). An unknown ISIN is 400 with
+  `errorCode: UDAPI100011`.
+  - Today's candle isn't in the history yet in the evening; `…/historical-candle/intraday/{key}/days/1` has it.
+  - **History is adjusted for bonuses and splits**: Reliance's 1:1 bonus (Oct 2024) shows ~₹1,340 before it, not
+    ~₹2,700. So a stored close can change after a corporate action.
+  - ⚠️ **Terms:** Upstox's terms for third-party commercial use are unclear (a community-forum answer suggests only
+    Upstox customers should consume the data). **Before production (M17), get Upstox's written OK or move to a
+    licensed feed.** The source sits in one section of `worker/src/market/prices.ts`, so swapping it changes nothing
+    else.
+
+**Tables** (`migrations/market/0008_stock_price.sql`): `tracked_equity` (ISIN, exchange `NSE`/`BSE`/`none`,
+last seen, latest stored date, backfilled / checked / failed times), `stock_price` (ISIN, `YYYYMMDD`, close; WITHOUT
+ROWID), and `price_state` (a version bumped whenever closes change; part of the snapshot inputs hash).
+
+**Jobs** (`worker/src/market/prices.ts`, on `pf-market`, max_concurrency 4 → ≤ 4 Upstox requests at a time):
+- **Upload and build:** the INE/IN9 ISINs a statement holds go to `tracked_equity`, and every snapshot build does the
+  same for the shares it holds (last seen refreshed at most daily). So statements uploaded before M20 get priced, and
+  a household that doesn't upload for 90 days keeps its shares tracked. Ones with no history yet get a `prices`
+  message straight away (asked again after 6 h if it never ran).
+- **Cron:** the 23:00 IST nav-ingest run (today's close, from the intraday candle after 16:00 IST) and the 07:00 IST
+  one (the exchange's official close replaces it) send every ISIN seen in 90 days, 50 per message.
+- **Per ISIN:** NSE first, BSE if NSE doesn't know it; neither → `none`, looked up again after 30 days (unlisted
+  shares, many bonds). A first fetch takes 5 years. Later fetches start 10 days before the latest stored close: closes
+  are upserted only when they differ (a re-run writes 0 rows), and a read-back close more than 2% off means the
+  source adjusted its history, so the ISIN's whole series is fetched again and replaced. Retries: 3 tries with 2 s / 8
+  s backoff on network errors, 429 and 5xx; a message where every ISIN failed is retried by the queue.
+- A changed ISIN's series is written to R2 `market/px/{isin}.json` = `{isin, dates, closes}` and `price_state` goes
+  up. Cleanup (M14) deletes ISINs unseen for 90 days with their closes.
+- Logs carry counts and error classes, never ISINs (§0.1).
+
+**Build and daily returns:**
+- The engine reads `GET http://market.internal/px/{isin}.json` through the market gateway (only `IN[E9]…` ISINs),
+  cached by `market.price_key` (`nav_key|px{version}`); `market.price_refresh` lists ISINs still downloading (read
+  fresh, and the build follows up like a NAV backfill). `SNAPSHOT_VERSION` 5.
+- A priced holding has `price_source: "exchange"`, CDSL units at each statement date as its `units_timeline`, and
+  `units × latest close` as its value (`as_of` = the close's date). With no price it keeps the statement's
+  (`price_source: "statement"`). Funds say `"nav"`.
+- `/api/portfolio/daily` reads the window's closes with the NAVs (one more query in the same batch) under the key
+  `px:{isin}`. A close-to-close move beyond ±20% (the widest exchange price band) is flagged like a NAV jump and left
+  out of that day, as a corporate action the units don't show yet.
+- The Assets tab's Stocks & bonds table shows the price date ("Valued at the closing price of 26 Nov on NSE …").
+
+**Limits, measured or not yet:** 2 requests per ISIN a night. ⚠️ Upstox publishes no rate limit for this public
+endpoint; measure in M16's load test (2,000 tracked ISINs ≈ 4,000 requests through 4 consumers).
+
+**Later:** corporate actions (M21): with adjusted history, a bonus or split after the newest statement values the old
+unit count at the new price until the next statement, and the daily series before it is scaled down. Stocks have no
+cost in CDSL, so they don't join XIRR until M21 brings buy prices.
+
 ### 10.5 Daily returns (D15)
 
 **Goal:**
@@ -1482,7 +1543,7 @@ consumer):
   - **Today's value.** Every coded mutual fund is valued at its latest NAV (`units`, `nav`, `value`, `as_of` move to
     that day). The statement's own figures stay in `holding.statement`, and members get `statement_total`,
     `value_date` and `estimated` totals. The month-end chart carries on to the latest NAV when it already covers every
-    fund. ETFs and shares keep the statement's value.
+    fund. Shares and bonds are valued at their latest exchange close (M20, §10.4.5).
   - **A newer statement replaces every estimate:** estimates only ever start after the newest statement date.
   - **Deploys that change the build** bump `SNAPSHOT_VERSION`. Each snapshot row records the version it was built
     with (`snapshot.version`, `app/0007`), and an older one counts as stale, so the next read rebuilds it (M12 fix:
@@ -1498,8 +1559,9 @@ consumer):
     `DELETE /api/sips/skip`, `POST /api/sips/cancel` (`confirm: true` required), each audited and followed by a
     rebuild.
   - Tax figures (`tax`, `analysis.harvest`) stay as of the statement.
-- **ETFs and shares held in CDSL** (`asset_type == "equity_or_bond"`) have no AMFI NAV. They're excluded and listed
-  as "not included".
+- **Shares and bonds held in CDSL** (`asset_type == "equity_or_bond"`) use their daily exchange closes instead of a
+  NAV (M20, §10.4.5). ETFs are INF ISINs and already count at their AMFI NAV. Holdings with neither (unlisted shares,
+  most bonds) are excluded and counted as "not included".
 
 #### 10.5.2 Calculation (`worker/src/lib/daily.ts`, a pure function with golden tests)
 For each holding *h* and each NAV date *d* in the window, where *p* is the previous NAV date for that scheme:
@@ -2330,7 +2392,8 @@ get a nightly rebuild; parse ~1.5 vCPU-s on average; build ~0.5 vCPU-s.
 - Shared households (invite a spouse with roles), billing and plans, an NSDL CAS parser, and a native mobile app.
 - Daily web push ("PocketFolio today: +₹2,340") after the market day is final. Needs the installed PWA on iOS
   (16.4+), the user's opt-in and VAPID keys. It builds on §10.5 and §13A.
-- Exchange prices for ETFs and stocks held in CDSL, so they're included in daily returns. Scheduled as M20 (before launch).
+- ~~Exchange prices for ETFs and stocks held in CDSL~~: built in M20 (§10.4.5). A licensed price feed in place of
+  Upstox's public API, if Upstox won't confirm its terms (M17).
 - Manually entered FD, PPF and EPF with approximate returns (M19), and stock gains from broker tradebooks or manual buy
   prices (M21). Owner request, 2026-11-26; see `docs/MILESTONES.md` Phase 8. Design to be written before each starts.
 - AI portfolio analysis (M32) and the admin panel (M33) are scheduled after launch (§21.8, §21.9).
@@ -2384,11 +2447,168 @@ encryption, and demo data only in every screenshot, image and post.
   the best inputs and outputs. India-specific: inflation, step-up SIPs, the tax on withdrawals, EPF/PPF.
 
 ### 21.4 Benchmark score (D23, M28)
-- **0–100 per fund and stock**, against the category's index (map in M28). Combines rolling 1/3/5-year excess
-  return, how often it beat the index, and downside capture. Less than 1 year of history: no score.
-- **Index data:** TRI from niftyindices.com (⚠️ VERIFY access and terms). Fallback: a direct-plan index fund's NAV
-  from our NAV store, as `market.py` already does for Nifty 50.
-- **Market data, not user data:** computed nightly once per scheme in the market DB. Labelled "not investment advice".
+- **0–100 per fund and stock**, against the category's index. Market data, the same for everyone, computed in the
+  market DB, never per household. Labelled "not investment advice".
+
+Drafted in M28's first session, then decided by the owner on 2026-11-27 (decisions in bold) and built the same day.
+Public market data only: a score is keyed by scheme code or ISIN and never says who holds it.
+
+**Owner's decisions (2026-11-27):**
+- **Index data: TRI from niftyindices.com.** ⚠️ Its terms of use forbid "systematic or automated data collection …
+  without our express written consent". **The owner is getting that consent**, and it's an M17 owner item. Until
+  then it runs on staging only. The source sits in one section of `worker/src/market/score.ts`, so a licensed feed
+  can replace it.
+- **The formula: researched rather than invented** (owner: "do deep research about how other people are doing it").
+  See "Score" below.
+- **Stocks: one score against Nifty 50, with the sector index as a second line.**
+- **Stock history: 10 years**, not 5 (`PRICE_HISTORY_DAYS`). Migration 0009 marks the shares already stored for one
+  full re-fetch.
+- **Not scored at launch:** index funds and ETFs, hybrid, debt and money market, FoFs and overseas, gold/silver,
+  solution-oriented, children's, retirement and life-cycle funds.
+
+**⚠️ VERIFY results (2026-11-27, live):**
+- ✅ **The M9 parse keeps the category** (`scheme.category`, the normalised AMFI header). Today's NAVAll uses **two
+  vocabularies side by side**: the old SEBI names (`Equity Scheme - ELSS`, `Equity Scheme - Sectoral/ Thematic`) and
+  newer ones (`Equity Schemes - ELSS- Tax Saver Fund`, `Equity Schemes - Sectoral Fund` / `Thematic Fund`). Both map.
+- ✅ **niftyindices.com:** `POST https://www.niftyindices.com/BackPage/getTotalReturnIndexString` with
+  `{"cinfo": "{'name':'NIFTY 50','startDate':'01-Jan-2010','endDate':'26-Nov-2026','indexName':'NIFTY 50'}"}`.
+  - The page limits a request to one year, but the endpoint answers **16 years in one call** (4,193 rows, ~600 KB,
+    0.3 s).
+  - The answer is a JSON array (served as `text/html`), newest first: `{"Index Name", "Date": "26 Nov 2026",
+    "TotalReturnsIndex": "39363.60", "NTR_Value", "RequestNumber"}`. An unknown name answers `[]`.
+  - All 23 indices we use answer from Jan 2010, except Defence (Apr 2018). The healthcare index's name there is
+    `NIFTY HEALTHCARE` (not `… INDEX`).
+  - **It stalls any user agent containing "fetch" or starting with "Mozilla"** (no answer in 30 s), so the AMFI UA
+    can't be reused. `market-data/1.0` answers in ~0.2 s.
+- ✅ **Stock sectors** come from the fund portfolio disclosures we already store (M11 BharatStock, M18 AMC files carry
+  AMFI industry names per stock ISIN). They are now also written to `stock_sector` as they arrive. A share no fund
+  holds has no sector, so it gets no sector line.
+
+**How others do it** (the research behind the formula):
+- **Morningstar** (its rating methodology document): MRAR(γ) = [mean over months of (1 + ER)^−γ]^(−12/γ) − 1, with
+  **γ = 2** ("consistent with the risk tolerances of typical retail investors"). It penalises downside more than
+  upside. Overall rating: 36–59 months → 100% 3-year; 60–119 → 60% 5-year + 40% 3-year; 120+ → 50% 10-year, 30%
+  5-year, 20% 3-year. Stars are peer-relative (10 / 22.5 / 35 / 22.5 / 10%).
+- **Value Research** (its rating FAQ, 2023): peer-relative return score minus risk score, recomputed monthly. Equity
+  funds under 3 years aren't rated; the 3- and 5-year periods are weighted. Direct and regular plans are rated
+  separately.
+- **freefincal:** "consistency score" = the share of rolling 3–5-year windows in which a fund beat its index (70%+
+  highlighted). It warns that 1-year windows are too noisy.
+- **What we take:** both stars are **peer-relative**, which needs full history for every scheme in a category. We
+  only backfill held schemes, and the owner asked for a comparison **against the index**. So the score is
+  index-relative, built from the two ideas that work against an index: Morningstar's risk-adjusted excess and
+  freefincal's consistency. The 3-year minimum follows both raters. **This drops the draft's 1-year windows, its
+  "under 1 year" threshold and its separate downside-capture part:** MRAR(2) already penalises falls.
+
+**Score** (pure functions in `worker/src/market/score.ts`, golden-tested):
+1. **Points:** month-end values of the fund (NAV) or share (close) and the index (TRI). They run back from the score's
+   month-end while both have a value, for at most 120 monthly returns. A missing month ends the run. **Under 36
+   months: no score** ("young").
+2. **Risk-adjusted excess:** MRAR(2) of the fund minus MRAR(2) of the index over the last 3, 5 and 10 years.
+   - No risk-free rate is taken off. It is the same for both sides, so the difference barely moves.
+   - The three are weighted by Morningstar's overall-rating weights for the months available.
+   - The result in points a year maps to `clamp(50 + 10 × points, 0, 100)`.
+3. **Consistency:** the share of rolling 3-year windows (one ending at every month-end) in which the fund's CAGR beat
+   the index's, and the same for 5-year windows when there are at least 12. An exact tie counts half; the two shares
+   are averaged.
+4. **Score = round(½ × excess part + ½ × 100 × consistency).**
+   - **A fund identical to its index scores 50.**
+   - 3 points a year ahead of a flat index in every month scores 90; 3 behind scores 10.
+5. **Bands** (existing colour tokens): 70–100 "Ahead of its index" (gain), 40–69 "Close to its index" (muted), 0–39
+   "Behind its index" (loss).
+6. **Plain lines:**
+   - "Beat Nifty Midcap 150 in 7 of every 10 rolling 5-year periods since Oct 2016." (the longest rolling period)
+   - "2.1 points a year ahead after adjusting for risk."
+   - For shares: "Against Nifty IT: beat it in 3 of every 10 rolling 5-year periods (−1.5 points a year)."
+7. **Month-ends only.** A score uses the last month-end before the latest Nifty 50 level, so it changes once a month,
+   as Value Research's and Morningstar's do.
+
+- **Per scheme code:** a regular plan scores below its direct twin by its extra cost, which is right for its holder.
+- **IDCW options:** their NAV drops at each payout, so they show **the growth option's score**. The growth option is
+  found by the same name, plan and AMC. In today's file, 1,071 of 1,082 equity IDCW name/plan pairs have one. The
+  growth option is added to `tracked_scheme` (public ids only), so its history is backfilled and kept. Until then
+  the IDCW option shows no score ("waiting"); no twin → "idcw_no_twin".
+- **Calibration** (2026-11-27, public data, the real code). Every direct-growth scheme in the large, mid, small,
+  large & mid, flexi, multi cap and ELSS categories: 257 schemes, of which 203 scored (51 under 3 years, 2 no data,
+  1 index fund).
+  - **Bands: 87 ahead / 70 close / 46 behind; median 64; 10th–90th percentile 25–96.**
+  - Every category uses all three bands. Multi and small cap lean ahead over this period, large & mid cap lean
+    behind.
+  - Regular plans will sit lower. Only surviving schemes are in a file of today's NAVs, so the past looks a little
+    kinder than it was.
+  - The constants were kept.
+
+**Category → index** (`fundIndex()`): SEBI's tier-1 benchmark for the category, which AMCs must use since 2021.
+| AMFI category (after ` - `, either vocabulary) | Index |
+|---|---|
+| Large Cap | Nifty 100 |
+| Large & Mid Cap | Nifty LargeMidcap 250 |
+| Mid Cap | Nifty Midcap 150 |
+| Small Cap | Nifty Smallcap 250 |
+| Multi Cap | Nifty 500 Multicap 50:25:25 |
+| Flexi Cap, Focused, ELSS (open and close ended), Value, Contra, Dividend Yield, old "Growth" schemes | Nifty 500 |
+| Sectoral / Thematic | from the name (`themeIndex()`): bank/financial → Nifty Financial Services; pharma/health → Nifty Healthcare; technology/IT/digital → Nifty IT; infrastructure → Nifty Infrastructure; consumption/FMCG → Nifty India Consumption; manufacturing → Nifty India Manufacturing; auto/mobility/EV → Nifty Auto; energy/power/oil → Nifty Energy; PSU/PSE → Nifty PSE; MNC → Nifty MNC; defence → Nifty India Defence; metal → Nifty Metal; realty/housing → Nifty Realty; anything else (ESG, business cycle, innovation, …) → Nifty 500 |
+| Index funds, ETFs (by category or "index fund"/"ETF"/"BeES" in the name) | not scored: "tracks its index" |
+| Debt, hybrid, FoF, solution-oriented, life cycle, … | not scored: "only equity funds and shares for now" |
+
+A golden test runs the map over every one of today's 104 category headers (`test/fixtures/amfi/NAVAll-categories-
+20261127.txt`, through the real parser). All 28 equity ones get an index, and none is left "unmapped".
+
+**Shares:** against Nifty 50 TRI from M20's closes. Closes are adjusted for splits and bonuses but not dividends, so
+the dialog says "Share prices only: dividends aren't counted". A high-dividend share scores a little low until M21
+adds dividends. The sector line uses `sectorIndex()` on the stored industry name (Banks → Nifty Bank, IT - Software →
+Nifty IT, Pharmaceuticals → Nifty Pharma, Automobiles → Nifty Auto, Petroleum Products → Nifty Energy, Diversified
+FMCG → Nifty FMCG, Cement/Construction/Telecom → Nifty Infrastructure, …; anything else: no line).
+
+**Storage** (`migrations/market/0009_score.sql`):
+- `index_level` (index id, YYYYMMDD, TRI; WITHOUT ROWID).
+- `score` (key `mf:{code}` / `eq:{isin}`, month-end `as_of`, `score` or NULL with a `reason`, the shown JSON `data`,
+  `computed_at`).
+- `stock_sector`, and `score_state` (a version in the snapshot inputs hash).
+- R2 `market/idx/{id}.json` = `{id, dates, tris}`.
+
+**Jobs** (`pf-market`):
+- **`indices`:** the 23:00 and 07:00 IST crons (with the price requests) send one `indices` message. The first fetch
+  of each of the 23 indices starts in Jan 2010; later fetches start 10 days before the latest stored level. Levels
+  are upserted only when they change, so a re-run writes 0 rows, and a changed index's R2 series is rewritten. Then
+  `planScores`.
+- **`planScores`** picks the held funds (`tracked_scheme`, 90 days) and listed shares (`tracked_equity`, history
+  stored) that need a score:
+  - no score yet;
+  - an older month-end;
+  - a NAV backfill or share history stored since the last score;
+  - waiting for a growth option.
+
+  It sends them 20 per `scores` message.
+- **`scores`:** reads the R2 series (`market/nav/`, `market/px/`, `market/idx/`), so there are no D1 history scans.
+  Rows are upserted only when the shown data changes (a re-run writes 0), and `score_state` goes up when one does.
+- Logs carry counts and error classes, never codes or ISINs (§0.1).
+
+**Into the snapshot:** the rebuild consumer reads the held ISINs' scores (`scoresFor()`, one query per build, never
+per dashboard request, §0.7) into `market.scores`. The engine copies each onto its holding (`holding.score`).
+`score_state` joins the inputs hash, so a new month's scores rebuild. `SNAPSHOT_VERSION` 6.
+
+**Screens** (current design system):
+- **Holdings rows:** a "Score 78" pill in the band colour. Its tooltip gives the band and the index, plus "Not
+  investment advice".
+- **The fund dialog** (also used for shares) gets a **Benchmark score** section, with "vs {index}, as of {date}" as
+  its aside. It shows:
+  - the number and band;
+  - the plain lines;
+  - 3Y / 5Y / 10Y yearly returns against the index's;
+  - how the score is made;
+  - the growth-option and price-only notes;
+  - "Not investment advice. Past performance doesn't predict future returns."
+- **No score:** the dialog gives the reason ("Scored once it has 3 years of history (it has 20 months)", "An index
+  fund or ETF tracks its index…"). Nothing is shown while a score is being worked out.
+- Checked headless at 360 px and 1440 px, dark and light: 0 page errors, no sideways scroll.
+
+**Later:**
+- Cleanup (M14) doesn't delete `score` rows of keys unseen for 90 days (a few hundred bytes each).
+- Sector lines appear for shares as their sector arrives with the next monthly disclosure (`stock_sector` starts
+  empty).
+- Scores of regular plans and of funds that changed category are worth a look after the first real month on staging.
+- M16: 23 niftyindices requests per run, twice a night.
 
 ### 21.5 Gold and silver (D24, M29)
 Drafted in M29's first session; the owner's decisions of 2026-11-27 are in bold. Built on M19 (§21.12): same table,
@@ -2497,12 +2717,202 @@ and the D1 plaintext scan cover the new types.
 
 **Later:** the IBJA paid API as the source; statement SGBs in daily returns; SGB interest in the activity list.
 
-### 21.6 Corporate actions (D25, M21)
-- **Today:** not handled. CDSL holdings are as of the statement date, and nothing adjusts them afterwards.
-- **Automatic:** splits and bonuses with an ex-date after the statement date, from NSE's public corporate-action file
-  (⚠️ VERIFY), adjust units and cost. Dividends are shown as income.
-- **Ask for a statement:** mergers, demergers and MF scheme mergers show "X merged into Y. Upload a newer statement to
-  update it." No guessed units.
+### 21.6 Stock gains: buy prices and corporate actions (D25, M21)
+Drafted in M21's first session, OK'd by the owner and built the same day (2026-11-27). Where the build differs from
+the draft, "As built" at the end of this section wins.
+
+**Today:** CDSL statements carry share holdings (units, value) but no buy prices, and nothing adjusts them after the
+statement date. So shares have no gain, no XIRR and no capital-gains tax, and a split or bonus after the statement
+leaves the old unit count at the new adjusted price (§10.4.5 "Later").
+
+**Owner's decisions so far (2026-11-27):**
+- **Both buy-price sources:** a broker tradebook import gives exact lots, and a manual average buy price per holding
+  covers everyone else.
+- **Brokers: the major ones most people use**, plus any broker we have a sample file of. See "Brokers" below.
+- **Corporate actions: hybrid** (D25). Splits and bonuses are applied automatically. Mergers, demergers and MF scheme
+  mergers show a banner asking for a newer statement.
+
+#### Corporate actions (market data, the same for everyone)
+**Source** (⚠️ VERIFY results, 2026-11-27, live):
+- ✅ **NSE's corporate-action API** answers a plain non-browser user agent (`pocketfolio-dev/0.1`, no cookie):
+  `GET https://www.nseindia.com/api/corporates-corporateActions?index=equities&from_date=DD-MM-YYYY&to_date=DD-MM-YYYY`
+  redirects (301) to the same path on `www.nseindia.in`, then returns JSON rows of
+  `{symbol, series, isin, comp, faceVal, subject, exDate, recDate, bcStartDate, bcEndDate, ndStartDate, ndEndDate}`.
+  Unlike the bhavcopy archive (§10.4.5), it doesn't turn us away.
+  - **History in one call:** 1 Oct to 27 Nov 2026 returned 254 rows (201 dividends, 9 splits, 4 bonuses, 3
+    demergers). 2017–2026 returned 22,483 rows (762 splits/bonuses, 6.9 MB, 2.8 s). 2010–2014 returned 9,231 rows. 96%
+    of rows carry an ISIN, and series `EQ` is 94% of rows.
+  - **Subjects are free text but regular:** `Bonus 3:2`, `Face Value Split (Sub-Division) - From Rs 10/- Per Share To
+    Re 1/- Per Share`, `Dividend - Rs 1.50 Per Share`, `Demerger`, `Scheme Of Arrangement …`, `Amalgamation`. A
+    subject with several actions (`Bonus 1:1/Dividend- Rs 2 Per Share`) is split on `/`. Spacing and spelling vary
+    (`RsN/-`, `Arangement`), so the parser is tolerant. Anything it can't read is stored as `other` and never applied.
+  - ⚠️ **Terms:** NSE's website terms for automated use aren't checked yet. Like Upstox (§10.4.5), this is an M17
+    owner item: NSE's written OK, or a licensed feed. The source sits in one section of `worker/src/market/corp.ts`.
+  - **NSE only.** A BSE-only share gets no automatic adjustment. It keeps M20's ±20% jump flag in daily returns and
+    shows "Corporate actions aren't tracked for this share".
+- **Job** (`pf-market` queue, on the 07:00 IST nav-ingest cron): fetch the last 30 days of actions each night, and
+  upsert. A one-time backfill (migration flag) fetches 2010 to today one year per
+  message. Logs carry counts only.
+- **Table** (`migrations/market/0010_corp_action.sql`): `corp_action(isin, symbol, ex_date, kind
+  split|bonus|dividend|merger|demerger|other, num, den, amount, subject)`, primary key
+  `(symbol, ex_date, kind, subject)`. For a split `num:den` = new shares per old share (10 → 2 face value is 5:1). For
+  a bonus `a:b` means a new shares for every b held. `amount` is the dividend per share.
+- **ISINs change on splits.** A face-value split usually gives the share a new ISIN, so older tradebook rows carry
+  the old one. Actions and trades are linked by **NSE symbol**, and the current ISIN comes from NSE's `EQUITY_L.csv`
+  (✅ answers 200 to the same user agent), stored as `nse_symbol(symbol, isin, seen)` and refreshed weekly.
+- **Sent to `/build`** as `market.corp_actions`: only the rows for the household's held or traded symbols, from the
+  earliest trade date on. They're part of the inputs hash, so a new action rebuilds the snapshot.
+
+**What the engine does with them:**
+- **Split after the statement date** (statement date < ex-date ≤ today): units × num/den, cost unchanged, buy dates
+  unchanged.
+- **Bonus after the statement date:** units × (a+b)/b for valuation. For tax, the bonus shares are a **new lot with
+  nil cost, acquired on the ex-date** (Income-tax Act s.55(2)(aa)(iiia), holding period from allotment; the ex-date
+  stands in for the allotment date, which is usually a day or two later). The "average buy price" shown is the total
+  cost / total units, as brokers show it.
+- **The same rules inside a tradebook replay**: an action between a buy and a sale adjusts the open lots before the
+  sale is matched FIFO.
+- **Units over time in today's terms.** Upstox's history is already adjusted for splits and bonuses (§10.4.5). So
+  each point of an exchange-priced holding's `units_timeline` is scaled by the factors of every action after it.
+  Units × adjusted close is then right on every day, and a known action is no longer flagged as a ±20% jump.
+- **Dividends:** the per-share amount × units held the day before the ex-date, listed in `activity` as
+  `dividend` (estimated, before TDS) and summed per financial year as "Dividend income". They don't count in XIRR
+  (owner, Q2).
+- **Mergers and demergers** (equity, with an ex-date after the statement date): no change to units. The holding gets
+  `notice: {kind, ex_date, text}`, shown as a banner: "Demerger on 6 Oct 2026. Upload a newer statement to update
+  it." NSE's subject doesn't name the other company reliably, so the text says "merged" without "into Y" unless the
+  subject names it.
+- **MF scheme mergers:** no reliable feed (AMFI just stops publishing the old scheme). A held fund whose NAV stops
+  for 7 business days while NAVAll is otherwise current gets the same banner: "This fund may have merged or closed.
+  Upload a newer statement to update it."
+
+#### Buy prices
+**1. Tradebook import** (exact lots):
+- **Upload** through the same route and quotas as statements. The kind is `TRADEBOOK`, from the file itself (CSV or
+  XLSX, ≤ 5 MB). There's no pdf.js pre-check: the Worker checks size and type, and the engine detects the broker
+  from the header row. The file is **never kept**: parsed in memory, or parked encrypted in `tmp/` during a burst,
+  exactly like a PDF (§0.5, D6).
+- **The user picks the member.** Tradebooks rarely carry a PAN. If one does, it must match the member's PAN, the same
+  check as a statement.
+- **Parsed trades only**, sealed with the household key, one `tradebook` row each with the date range covered
+  (As built). A tradebook covers a date range (Zerodha allows 365 days per download), so several tradebooks per
+  member merge: trades are deduplicated by broker trade ID, or by (date, symbol, side, qty, price) when there's none.
+- **Kept rows:** delivery equity and ETF trades on NSE/BSE. F&O, currency, commodity and MF rows are skipped and
+  counted ("12 F&O rows skipped"). **Intraday** (bought and sold the same day, same symbol) is business income,
+  not capital gains: it's left out of FIFO and counted.
+- **CDSL stays the truth for units.** For each share, the trades are replayed FIFO up to the member's statement date
+  and compared with the CDSL units:
+  - **Equal:** exact lots. `cost_source: "tradebook"`.
+  - **Trades show fewer units** (the rest bought earlier, through another broker, or transferred in): the lots cover
+    what they can. The rest is "cost unknown for 40 of 100 shares", with a prompt for a manual price.
+  - **Trades show more units** (some sold elsewhere or transferred out): the oldest lots are consumed first (FIFO),
+    like a sale at an unknown price, with a note.
+  - **Sold through the tradebook but never in a statement:** realised gains still count for tax.
+
+**2. Manual average buy price** (no tradebook):
+- On a share in the Assets tab: **average buy price per share** and, optionally, **the month first bought**. Nothing
+  else is asked (D28's rule).
+- Without a month, the holding period starts at the earliest CDSL statement that shows the share, labelled
+  "approximate". It's used for the long-term/short-term split and the XIRR cashflow date.
+- Stored in `stock_cost` (`migrations/app/0013_stock_gains.sql`): household, member, `isin_hmac`, sealed
+  `{isin, avg_price, since?}`, like `sip_override`. Rows go with the member and household (FK cascade), and are
+  exported and deleted with the account (M14). `PUT`/`DELETE /api/stocks/cost`, audited, followed by a rebuild.
+- If a tradebook covers a share, its lots win, and the manual price only fills the "cost unknown" remainder.
+
+#### Gains, tax and XIRR (engine, reusing `analysis.py`)
+- **FIFO and LTCG/STCG** reuse `fifo()` with `equity=True` for listed shares and equity ETFs: long-term after 12
+  months; STCG 20% and LTCG 12.5% above ₹1.25 lakh for sales from 23 Jul 2024 (15% and 10% above ₹1 lakh before).
+  The ₹1.25 lakh is **shared with equity funds**, per person, as the Act has it (s.112A), so stocks join the same
+  `realised`, `harvest` and `gains_by_fy`.
+- **Other ETFs** (gold, debt, international, listed on an exchange): long-term after 12 months from 23 Jul 2024,
+  taxed at 12.5% with no exemption. `is_long_term` gets a "listed" case for this.
+- **Grandfathering** (shares bought on or before 31 Jan 2018 and sold from 1 Apr 2018): cost is the higher of cost
+  and min(FMV, sale), where FMV is the **highest price on 31 Jan 2018** (s.55(2)(ac)). It comes from Upstox's daily
+  candle `high` for that day (one extra request per such share, stored as `stock_fmv_2018`), scaled back to the
+  unadjusted price with the actions since then.
+- **Charges:** a tradebook's price excludes brokerage and STT. Brokerage is deductible for capital gains, but STT is
+  not. Brokers don't put brokerage in the tradebook, so gains are before charges. The tax P&L files that include it
+  are Later (Q3).
+- **Unrealised long-term/short-term split** per holding, as for funds (`unrealised[isin]`).
+- **XIRR:** a share with known cost joins **Funds & stocks XIRR** (M19). Cashflows: each buy (−) and sale (+) from
+  the tradebook, or for a manual price one outflow of `avg × units` on the "since" date. Then the value today as
+  the terminal inflow. A share with no cost stays out of XIRR and its gain shows "add buy price".
+- **Snapshot:** each share gets `cost_source` (`tradebook` | `manual` | `partial` | `none`), `invested`, `gain`,
+  `lots_since`, `notice?`, and `dividends`. `SNAPSHOT_VERSION` 7.
+
+#### Screens (existing design system, §13; no new colours or components)
+- **Assets → Stocks & bonds:** gain and XIRR columns, a "Add buy price" link on shares without one, and the banner on
+  a merged share.
+- **Upload sheet:** a third card, "Broker tradebook (CSV or Excel)", with the supported brokers and a one-line "where
+  to download it" per broker.
+- **Tax tab:** stock lots in the same realised and harvest tables, with a "Stock" tag.
+
+#### Brokers
+Researched 2026-11-27 from broker help pages and open-source parsers that document real exports
+(`Thejesh-k463/VYUHA-LOG` docs/BROKER_FORMATS.md, `javatarz/wealth-tracker`, `ananthakumaran/paisa` fixtures,
+`prabusw/beancount-importers-india`, `aashishbhanawat/ArthSaarthi`). NSE active clients, October 2026: Groww 1.38 cr,
+Angel One 70 L, Zerodha 68 L, ICICI Securities 22 L, Upstox 18 L, Kotak 14 L, HDFC Securities 14 L, Dhan 11 L, SBI
+Securities 10 L, Motilal Oswal 9 L.
+
+One parser per broker in `engine/engine/parsers/tradebook/<broker>.py`, chosen by the **header row** (searched for in
+the first 40 rows, never by filename; Groww and Angel One files don't name the broker). Preamble rows (name, client
+code, PAN) are read for the PAN check only and never stored. Rows without an ISIN are linked to an ISIN by NSE symbol,
+or by company name against `EQUITY_L.csv`; a row that matches neither is counted and its share falls back to "cost
+unknown".
+
+| Broker | File | Header (key columns) | ISIN | Notes | Confidence |
+|---|---|---|---|---|---|
+| Zerodha | Console → Reports → Tradebook, CSV or XLSX | `symbol, isin, trade_date, exchange, segment, series, trade_type, quantity, price, trade_id, order_id, order_execution_time` | yes | One row per fill (dedupe on `trade_id`). 365 days per download. XLSX header on row 9 | high |
+| Groww | Reports → Transactions → Stocks Order History, XLSX | `Stock name, Symbol, ISIN, Type, Quantity, Value, Exchange, Exchange Order Id, Execution date and time, Order status` | yes | Price = Value ÷ Quantity. Keep `Executed` only. F&O mixed in. **Password = PAN in capitals**: the engine tries the member's PAN | high |
+| Angel One | Trades and charges → Download trade history, XLSX | `Scrip/Contract, Buy/Sell, Buy Price, Sell Price, Quantity, … Segment, Exchange, Order ID, Trade ID, Date` | no | Table starts ~row 34. Quantity-0 rows are brokerage lines. Charges per row | medium-high |
+| Upstox | Reports → Trade Report, XLSX | `Date, Company, Amount, Exchange, Segment, Scrip Code, Instrument Type, …, Trade Num, Trade Time, Side, Quantity, Price` | no | Header on row 11. F&O mixed in | medium-high |
+| ICICI Direct | Equity → Trade Book, CSV/XLSX | `Date, Stock, Action, Qty, Price, … Order Ref., …` | no | `Stock` is ICICI's own code (`OILIND`), matched by name where possible; full column order unconfirmed | medium |
+| Paytm Money | Tradebook_EQ.xlsx | `Date, Script, ISIN, Exchange, Product Type, Type, Quantity, Price, …, Order Number, Trade Number, Trade Time` | yes | Header on row 5; PAN in the preamble (checked) | high |
+| Dhan | Global Transaction Report, CSV | `Date, Scrip Name, Exchange, Bill No., Buy Qty., Buy Value, Sell Qty., Sell Value, …` | no | No per-trade download: daily totals per share. Enough for FIFO by day | high (format), lower (usefulness) |
+| Kotak Neo, HDFC Securities, SBI Securities, Motilal Oswal | download paths found, columns not | — | — | Need one real export's header row (Q4) | — |
+
+#### Owner's answers (2026-11-27)
+1. **The section is OK**, including bonus shares as a nil-cost lot from the ex-date with the average spread as brokers show it.
+2. **Dividends are income only, not in XIRR** (as brokers show XIRR). They're listed per share and per financial year.
+3. **Tax P&L files: later.**
+4. **The 7 brokers with known formats now** (Zerodha, Groww, Angel One, Upstox, ICICI Direct, Paytm Money, Dhan).
+   Kotak, HDFC Securities, SBI Securities and Motilal Oswal follow once one real export header each is available.
+5. Not asked; the default applies: **NSE's terms are an M17 owner item**, like Upstox's.
+
+#### As built (M21)
+- **Code:** engine `engine/parsers/tradebook.py` (7 header profiles; the header row is searched for in the first 60
+  non-blank rows of every sheet; dates day-first except Angel One's m/d/yy), `engine/equity.py` (lots, actions, gains,
+  dividends, banners), wired into `build_portfolio(…, trades, stock_costs)`. `msoffcrypto-tool` opens Groww's
+  encrypted Excel with the member's PAN (the Worker sends it as the /parse password). Worker `src/market/corp.ts`,
+  `src/lib/tradebooks.ts`, `src/routes/tradebooks.ts`; web `components/tradebook-form.tsx`, `components/buy-price.tsx`.
+- **Tables:** a separate `tradebook` table (`migrations/app/0013_stock_gains.sql`, with `stock_cost`), not rows in
+  `statement`: SQLite can't change `statement.kind`'s CHECK without rebuilding a table other rows point at. Blobs at
+  `h/{household}/tradebooks/{id}.bin`. Market tables in `migrations/market/0010_corp_action.sql` (`corp_action`,
+  `nse_symbol`, `stock_fmv_2018`, `corp_state`).
+- **Upload:** direct path only. With no free EngineFast slot the answer is 503 `engine_busy` with `retry_after`, and
+  the SPA tries again by itself (up to 3 times). Tradebooks are small and rare and need nothing more from the user, so
+  parking them in `tmp/` wasn't worth a second queued-job kind. They share the statement upload counters and the
+  failed-parse limit; 5 MB and 24 per member.
+- **Corporate-action job:** the 07:00 IST cron fetches the last 30 days (NSE lists an action only once it's announced
+  with an ex-date; later ex-dates arrive in later runs), the one-time backfill sends one message per year from 2010,
+  and `EQUITY_L.csv` is refreshed weekly. The user agent is `market-data/1.0`: a "Mozilla" one stalls, as on
+  niftyindices (M28). Rights issues, buybacks and anything unreadable are stored as `other` and never sent to builds.
+- **The 31 Jan 2018 high** for grandfathering comes free with the M20 10-year price fetch (the candle's `high` on
+  that day, adjusted like the closes; the engine scales it back to the sale's terms). ETFs have no FMV yet (Later).
+- **XIRR:** a share joins "Funds & stocks XIRR" with its open lots' cost on their buy dates as the cashflows (the XIRR
+  of what's held, like a broker's). Bonus lots move no cash. Dividends stay out (Q2).
+- **Trades after the newest statement** change the units of shares the statement holds and count for tax. A share
+  bought after it and not in it yet waits for the next statement (Later).
+- **Dividends** are estimated from the first statement date that shows the share (units before it are unknown).
+- **Screens:** the Buy price form and the banner are in the holding dialog (opened from the Stocks & bonds and ETFs
+  tables), not in the table itself; the gain and XIRR show in the table as for funds once a cost is known. Stock gains
+  join the Tax tab's existing figures (realised by year, harvest) rather than a separate tagged list, since the tab
+  has no per-sale list.
+- `SNAPSHOT_VERSION` 7 (the draft's 6 was taken by M28).
+
+**Later:** tax P&L import (Q3); parsers for Kotak, HDFC Securities, SBI Securities and Motilal Oswal; shares bought
+after the newest statement that it doesn't hold yet; ETF grandfathering; BSE corporate actions; mergers computed from the scheme ratio; rights issues
+and buybacks (shown as `other` today); dividends from the bank statement instead of estimates.
 
 ### 21.7 Disposable emails (D20, M22)
 - An open-source disposable-domain list is bundled at build time. The check runs in `POST /api/login/email` before

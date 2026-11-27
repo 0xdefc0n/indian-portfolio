@@ -8,7 +8,7 @@ import calendar
 import re
 from datetime import date, datetime, timedelta
 
-from . import holidays, market, projection, stocks
+from . import equity, holidays, market, projection, stocks
 from .analysis import asset_class, category_from_sebi, member_analysis, scheme_info
 from .market import NavSeries
 
@@ -304,7 +304,8 @@ def market_requirements(statements: list[dict], isin_to_code: dict[str, str] | N
 
     {"codes": AMFI codes whose NAV series are needed (benchmark included),
      "isins_without_code": held ISINs with no code yet (look them up, e.g. in the scheme table),
-     "held_isins": every ISIN held (stock data is only used for the equity ones)}
+     "held_isins": every ISIN held (stock data is only used for the equity ones),
+     "price_isins": shares and bonds held in demat, whose exchange-price series are needed (M20)}
     """
     staged = [(mid, k.get("CDSL"), k.get("RTA"), _merge_holdings(k.get("CDSL"), k.get("RTA")))
               for mid, k in _latest_by_member(statements).items()]
@@ -314,6 +315,7 @@ def market_requirements(statements: list[dict], isin_to_code: dict[str, str] | N
         "codes": sorted(set(codes.values()) | {market.BENCHMARK_CODE}),
         "isins_without_code": sorted(i for i in held if i not in codes),
         "held_isins": sorted(held),
+        "price_isins": sorted({h["isin"] for st in staged for h in st[3] if h["asset_type"] == "equity_or_bond"}),
     }
 
 
@@ -336,14 +338,20 @@ def _overrides_by_member(overrides: list[dict] | None) -> dict[str, dict]:
 
 
 def build_portfolio(statements: list[dict], market_data: dict | None = None, today: date | None = None,
-                    overrides: list[dict] | None = None) -> dict:
+                    overrides: list[dict] | None = None, trades: list[dict] | None = None,
+                    stock_costs: list[dict] | None = None) -> dict:
     """Newest CDSL + newest CAMS/KFintech statement per member, merged into one family view.
 
     statements:  [{"member_id", "pan", "name"?, "data"}]: decrypted parsed statements of one household.
     market_data: {"navs": {amfi_code: [[iso_date, nav], ...]}, "isin_to_code": {isin: amfi_code},
-                  "stocks": stock data (see stocks.py) or None}. Missing pieces degrade gracefully.
+                  "prices": {isin: [[iso_date, close], ...]} for shares and bonds (M20),
+                  "stocks": stock data (see stocks.py) or None,
+                  "scores": {isin: benchmark score view} (M28, copied onto the holding)}. Missing pieces degrade gracefully.
     today:       the build date (the caller's clock), so builds are reproducible.
     overrides:   the user's SIP changes the statements can't show yet: skip one instalment, or cancel (M12).
+    trades:      broker tradebooks (M21), [{"member_id", "broker", "trades": [...]}] (parsers/tradebook.py).
+    stock_costs: manual average buy prices (M21), [{"member_id", "isin", "avg_price", "since"?}].
+                 market_data also carries "corp_actions", "symbols" and "fmv_2018" for them (equity.py).
     """
     market_data = market_data or {}
     today = today or date.today()
@@ -358,10 +366,22 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
 
     codes = _fund_codes(staged, market_data.get("isin_to_code") or {})
     navs = market.series_map(market_data.get("navs"))
+    prices = market.series_map(market_data.get("prices"))  # shares and bonds: daily exchange closes by ISIN (M20)
     bench = navs.get(market.BENCHMARK_CODE)
     hols = holidays.calendar(market_data.get("holidays"))
     user_overrides = _overrides_by_member(overrides)
     waiting = {str(c) for c in market_data.get("refresh") or []}  # codes whose NAV backfill is still running
+    scores = market_data.get("scores") or {}  # benchmark scores by ISIN, computed by the Worker (M28)
+    corp = equity.Market.from_data(market_data.get("corp_actions"), market_data.get("symbols"), market_data.get("fmv_2018"))
+    trades_by: dict[str, list[dict]] = {}
+    for tb in trades or []:
+        for t in tb.get("trades") or []:
+            trades_by.setdefault(tb.get("member_id"), []).append({**t, "broker": tb.get("broker")})
+    costs_by: dict[str, dict[str, dict]] = {}
+    for c in stock_costs or []:
+        if c.get("member_id") and c.get("isin"):
+            costs_by.setdefault(c["member_id"], {})[c["isin"]] = c
+    t_iso = today.isoformat()
 
     for mid, cdsl, rta, merged, total, full_hist in sorted(staged, key=lambda s: -s[4]):
         pan = by_member[mid]["pan"]
@@ -395,7 +415,21 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
         })
         for h in merged:
             h["sebi_category"] = scheme_info(h["isin"])[0]
-        analysis = member_analysis(rta, cdsl, merged, today)
+        # shares and ETFs (M21): lots from tradebooks and manual prices, corporate actions, gains and tax
+        first_seen: dict[str, str] = {}
+        for st in sorted(by_member[mid].get("CDSL_ALL", []), key=_as_of):
+            for x in st.get("holdings", []):
+                first_seen.setdefault(x["isin"], _as_of(st))
+        close = {}
+        for h in merged:
+            series = prices.get(h["isin"]) if h["asset_type"] == "equity_or_bond" else navs.get(codes.get(h["isin"], ""))
+            if series and series.dates:
+                close[h["isin"]] = (series.dates[-1], series.navs[-1])
+            elif h.get("nav"):
+                close[h["isin"]] = (h["as_of"], h["nav"])
+        eq = equity.member_stocks(merged, trades_by.get(mid, []), costs_by.get(mid, {}), corp, first_seen, today, close)
+        analysis = member_analysis(rta, cdsl, merged, today, eq["realised"],
+                                   {i: x["tax"] for i, x in eq["holdings"].items() if x.get("tax")})
         members[-1]["analysis"] = {k: v for k, v in analysis.items() if k != "unrealised"}
         member_sips: dict[str, list[dict]] = {}
         for s in (rta or {}).get("sips", []):
@@ -414,10 +448,15 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
                 "invested": h["invested"], "as_of": h["as_of"], "cashflows": h["cashflows"],
                 "tax": analysis["unrealised"].get(h["isin"]),  # long/short-term split, when lots are known
                 "returns": market.trailing_returns(navs.get(codes.get(h["isin"], ""))),
+                "score": scores.get(h["isin"]),
             })
             code = codes.get(h["isin"])
             est = _carry_forward(holdings[-1], h, code, navs.get(code or ""), member_sips.get(h["isin"], []), rta,
-                                 by_member[mid].get("CDSL_ALL", []), today, hols, user_overrides.get(mid))
+                                 by_member[mid].get("CDSL_ALL", []), today, hols, user_overrides.get(mid), prices.get(h["isin"]))
+            _apply_stock(holdings[-1], h, eq["holdings"].get(h["isin"]), corp, t_iso)
+            if h["asset_type"] == "mutual_fund" and code and not holdings[-1].get("notice"):
+                s_ = navs.get(code)
+                holdings[-1]["notice"] = equity.fund_notice(s_.dates if s_ else None, market_data.get("market_date"), h["as_of"])
             # what the same rupees on the same days would be worth in a Nifty 50 index fund
             holdings[-1]["benchmark_value"] = market.replay(holdings[-1]["cashflows"], bench, holdings[-1]["as_of"])
             if est:
@@ -434,9 +473,18 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
                           "pending": sum(len(e["pending"]) for e in estimates.values()),
                           "pending_amount": round(sum(i["amount"] for e in estimates.values() for i in e["pending"]), 2),
                           "in_progress": len(running), "in_progress_amount": round(sum(i["amount"] for i in running), 2)}
-        m["history"] = _extend_history(m, mine, navs, estimates)
+        m["history"] = _extend_history(m, mine, navs, estimates, prices)
 
         activity.extend(_member_activity(mid, cdsl, rta))
+        div_fy: dict[str, float] = {}
+        for x in mine:
+            for d, amt in x.get("dividends") or []:
+                activity.append({"member_id": mid, "isin": x["isin"], "name": x["name"], "date": d, "units": 0.0,
+                                 "amount": amt, "sip": False, "kind": "dividend", "source": "Estimate", "estimated": True})
+                fy = equity.fin_year(date.fromisoformat(d))
+                div_fy[fy] = round(div_fy.get(fy, 0.0) + amt, 2)
+        m["dividend_income"] = [{"fy": k, "amount": v} for k, v in sorted(div_fy.items(), reverse=True)]
+        m["stocks"] = {k: (round(v, 4) if isinstance(v, float) else v) for k, v in eq["counts"].items()}
         for isin, e in estimates.items():
             name = next(h["name"] for h in mine if h["isin"] == isin)
             for i in e["instalments"] + e["pending"]:
@@ -491,20 +539,71 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
             "stocks": stock_data}
 
 
+def _apply_stock(out: dict, h: dict, info: dict | None, corp: "equity.Market", today: str) -> None:
+    """Shares and ETFs (M21): units after the splits, bonuses and trades since the statement, the cost and gain from
+    the lots, units over time in today's terms, estimated dividends and the merger banner. Changes `out` in place."""
+    out.setdefault("notice", None)
+    if h["asset_type"] != "equity_or_bond" and info is None:
+        return
+    stmt = h["as_of"][:10]
+    if h["asset_type"] == "equity_or_bond":
+        out["notice"] = equity.notice(h["isin"], corp, stmt, today)
+        out["corp_actions_tracked"] = corp.symbol_of(h["isin"]) is not None
+    timeline = equity.today_terms(out.get("units_timeline"), h["isin"], corp, today)
+    if info is None:
+        units = round((h["units"] or 0) * corp.growth(h["isin"], stmt, today), 4)
+        info = {"cost_source": "none", "units": units, "unknown_units": units, "traded_after": 0.0}
+    units = info["units"]
+    if timeline is not None and abs(units - (timeline[-1][1] if timeline else 0)) > 1e-4:
+        point = [out.get("as_of") or today, units]
+        timeline = [p for p in timeline if p[0] < point[0]] + [point]
+    if timeline is not None:
+        out["units_timeline"] = timeline
+    if abs(units - (out["units"] or 0)) > 1e-6:
+        out["units"] = units
+        if out.get("nav") is not None and out.get("price_source") in ("exchange", "nav"):
+            out["value"] = round(units * out["nav"], 2)
+    out["cost_source"] = info["cost_source"]
+    out["unknown_units"] = info.get("unknown_units", 0.0)
+    if info.get("invested") is not None:
+        out["invested"] = info["invested"]
+        out["avg_price"] = info.get("avg_price")
+        out["cashflows"] = info.get("cashflows")
+        out["lots_since"] = info.get("since")
+        if info.get("tax"):
+            out["tax"] = info["tax"]
+    elif h["asset_type"] == "equity_or_bond":
+        out["invested"], out["cashflows"] = None, None
+    first = (out.get("units_timeline") or [[stmt]])[0][0]
+    out["dividends"] = equity.dividends(h["isin"], corp, out.get("units_timeline") or [[stmt, units]], min(first, stmt), today)
+
+
 def _carry_forward(out: dict, h: dict, code: str | None, series: NavSeries | None, sips: list[dict], rta: dict | None,
                    cdsl_all: list[dict], today: date, hols: frozenset[str] = holidays.FALLBACK_HOLIDAYS,
-                   overrides: dict | None = None) -> dict | None:
+                   overrides: dict | None = None, price: NavSeries | None = None) -> dict | None:
     """Units over time, estimated SIP instalments since the statement, and the value at the latest NAV (§10.5.1).
 
     `out` is the snapshot holding (changed in place); `h` the merged statement row. The statement's own figures stay
     in `out["statement"]`. Returns the estimate ({"instalments", "pending"}) or None when there's nothing to estimate.
+    Shares and bonds (M20) are valued at `price`, their latest exchange close; `price_source` says which applied.
     """
     as_of = h["as_of"]
     out["statement"] = {"units": h["units"], "nav": h["nav"], "value": h["value"], "as_of": as_of}
     out["amfi_code"] = code
     out["units_timeline"], out["units_exact"], out["payouts"], out["estimated"] = None, False, [], None
+    out["price_source"] = "statement"
+    if h["asset_type"] == "equity_or_bond" and price and price.dates:
+        # CDSL units at each statement date (constant in between), valued at the exchange close
+        timeline, exact = projection.units_timeline(h["isin"], None, cdsl_all, as_of, h["units"])
+        out["units_timeline"], out["units_exact"], out["price_source"] = timeline, exact, "exchange"
+        if price.dates[-1] > as_of[:10]:
+            close = price.navs[-1]
+            out.update(nav=close, value=round((h["units"] or 0) * close, 2), as_of=price.dates[-1])
+        return None
     if h["asset_type"] != "mutual_fund" or not code:
-        return None  # ETFs and shares have no AMFI NAV: shown as on the statement, left out of daily returns
+        return None  # no NAV or exchange price (unlisted, or not fetched yet): shown as on the statement
+    if series and series.dates:
+        out["price_source"] = "nav"
     rta_for = rta if any(s.get("isin") == h["isin"] for s in (rta or {}).get("schemes", [])) else None
     timeline, exact = projection.units_timeline(h["isin"], rta_for, cdsl_all, as_of, h["units"])
     est = (projection.estimate_sips(sips, (rta or {}).get("transactions", []), as_of, series, today, hols, overrides)
@@ -542,14 +641,18 @@ def _carry_forward(out: dict, h: dict, code: str | None, series: NavSeries | Non
     return est
 
 
-def _extend_history(m: dict, holdings: list[dict], navs: dict[str, NavSeries], estimates: dict[str, dict]) -> list[dict]:
+def _extend_history(m: dict, holdings: list[dict], navs: dict[str, NavSeries], estimates: dict[str, dict],
+                    prices: dict[str, NavSeries] | None = None) -> list[dict]:
     """Month-end values after the newest statement, up to the latest NAV, from the units timelines (estimated SIPs
-    included). Only when the history already covers every fund and every fund has NAVs; otherwise unchanged."""
+    included). Only when the history already covers every fund and every fund has NAVs (shares and bonds: exchange
+    closes, M20); otherwise unchanged."""
     hist = m["history"]
     since, value_date = m.get("as_of"), m.get("value_date")
     if not hist or not m["history_covers_all"] or not holdings or not since or not value_date or value_date <= since:
         return hist
-    pairs = [(h, navs.get(h.get("amfi_code") or "")) for h in holdings]
+    prices = prices or {}
+    pairs = [(h, prices.get(h["isin"]) if h.get("price_source") == "exchange" else navs.get(h.get("amfi_code") or ""))
+             for h in holdings]
     if any(s is None or not h.get("units_timeline") for h, s in pairs):
         return hist
     flows = m["history_source"] == "transactions"

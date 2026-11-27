@@ -209,3 +209,13 @@ def test_history_with_a_sold_fund_whose_navs_are_still_downloading():
 def test_market_requirements_ask_for_sold_funds_too():
     kf, sold = _with_sold_fund()
     assert sold["amfi"] in market_requirements(kf)["codes"]
+
+
+def test_scores_are_copied_onto_holdings_by_isin():
+    """M28: the Worker sends benchmark scores by ISIN; the engine copies each onto its holding, untouched."""
+    view = {"score": 72, "reason": None, "index": "Nifty Midcap 150", "as_of": "2026-10-31"}
+    market = {**synthetic.market(), "scores": {synthetic.F1["isin"]: view}}
+    snap = build_portfolio(synthetic.statements(), market, synthetic.TODAY)
+    got = {h["isin"]: h["score"] for h in snap["holdings"]}
+    assert got[synthetic.F1["isin"]] == view
+    assert [i for i, s in got.items() if s is not None] == [synthetic.F1["isin"]]

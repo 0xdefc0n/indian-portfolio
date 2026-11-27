@@ -140,7 +140,7 @@ function HonestyNote({ daily }: { daily: Daily }) {
         Estimated from daily NAVs and your units as of {day(n.units_as_of)}
         {!n.units_exact && " (from your CDSL statement)"}
         {est > 0 && <>, plus {est} estimated SIP instalment{est === 1 ? "" : "s"} ({inr(n.estimated.amount)}) since then</>}.
-        {n.excluded > 0 && <> {n.excluded} ETF{n.excluded === 1 ? "" : "s"} and share{n.excluded === 1 ? "" : "s"} aren't included.</>}
+        {n.excluded > 0 && <> {n.excluded} holding{n.excluded === 1 ? " has" : "s have"} no daily price and {n.excluded === 1 ? "isn't" : "aren't"} included.</>}
       </span>
       <Tooltip>
         <TooltipTrigger aria-label="About these estimates" className="-m-2 p-2">

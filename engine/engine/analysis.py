@@ -208,7 +208,10 @@ def fifo(txns: list[dict], isin: str, name: str, sebi: str | None, rta_type: str
 
 # ---------------------------------------------------------------- per member
 
-def member_analysis(rta: dict | None, cdsl: dict | None, holdings: list[dict], today: date | None = None) -> dict:
+def member_analysis(rta: dict | None, cdsl: dict | None, holdings: list[dict], today: date | None = None,
+                    stock_realised: list[dict] | None = None, stock_unrealised: dict[str, dict] | None = None) -> dict:
+    """stock_realised / stock_unrealised: shares and ETFs from equity.py (M21). They share the ₹1.25 lakh LTCG
+    exemption with equity funds, per person (s.112A), so they join the same realised, harvest and gains_by_fy."""
     today = today or date.today()
     fy_now = fin_year(today)
     by_scheme: dict[tuple, list[dict]] = defaultdict(list)
@@ -253,6 +256,11 @@ def member_analysis(rta: dict | None, cdsl: dict | None, holdings: list[dict], t
             "st_value": round(val(st), 2), "st_gain": round(val(st) - cost(st), 2),
             "lt_units": round(sum(l.units for l in lt), 3),
         }
+
+    for g in stock_realised or []:
+        realised.append(g)
+    for isin, u in (stock_unrealised or {}).items():
+        unrealised.setdefault(isin, u)
 
     # this financial year's equity LTCG and how much more can be booked tax-free
     ltcg_fy = sum(g["gain"] for g in realised if g["fy"] == fy_now and g["equity"] and g["long_term"])
@@ -311,7 +319,8 @@ def member_analysis(rta: dict | None, cdsl: dict | None, holdings: list[dict], t
     }
 
     return {
-        "gains_by_fy": gains_by_fy, "realised_funds": len({g["isin"] for g in realised}),
+        "gains_by_fy": gains_by_fy, "realised_funds": len({g["isin"] for g in realised if g.get("kind") != "stock"}),
+        "realised_stocks": len({g["isin"] for g in realised if g.get("kind") == "stock"}),
         "replayed_funds": len(replayed), "unrealised": unrealised, "harvest": harvest,
         "money": money, "health": health_check(rta, cdsl, holdings),
     }

@@ -9,6 +9,13 @@ import { estimateNote, isBuy, unitsText } from "@/lib/activity"
 import { inProgress, movedNote, nextRun } from "@/lib/sips"
 import { STOCK_TYPES } from "@/components/stock-exposure"
 import { holdingFlows, xirr } from "@/lib/xirr"
+import { asOfText, band, excessLine, noScoreText, scoreLine, sectorLine, toneClass } from "@/lib/score"
+import type { Score, StockCost } from "@/lib/api"
+import { BuyPrice, Dividends, NoticeBanner } from "@/components/buy-price"
+import { holdingKind } from "@/lib/asset-kind"
+
+/** Shares and ETFs get a buy-price form (M21); SGBs and funds don't. */
+const isListed = (h: Holding) => holdingKind(h) === "stock" || holdingKind(h) === "etf"
 
 type Props = {
   holding: Holding | null
@@ -19,6 +26,10 @@ type Props = {
   sips: Sip[]
   benchmark: { name: string; returns: Returns } | null
   stocks: StockData | null
+  /** Manual average buy prices (M21), for the buy-price form of shares and ETFs. */
+  costs?: StockCost[]
+  /** A buy price changed: reload the dashboard. */
+  onChanged?: () => void
 }
 
 const PERIODS = ["1y", "3y", "5y"] as const
@@ -49,18 +60,18 @@ const KIND_LABEL: Record<Activity["kind"], string> = {
   sip: "SIP", purchase: "Bought", redemption: "Sold", switch_in: "Switched in", switch_out: "Switched out", dividend: "Dividend reinvested",
 }
 
-export function FundDialog({ holding: h, onClose, member, showMember, activity, sips, benchmark, stocks }: Props) {
+export function FundDialog({ holding: h, onClose, member, showMember, activity, sips, benchmark, stocks, costs, onChanged }: Props) {
   const [allTxns, setAllTxns] = useState(false)
   return (
     <Dialog open={!!h} onOpenChange={(o) => { if (!o) { onClose(); setAllTxns(false) } }}>
       <DialogContent className="max-h-[calc(100svh-2rem)] gap-5 overflow-y-auto p-5 sm:max-w-lg sm:p-6">
-        {h && <Body h={h} member={member} showMember={showMember} activity={activity} sips={sips} benchmark={benchmark} stocks={stocks} allTxns={allTxns} onAllTxns={() => setAllTxns(true)} />}
+        {h && <Body h={h} member={member} showMember={showMember} activity={activity} sips={sips} benchmark={benchmark} stocks={stocks} costs={costs} onChanged={onChanged} allTxns={allTxns} onAllTxns={() => setAllTxns(true)} />}
       </DialogContent>
     </Dialog>
   )
 }
 
-function Body({ h, member, showMember, activity, sips, benchmark, stocks, allTxns, onAllTxns }: Omit<Props, "holding" | "onClose"> & {
+function Body({ h, member, showMember, activity, sips, benchmark, stocks, costs, onChanged, allTxns, onAllTxns }: Omit<Props, "holding" | "onClose"> & {
   h: Holding
   allTxns: boolean
   onAllTxns: () => void
@@ -95,6 +106,8 @@ function Body({ h, member, showMember, activity, sips, benchmark, stocks, allTxn
         </DialogDescription>
       </div>
 
+      <NoticeBanner h={h} />
+
       {/* value and P&L */}
       <div>
         <div className="text-xs text-muted-foreground">Current value{h.as_of ? ` on ${day(h.as_of)}` : ""}</div>
@@ -128,12 +141,23 @@ function Body({ h, member, showMember, activity, sips, benchmark, stocks, allTxn
         <Fact label="XIRR" value={x == null ? "—" : signed(x * 100, (n) => pct(n, 2))} className={x == null ? "" : x >= 0 ? "text-gain" : "text-loss"} />
         <Fact label="Units" value={units(h.units)} />
         <Fact label="Average cost" value={avgCost == null ? "—" : inrExact(avgCost)} detail="per unit" />
-        <Fact label="Current NAV" value={h.nav == null ? "—" : `₹${nav(h.nav)}`} detail={h.as_of ? day(h.as_of) : undefined} />
+        <Fact label={h.isin.startsWith("INF") ? "Current NAV" : "Last price"} value={h.nav == null ? "—" : `₹${nav(h.nav)}`}
+          detail={h.as_of ? (h.price_source === "statement" && !h.isin.startsWith("INF") ? `${day(h.as_of)}, from your statement` : day(h.as_of)) : undefined} />
       </dl>
-      {invested == null && (
+      {invested == null && !isListed(h) && (
         <p className="-mt-2 text-xs text-muted-foreground">
           Invested amount, returns and average cost need a CAMS / KFintech statement that starts from the first purchase.
         </p>
+      )}
+      {isListed(h) && (
+        <Section title="Buy price">
+          <BuyPrice h={h} cost={costs?.find((c) => c.member_id === h.member_id && c.isin === h.isin)} onChanged={onChanged ?? (() => undefined)} />
+        </Section>
+      )}
+      {!!h.dividends?.length && (
+        <Section title="Dividends" aside="estimated">
+          <Dividends h={h} />
+        </Section>
       )}
 
       {/* holding details */}
@@ -195,6 +219,8 @@ function Body({ h, member, showMember, activity, sips, benchmark, stocks, allTxn
         </Section>
       )}
 
+      {h.score && <ScoreSection s={h.score} />}
+
       {topStocks.length > 0 && (
         <Section title="Top holdings" aside={stocks?.month ? `${stockWeights.length} stocks, ${month(stocks.month, true)}` : undefined}>
           <ul className="space-y-2 text-sm">
@@ -251,3 +277,47 @@ function Body({ h, member, showMember, activity, sips, benchmark, stocks, allTxn
     </>
   )
 }
+
+/** The benchmark score (M28, plan §21.4): number and band, the plain lines, 3/5/10-year CAGRs against the index. */
+function ScoreSection({ s }: { s: Score }) {
+  if (s.score == null) {
+    const why = noScoreText(s)
+    return why ? (
+      <Section title="Benchmark score">
+        <p className="text-sm text-muted-foreground">{why}</p>
+      </Section>
+    ) : null
+  }
+  const b = band(s.score)
+  const lines = [scoreLine(s), excessLine(s), sectorLine(s)].filter(Boolean)
+  return (
+    <Section title="Benchmark score" aside={`vs ${s.index}, ${asOfText(s)}`}>
+      <div className="flex items-baseline gap-3">
+        <span className={cn("text-2xl font-semibold tabular-nums", toneClass(b))}>{s.score}</span>
+        <span className="text-sm text-muted-foreground">/ 100 · {b.label}</span>
+      </div>
+      {lines.map((l) => (
+        <p key={l} className="mt-1.5 text-sm">{l}</p>
+      ))}
+      {!!s.horizons?.length && (
+        <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+          {s.horizons.map((x) => (
+            <div key={x.years} className="rounded-lg bg-muted/50 px-2 py-2.5">
+              <div className="text-xs text-muted-foreground">{x.years}Y yearly</div>
+              <div className={cn("font-semibold", x.fund >= x.index ? "text-gain" : "text-loss")}>{signed(x.fund, (n) => pct(n))}</div>
+              <div className="text-xs text-muted-foreground">Index {signed(x.index, (n) => pct(n))}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="mt-3 text-xs text-muted-foreground">
+        Half risk-adjusted return against the index, half how often it beat the index over rolling 3- and 5-year periods,
+        on month-end values{s.months ? ` (${Math.round(s.months / 12)} years)` : ""}.
+        {s.growth_option && " Shown for the growth option of this fund, since payouts lower this option's NAV."}
+        {s.price_only && " Share prices only: dividends aren't counted."}
+        {" "}Not investment advice. Past performance doesn't predict future returns.
+      </p>
+    </Section>
+  )
+}
+

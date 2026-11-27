@@ -1,7 +1,7 @@
 // The Assets tab: everything the family owns, one kind at a time. The boxes at the top are the switch (mutual funds,
 // ETFs, stocks & bonds, FD/PPF/EPF): picking one shows only that kind, with its own allocation strip, so nothing has
-// to be scrolled past. SIPs sit with the mutual funds (they're a mutual-fund thing). Gold (M29) and live stock prices
-// (M20) join the same switch later. Gold & silver (M29): SGBs from statements plus gold, silver and SGBs added by hand. Same Panel, table and list components as before (§13).
+// to be scrolled past. SIPs sit with the mutual funds (they're a mutual-fund thing). Shares and bonds are at their
+// latest exchange close (M20), with the price date under the table. Gold & silver (M29): SGBs from statements plus gold, silver and SGBs added by hand. Same Panel, table and list components as before (§13).
 import type { AssetDialogState } from "@/components/asset-dialogs"
 import { AllocationStrip, type Slice } from "@/components/allocation-strip"
 import { AddAssetButton, FixedIncome, GoldSilver } from "@/components/fixed-income"
@@ -108,6 +108,20 @@ function KindTabs({ groups, total, current, onPick }: {
   )
 }
 
+/** Under the Stocks & bonds table (M20): the price date, and which ones keep the statement's price. */
+export function PriceNote({ holdings }: { holdings: Holding[] }) {
+  const priced = holdings.filter((h) => h.price_source === "exchange")
+  const kept = holdings.length - priced.length
+  if (!holdings.length) return null
+  const latest = priced.map((h) => h.as_of).sort().at(-1)
+  return (
+    <p className="mt-3 border-t pt-3 text-[12.5px] text-muted-foreground">
+      {latest ? `Valued at the closing price of ${day(latest)} on NSE (BSE if it isn't listed there).` : "Valued at the price on your statement."}
+      {latest && kept > 0 && ` ${kept} without an exchange price ${kept === 1 ? "keeps" : "keep"} your statement's price.`}
+    </p>
+  )
+}
+
 export function AssetsView(p: Props) {
   const byKind: Record<Exclude<AssetKind, "fixed">, Holding[]> = { mf: [], etf: [], stock: [], gold: [] }
   for (const h of p.holdings) byKind[holdingKind(h)].push(h)
@@ -189,6 +203,7 @@ export function AssetsView(p: Props) {
             itemLabel={TABLE_LABELS[current].item}
             priceLabel={TABLE_LABELS[current].price}
           />
+          {current === "stock" && <PriceNote holdings={rows} />}
         </Panel>
         {current === "mf" && !p.category && (p.sips.length > 0 || p.sipsMissing.length > 0) && (
           <div id="sips" className="scroll-mt-24">
