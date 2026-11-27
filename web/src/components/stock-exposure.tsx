@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react"
+import { SearchIcon, XIcon } from "lucide-react"
 
 import { BarList } from "@/components/insights"
 import type { Holding, Member, StockData } from "@/lib/api"
@@ -15,7 +16,7 @@ type Exposure = {
   byMember: Map<string, number>
 }
 
-const SHOW = 12
+const SHOW = 10
 export const STOCK_TYPES = new Set(["EQUITY", "FOREIGN_EQUITY"])
 const FUND_UNIT = "MUTUAL_FUND_UNIT"
 
@@ -28,6 +29,7 @@ export function StockExposure({ holdings, total, members, showMember, data }: {
   data: StockData
 }) {
   const [all, setAll] = useState(false)
+  const [query, setQuery] = useState("")
   const { rows, sectors, covered, memberTotals, cash, unlooked } = useMemo(() => {
     const map = new Map<string, Exposure>()
     const memberTotals = new Map<string, number>()
@@ -80,7 +82,11 @@ export function StockExposure({ holdings, total, members, showMember, data }: {
 
   const equityFunds = new Set(holdings.filter((h) => h.asset_class === "Equity").map((h) => h.isin))
   const missing = [...equityFunds].filter((i) => !covered.has(i)).length
-  const shown = all ? rows : rows.slice(0, SHOW)
+  // search the whole list (name, symbol, sector); the rank stays the stock's place in the full list
+  const q = query.trim().toLowerCase()
+  const ranked = rows.map((r, i) => ({ r, rank: i + 1 }))
+  const matches = q ? ranked.filter(({ r }) => [r.name, r.symbol ?? "", r.sector].some((t) => t.toLowerCase().includes(q))) : ranked
+  const shown = all ? matches : matches.slice(0, SHOW)
   const top10 = rows.slice(0, 10).reduce((s, r) => s + r.value, 0)
   const inStocks = rows.reduce((s, r) => s + r.value, 0)
   const lookThrough = holdings.map((h) => data.look_through?.[h.isin]).filter(Boolean)
@@ -116,11 +122,38 @@ export function StockExposure({ holdings, total, members, showMember, data }: {
 
       <div className="mt-8 grid gap-10 lg:grid-cols-[3fr_2fr]">
         <section className="min-w-0">
-          <h3 className="mb-2 text-sm font-medium text-muted-foreground">Largest stocks</h3>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <h3 className="text-sm font-medium text-muted-foreground">Largest stocks</h3>
+            {rows.length > SHOW && (
+              <label className="relative w-full sm:w-64">
+                <span className="sr-only">Search stocks</span>
+                <SearchIcon aria-hidden className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(e) => { setQuery(e.target.value); setAll(false) }}
+                  placeholder="Search stock or sector"
+                  autoComplete="off"
+                  className="h-10 w-full rounded-[12px] border border-border bg-foreground/[0.03] pr-10 pl-9 text-sm outline-none transition-colors duration-300 placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40 pointer-coarse:h-11 [&::-webkit-search-cancel-button]:hidden"
+                />
+                {query && (
+                  <button type="button" onClick={() => setQuery("")} aria-label="Clear search"
+                    className="absolute top-1/2 right-0.5 grid size-9 -translate-y-1/2 place-items-center rounded-[10px] text-muted-foreground hover:text-foreground pointer-coarse:size-11 pointer-coarse:right-0">
+                    <XIcon className="size-4" />
+                  </button>
+                )}
+              </label>
+            )}
+          </div>
+          {q && (
+            <p className="mb-1 text-xs text-muted-foreground" aria-live="polite">
+              {matches.length ? `${matches.length} of ${rows.length} stocks match` : `No stock or sector matches “${query.trim()}”`}
+            </p>
+          )}
           <ul className="divide-y text-sm">
-            {shown.map((r, i) => (
+            {shown.map(({ r, rank }) => (
               <li key={r.isin} className="flex items-baseline gap-3 py-2.5">
-                <span className="w-6 shrink-0 text-right text-xs text-muted-foreground">{i + 1}</span>
+                <span className="w-7 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{rank}</span>
                 <div className="min-w-0 flex-1">
                   <div className="truncate">{r.name}</div>
                   <div className="text-xs text-muted-foreground">
@@ -144,10 +177,10 @@ export function StockExposure({ holdings, total, members, showMember, data }: {
               </li>
             ))}
           </ul>
-          {rows.length > SHOW && (
+          {matches.length > SHOW && (
             <button type="button" onClick={() => setAll((a) => !a)}
-              className="mt-2 rounded-sm text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
-              {all ? "Show fewer" : `Show all ${rows.length}`}
+              className="mt-1 min-h-10 rounded-sm text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring pointer-coarse:min-h-11">
+              {all ? "Show fewer" : `Show all ${matches.length}`}
             </button>
           )}
         </section>

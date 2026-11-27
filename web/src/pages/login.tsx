@@ -26,7 +26,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   return (
     <PublicShell home={false}>
       <main className="flex items-start justify-center px-4 pt-10 pb-16 sm:pt-20">
-        <section className="w-full max-w-[400px] rounded-[22px] bg-surface p-5 ring-1 ring-border sm:p-7">{children}</section>
+        <section className="w-full max-w-[400px] glass rounded-[24px] p-5 sm:p-7">{children}</section>
       </main>
     </PublicShell>
   )
@@ -161,7 +161,7 @@ export function LoginPage() {
   return (
     <Shell>
       <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
-      <p className="mt-1.5 text-muted-foreground">Your family's mutual funds, in one place.</p>
+      <p className="mt-1.5 text-muted-foreground">Your family's investments, in one place</p>
       {deleted && (
         <p className="mt-4 rounded-xl bg-surface-2 p-3 text-sm ring-1 ring-border" role="status">
           Your account and all its data were deleted. We've emailed you a confirmation.

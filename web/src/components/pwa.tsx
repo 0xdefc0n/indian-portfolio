@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils"
 // ─── The sheet ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 function Icon() {
-  return <img src="/icons/icon-192.png" alt="" width={44} height={44} className="size-11 shrink-0 rounded-xl ring-1 ring-border" />
+  return <img src="/icons/icon-48.png" srcSet="/icons/icon-48.png 1x, /icons/icon-96.png 2x, /icons/icon-144.png 3x" alt="" width={44} height={44} className="size-11 shrink-0 rounded-xl ring-1 ring-border" />
 }
 
 const BENEFITS = [
@@ -183,7 +183,7 @@ export function InstallSheet() {
       data-install-sheet=""
       className={cn(
         "fixed inset-x-0 bottom-0 z-40 rounded-t-[22px] bg-surface p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-lg ring-1 ring-border outline-none",
-        "sm:inset-x-auto sm:right-6 sm:bottom-6 sm:w-[400px] sm:rounded-[22px] sm:p-6",
+        "sm:inset-x-auto sm:right-6 sm:bottom-6 sm:w-[400px] sm:rounded-[24px] sm:p-6",
         "animate-in fade-in-0 slide-in-from-bottom-4 duration-200 motion-reduce:animate-none",
       )}
     >

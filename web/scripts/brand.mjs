@@ -5,8 +5,9 @@
 //   public/brand/wordmark-dark.svg   "Pocket" in light ink + gold glass "folio" block, for dark backgrounds
 //   public/brand/wordmark-light.svg  the same with dark ink, for light backgrounds
 //   public/brand/app-icon.svg        the stacked app icon (owner's design): "Pocket" over the gold block on an ink tile
-//   public/favicon.svg               the small-size fallback: the gold block alone on the ink tile
-//   public/icons/*.png, public/favicon.ico, public/brand/google-consent-120.png
+//   public/favicon.svg               the app icon, as the tab icon (vector)
+//   public/icons/icon-{48…512}.png, icon-maskable-{192,512}.png, apple-touch-icon-180.png, public/favicon.ico,
+//   public/brand/google-consent-120.png and -512.png
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -63,26 +64,31 @@ function appIcon(scale, shape) {
     `<g transform="translate(${-bw / 2} ${blockY})">${b}</g></g></svg>\n`
 }
 
-const favicon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="PocketFolio">` +
-  `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">${GOLD_STOPS}</linearGradient></defs>` +
-  `<rect width="32" height="32" rx="8" fill="${INK}"/><rect x="5" y="9" width="22" height="14" rx="4" fill="url(#g)"/>` +
-  `<rect x="5" y="9" width="22" height="6.5" rx="4" fill="#fff" fill-opacity=".22"/></svg>\n`
-
 mkdirSync(pub("brand"), { recursive: true })
 mkdirSync(pub("icons"), { recursive: true })
 writeFileSync(pub("brand/wordmark-dark.svg"), wordmark("#EEEAE1"))
 writeFileSync(pub("brand/wordmark-light.svg"), wordmark("#16150F"))
 const tile = appIcon(215, "tile")
 writeFileSync(pub("brand/app-icon.svg"), tile)
-writeFileSync(pub("favicon.svg"), favicon)
+// The favicon is the app icon itself (owner, 2026-11-28): a vector, so it stays sharp in any tab at any density.
+writeFileSync(pub("favicon.svg"), appIcon(245, "tile"))
 
-const png = (svg, size, out) => sharp(Buffer.from(svg), { density: 300 }).resize(size, size).png().toFile(pub(out))
-await png(tile, 192, "icons/icon-192.png")
-await png(tile, 512, "icons/icon-512.png")
+// Each PNG is rasterised at its own size (density chosen so the 1024 canvas lands on `size` px), not drawn large and
+// shrunk, and small sizes use bigger lettering (scale), so the letters stay crisp where an icon is shown small.
+// Browsers and launchers pick the closest size from the manifest, so there's one for each common slot.
+const scaleFor = (size) => (size <= 64 ? 260 : size <= 128 ? 240 : 215)
+const png = (svg, size, out) =>
+  sharp(Buffer.from(svg), { density: (72 * size) / 1024 }).resize(size, size).png({ compressionLevel: 9 }).toFile(pub(out))
+const ANY_SIZES = [48, 72, 96, 128, 144, 192, 256, 384, 512]
+for (const size of ANY_SIZES) await png(appIcon(scaleFor(size), "tile"), size, `icons/icon-${size}.png`)
 // maskable: full bleed, content inside the 80% safe circle; Apple rounds its own corners, so full bleed too
+await png(appIcon(190, "bleed"), 192, "icons/icon-maskable-192.png")
 await png(appIcon(190, "bleed"), 512, "icons/icon-maskable-512.png")
 await png(appIcon(205, "bleed"), 180, "icons/apple-touch-icon-180.png")
-await png(tile, 120, "brand/google-consent-120.png")
-const fav = await Promise.all([16, 32, 48].map((s) => sharp(Buffer.from(favicon), { density: 600 }).resize(s, s).png().toBuffer()))
+// Google OAuth consent screen: 120 px as Google asks, and 512 px in case the console takes a larger square (sharper on
+// high-density screens)
+await png(appIcon(250, "tile"), 120, "brand/google-consent-120.png")
+await png(appIcon(215, "tile"), 512, "brand/google-consent-512.png")
+const fav = await Promise.all([16, 32, 48].map((s) => sharp(Buffer.from(appIcon(scaleFor(s), "tile")), { density: (72 * s) / 1024 }).resize(s, s).png().toBuffer()))
 await ico.sharpsToIco(fav.map((b) => sharp(b)), pub("favicon.ico"), { sizes: [16, 32, 48] })
 console.log("brand assets written")

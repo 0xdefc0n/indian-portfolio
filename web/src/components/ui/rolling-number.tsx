@@ -6,9 +6,12 @@ const FAST = { duration: 220, easing: "ease-out" }
 
 type Props = { value: number; signed?: boolean; fast?: boolean; className?: string }
 
-/** ₹ amount whose digits roll to the new value (Indian grouping). */
-export function Money({ value, signed, fast, className }: Props) {
-  const format: Format = { style: "currency", currency: "INR", maximumFractionDigits: 0, signDisplay: signed ? "exceptZero" : "auto" }
+/** ₹ amount whose digits roll to the new value (Indian grouping). `short`: ₹18.9L / ₹69K, for tight rows on a phone. */
+export function Money({ value, signed, fast, className, short }: Props & { short?: boolean }) {
+  const format: Format = {
+    style: "currency", currency: "INR", maximumFractionDigits: short ? 1 : 0, signDisplay: signed ? "exceptZero" : "auto",
+    ...(short ? { notation: "compact", compactDisplay: "short" } : {}),
+  }
   return (
     <NumberFlow
       value={Math.round(value)}

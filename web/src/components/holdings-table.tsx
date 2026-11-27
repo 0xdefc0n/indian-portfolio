@@ -37,6 +37,8 @@ export function HoldingsTable({ holdings, total, members, showMember, highlight,
   const openFund = useOpenFund()
   const [by1d, setBy1d] = useState(false)
   const key = (h: Holding) => `${h.member_id}|${h.isin}`
+  // the 1D column only when today's change is known for at least one row (otherwise it's a column of dashes)
+  const has1d = !!oneDay && holdings.some((h) => oneDay.has(key(h)))
   const rows = by1d ? [...holdings].sort((a, b) => (oneDay?.get(key(b))?.change ?? -Infinity) - (oneDay?.get(key(a))?.change ?? -Infinity)) : holdings
   return (
     <Table>
@@ -46,7 +48,7 @@ export function HoldingsTable({ holdings, total, members, showMember, highlight,
           <TableHead className="hidden px-4 text-right md:table-cell">Units</TableHead>
           <TableHead className="hidden px-4 text-right md:table-cell">{priceLabel}</TableHead>
           <TableHead className="px-4 text-right">Value</TableHead>
-          {oneDay && (
+          {has1d && (
             <TableHead className="hidden px-4 text-right lg:table-cell" aria-sort={by1d ? "descending" : "none"}>
               <button
                 type="button"
@@ -82,9 +84,9 @@ export function HoldingsTable({ holdings, total, members, showMember, highlight,
                   {showMember && <span>{members.get(h.member_id)?.name.split(" ")[0]}</span>}
                   {h.score?.score != null && <ScoreChip score={h.score.score} index={h.score.index} />}
                   {h.sip && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 font-medium text-primary">
+                    <span className="inline-flex items-center gap-1">
                       <RepeatIcon className="size-3" />
-                      Active SIP: {inr(h.sip.amount)}
+                      SIP {inr(h.sip.amount)}
                       {per(h.sip.frequency)}
                     </span>
                   )}
@@ -94,7 +96,7 @@ export function HoldingsTable({ holdings, total, members, showMember, highlight,
               <TableCell className="hidden px-4 text-right text-muted-foreground md:table-cell">{nav(h.nav)}</TableCell>
               <TableCell className="px-4 text-right">
                 <div className="font-medium">{inr(h.value)}</div>
-                {oneDay && <div className="text-xs lg:hidden"><OneDay d={oneDay.get(key(h))} /></div>}
+                {has1d && <div className="text-xs lg:hidden"><OneDay d={oneDay!.get(key(h))} /></div>}
                 {h.invested ? (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -112,9 +114,9 @@ export function HoldingsTable({ holdings, total, members, showMember, highlight,
                   </Tooltip>
                 ) : null}
               </TableCell>
-              {oneDay && (
+              {has1d && (
                 <TableCell className="hidden px-4 text-right whitespace-nowrap lg:table-cell">
-                  <OneDay d={oneDay.get(key(h))} />
+                  <OneDay d={oneDay!.get(key(h))} />
                 </TableCell>
               )}
               <TableCell className="hidden pr-0 sm:table-cell">

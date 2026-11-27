@@ -1,13 +1,14 @@
-import { BuildingIcon, FileTextIcon, InfoIcon, Loader2Icon, SmartphoneIcon } from "lucide-react"
+import { BuildingIcon, FileTextIcon, InfoIcon, Loader2Icon } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { AppHeader } from "@/components/app-header"
 import { LegalFooter } from "@/components/legal-footer"
-import { AddStatementDialog } from "@/components/add-statement-dialog"
+import { type AddPick, AddAssetDialog, AddAssetTrigger, type Have } from "@/components/add-asset-dialog"
 import { type AssetDialogState, AssetDialogs } from "@/components/asset-dialogs"
 import { AddAssetButton, FixedIncome, GoldSilver } from "@/components/fixed-income"
 import type { Slice } from "@/components/allocation-strip"
 import { AssetsView } from "@/components/assets-view"
+import { AllocationDonut } from "@/components/allocation-donut"
 import { type AssetClass, AssetClasses, FamilyCard, type FamilyRow } from "@/components/family"
 import { type AssetKind, holdingKind } from "@/lib/asset-kind"
 import { BottomNav, type TabId, TabNav, useTab } from "@/components/tab-nav"
@@ -16,24 +17,22 @@ import { AllocationBreakdown, BenchmarkComparison, FundPerformance, FundReturns,
 import { PageTitle, Panel } from "@/components/panel"
 import { OfflinePanel } from "@/components/pwa"
 import { useAutoInstallPrompt, useReloadWhenOnline } from "@/lib/pwa"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ValueChart } from "@/components/value-chart"
 import { FundDialog } from "@/components/fund-dialog"
 import { StockExposure } from "@/components/stock-exposure"
 import {
-  ActivityGrid, AllocationDonut, Cell, CellHead, FundsTile, HeroFigures, HoldingBars, LargestTile, PartialNotice, ReturnBoxes, type Returns,
-  SipTile, SipTimeline,
+  ActivityGrid, Cell, CellHead, HeroFigures, HoldingBars, PartialNotice, ReturnBoxes, type Returns, SipTimeline,
 } from "@/components/overview"
 import { Segmented } from "@/components/ui/segmented"
 import { OpenFundContext } from "@/lib/fund-context"
 import {
   api, type Daily, type Holding, isOffline, type MarketStatus, type Me, type Member, type Portfolio, SignedOut, type StockCost, waitForPortfolio,
 } from "@/lib/api"
-import { DailyReturns, TodayTile } from "@/components/daily-returns"
+import { DailyReturns } from "@/components/daily-returns"
 import { byFund } from "@/lib/daily"
-import { day, inr, inrShort, pct } from "@/lib/format"
+import { day, inr, inrShort, monthly, pct } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { upcomingSips } from "@/lib/sips"
 import { holdingFlows, xirr } from "@/lib/xirr"
@@ -41,14 +40,9 @@ import { assetFlows, assetTotals, fixedOnly, forMember, metalsOnly, revalueSgbs,
 
 const EVERYONE = "all"
 
-function RequestLink({ onAdded, label }: { onAdded: () => void; label: string }) {
-  return (
-    <AddStatementDialog
-      onAdded={onAdded}
-      defaultTab="request"
-      trigger={<button className="-my-2 py-2 text-left text-primary underline-offset-4 hover:underline">{label}</button>}
-    />
-  )
+/** A link that opens Add asset on the statement upload. */
+function RequestLink({ onOpen, label }: { onOpen: () => void; label: string }) {
+  return <button type="button" onClick={onOpen} className="-my-2 py-2 text-left text-primary underline-offset-4 hover:underline">{label}</button>
 }
 
 const flowsLabel = (members: Member[]) =>
@@ -60,32 +54,23 @@ function MemberSwitch({ members, value, onChange }: { members: Member[]; value: 
 }
 
 /** Onboarding for an empty household (plan §13 item 4): what to upload, and how to get it. */
-function Onboarding({ onAdded, fixedIncome }: { onAdded: () => void; fixedIncome: React.ReactNode }) {
+function Onboarding({ onAdd, fixedIncome }: { onAdd: () => void; fixedIncome: React.ReactNode }) {
   return (
     <div className="grid grid-cols-1 gap-4 pt-3 sm:pt-4 md:grid-cols-6 lg:grid-cols-12">
-      <Cell className="dot-texture flex flex-col sm:p-7 md:col-span-6 lg:col-span-12" lift={false} label="Welcome">
+      <Cell className="glass-hero flex flex-col justify-center sm:p-8 md:col-span-6 lg:col-span-7" lift={false} label="Welcome">
         <span className="eyebrow">Welcome to PocketFolio</span>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">Your family's mutual funds, in one place.</h1>
+        <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">Your family's investments, in one place</h1>
         <p className="mt-3 max-w-xl text-muted-foreground">
           Add a consolidated statement for each family member. We'll file it under the right person automatically and
           keep the dashboard on the latest NAVs.
         </p>
         <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
-          <AddStatementDialog onAdded={onAdded} trigger={<Button size="lg" className="h-11">Add statement</Button>} />
-          <AddStatementDialog
-            onAdded={onAdded}
-            defaultTab="request"
-            trigger={<button className="min-h-11 text-left text-sm text-primary underline-offset-4 hover:underline">Don't have one? Get your CAMS/KFintech statement</button>}
-          />
-        </div>
-        <div className="mt-6 flex min-h-11 items-center gap-2 text-sm text-muted-foreground" aria-disabled="true">
-          <SmartphoneIcon className="size-4" />
-          Fetch from CDSL with OTP
-          <Badge variant="secondary">Coming soon</Badge>
+          <Button size="lg" className="h-11" onClick={onAdd}>Add asset</Button>
         </div>
       </Cell>
-      {fixedIncome}
-      <Cell className="md:col-span-3 lg:col-span-6" delay={80} label="CDSL eCAS">
+      {/* which statement to add, right beside the button that adds it */}
+      <div className="flex min-w-0 flex-col gap-4 md:col-span-6 lg:col-span-5">
+      <Cell className="flex-1" delay={80} label="CDSL eCAS">
         <div className="mb-4 grid size-10 place-items-center rounded-xl bg-background ring-1 ring-border">
           <BuildingIcon className="size-5 text-primary" />
         </div>
@@ -95,7 +80,7 @@ function Onboarding({ onAdded, fixedIncome }: { onAdded: () => void; fixedIncome
           letters.
         </p>
       </Cell>
-      <Cell className="md:col-span-3 lg:col-span-6" delay={140} label="CAMS / KFintech CAS">
+      <Cell className="flex-1" delay={140} label="CAMS / KFintech CAS">
         <div className="mb-4 grid size-10 place-items-center rounded-xl bg-background ring-1 ring-border">
           <FileTextIcon className="size-5 text-primary" />
         </div>
@@ -105,6 +90,8 @@ function Onboarding({ onAdded, fixedIncome }: { onAdded: () => void; fixedIncome
           SIPs and capital gains. Choose “Detailed” with the earliest start date.
         </p>
       </Cell>
+      </div>
+      {fixedIncome}
     </div>
   )
 }
@@ -145,11 +132,10 @@ function UpdatingBanner({ stale }: { stale: boolean }) {
 function LoadingState() {
   return (
     <div className="grid gap-4 lg:grid-cols-12">
-      <Skeleton className="h-[540px] rounded-[22px] lg:col-span-8" />
-      <Skeleton className="h-[540px] rounded-[22px] lg:col-span-4" />
-      <Skeleton className="h-44 rounded-[22px] lg:col-span-4" />
-      <Skeleton className="h-44 rounded-[22px] lg:col-span-4" />
-      <Skeleton className="h-44 rounded-[22px] lg:col-span-4" />
+      <Skeleton className="h-[540px] rounded-[24px] lg:col-span-8" />
+      <Skeleton className="h-[540px] rounded-[24px] lg:col-span-4" />
+      {/* the four asset-class cards */}
+      {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-36 rounded-[20px] lg:col-span-3" />)}
     </div>
   )
 }
@@ -199,7 +185,8 @@ export default function App({ me }: { me: Me }) {
     if (q.has("source") || q.has("view") || q.has("action")) history.replaceState(null, "", window.location.pathname + window.location.hash)
     return s
   })
-  const [adding, setAdding] = useState(shortcut === "add")
+  // Add asset (one dialog for the page): "list" opens the list, a pick opens that form
+  const [add, setAdd] = useState<AddPick | "list" | null>(shortcut === "add" ? "list" : null)
 
   // Daily returns (plan §10.5.3): asked for after the snapshot, per member key; the overview never waits on it.
   // undefined = loading, null = unavailable.
@@ -213,6 +200,9 @@ export default function App({ me }: { me: Me }) {
   }, [data, who, hasMembers])
   // undefined while the answer for this snapshot and member is on its way
   const daily = dailyGot && dailyGot.data === data && dailyGot.who === who ? dailyGot.d : undefined
+  // the hero's chip: today's change once daily returns are in (M12), else the month-on-month change
+  const todayChange = daily?.today && daily.today.pct && daily.as_of ? { change: daily.today.change, base: daily.today.change / daily.today.pct, date: daily.as_of } : null
+  const dailyReady = !!daily && daily.series.length >= 2
 
   const [market, setMarket] = useState<MarketStatus | null>(null)
   useEffect(() => {
@@ -396,9 +386,28 @@ export default function App({ me }: { me: Me }) {
     ]
   }, [view])
   const pickMembers = useMemo(() => (data?.members ?? []).map((m) => ({ id: m.id, name: m.name })), [data])
+  // what the family has, for the Add asset list: kinds already added go last; buy prices show once shares lack them
+  const have = useMemo<Have>(() => {
+    const h: Have = { uncosted: 0 }
+    for (const x of data?.holdings ?? []) {
+      const k = holdingKind(x)
+      if (k === "mf") h.mf = (h.mf ?? 0) + 1
+      if (k === "stock" || k === "etf") {
+        h.listed = (h.listed ?? 0) + 1
+        if (!costs.some((c) => c.isin === x.isin && c.member_id === x.member_id)) h.uncosted! += 1
+      }
+    }
+    for (const a of assets.assets ?? []) h[a.type] = (h[a.type] ?? 0) + 1
+    return h
+  }, [data, costs, assets.assets])
   const assetMemberName = (id: string | null) => (id ? memberMap.get(id)?.name.split(" ")[0] : undefined)
-  const openFixedIncome = (id = "fixed-income") => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })
   const switchMember = (v: string) => { setWho(v); setCategory(null) }
+  /** A donut slice: Assets, filtered to that category (FD/PPF/EPF and gold added by hand open their group). */
+  const openCategory = (c: string) => {
+    const h = view?.allHoldings.find((x) => x.category === c)
+    const kind: AssetKind = h ? holdingKind(h) : view?.metals.some((r) => r.category === c) ? "gold" : "fixed"
+    setAssetKind(kind); setCategory(h ? c : null); setHovered(null); setTab("assets")
+  }
   const openClass = (key: string) => {
     const kind: AssetKind = key === "listed" ? (view?.allHoldings.some((h) => holdingKind(h) === "stock") ? "stock" : "etf") : (key as AssetKind)
     setAssetKind(kind); setCategory(null); setTab("assets")
@@ -421,7 +430,7 @@ export default function App({ me }: { me: Me }) {
     if (data.members.length > 0) openDaily()
   }, [shortcut, data, openDaily])
 
-  useAutoInstallPrompt({ ready: !!ready, busy: updating || adding })
+  useAutoInstallPrompt({ ready: !!ready, busy: updating || !!add })
 
   /** Open a tab, then scroll to a section in it once it has rendered. */
   const goTo = useCallback((to: TabId, anchor?: string) => {
@@ -434,6 +443,29 @@ export default function App({ me }: { me: Me }) {
     sipsLinkDone.current = true
     goTo("assets", "sips")
   }, [sipsLink, ready, goTo])
+
+  // Overview side column (unslop pass): only cards with something in them
+  const hasSips = upcoming.list.length > 0 || upcoming.running.length > 0
+  // Coming up is not first-glance information (owner): it sits at the end of the overview, only when there are SIPs
+  const side = multi ? ["family"] : []
+  const assetClasses = (compact: boolean) => view && (
+    <>
+      <div className="mb-3 flex items-baseline justify-between gap-3 px-1">
+        <h2 className="text-base font-semibold tracking-tight">Where it's invested</h2>
+        <span className="eyebrow">{who === EVERYONE ? (multi ? "Whole family" : "") : view.members[0]?.name.split(" ")[0]}</span>
+      </div>
+      <AssetClasses
+        compact={compact}
+        classes={classes}
+        total={view.grandTotal}
+        onOpen={openClass}
+        addable={{
+          fixed: { label: "Add FD, PPF or EPF", onAdd: () => setAssetDlg({ kind: "add", group: "fixed", member: who === EVERYONE ? undefined : who }) },
+          gold: { label: "Add gold or silver", onAdd: () => setAssetDlg({ kind: "add", group: "metal", member: who === EVERYONE ? undefined : who }) },
+        }}
+      />
+    </>
+  )
 
   const viewAll = (to: TabId, label: string, anchor?: string) => (
     <button className="-my-3 inline-flex min-h-11 items-center text-primary underline-offset-4 hover:underline" onClick={() => goTo(to, anchor)}>
@@ -448,7 +480,7 @@ export default function App({ me }: { me: Me }) {
         me={me}
         onHome={() => setTab("overview")}
         nav={ready ? <TabNav tab={tab} onChange={setTab} counts={{ assets: view.allHoldings.length + view.manual.length }} /> : undefined}
-        actions={data && data.members.length > 0 ? <AddStatementDialog onAdded={load} /> : undefined}
+        actions={data && data.members.length > 0 ? <AddAssetTrigger onClick={() => setAdd("list")} /> : undefined}
       />
 
       <main className="mx-auto max-w-[1240px] px-4 pb-4 sm:px-7 md:pb-12">
@@ -461,14 +493,14 @@ export default function App({ me }: { me: Me }) {
         {!data && !error && !offline && <div className="pt-8"><LoadingState /></div>}
         {data && data.members.length === 0 && (data.building ? <BuildingState /> : (
           <Onboarding
-            onAdded={load}
+            onAdd={() => setAdd("list")}
             fixedIncome={
               <>
-                <Cell className="md:col-span-6 lg:col-span-12" delay={200} lift={false} label="Fixed income">
+                <Cell className="md:col-span-3 lg:col-span-6" delay={200} lift={false} label="Fixed income">
                   <CellHead title="Fixed income" aside={fixedOnly(assetRows).length ? <AddAssetButton onClick={() => setAssetDlg({ kind: "add", group: "fixed" })} /> : undefined} />
                   <FixedIncome rows={fixedOnly(assetRows)} failed={assets.failed} onAction={setAssetDlg} onChanged={assets.reload} />
                 </Cell>
-                <Cell className="md:col-span-6 lg:col-span-12" delay={240} lift={false} label="Gold and silver">
+                <Cell className="md:col-span-3 lg:col-span-6" delay={240} lift={false} label="Gold and silver">
                   <CellHead title="Gold & silver" aside={metalsOnly(assetRows).length ? <AddAssetButton onClick={() => setAssetDlg({ kind: "add", group: "metal" })} /> : undefined} />
                   <GoldSilver rows={metalsOnly(assetRows)} failed={assets.failed} onAction={setAssetDlg} onChanged={assets.reload} />
                 </Cell>
@@ -487,9 +519,10 @@ export default function App({ me }: { me: Me }) {
             {multi && tab !== "overview" && <MemberSwitch members={data.members} value={who} onChange={switchMember} />}
 
             {tab === "overview" && (
+              // v2 after the unslop pass: every figure once. Phone order (max-lg): hero, asset classes, coming up,
+              // family, holdings, activity. Desktop: hero with Family and Coming up beside it, then the rest.
               <div className="grid grid-cols-1 gap-4 md:grid-cols-6 lg:grid-cols-12 lg:gap-5">
-                {/* v2 (M24): the hero's chart drives the number; Family and Coming up sit beside it */}
-                <Cell className="glass-hero flex flex-col sm:p-7 md:col-span-6 lg:col-span-8" lift={false} label="Portfolio value">
+                <Cell className={cn("glass-hero flex flex-col sm:p-7 md:col-span-6", side.length ? "lg:col-span-8" : "lg:col-span-12")} lift={false} label="Portfolio value">
                   <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
                     {multi ? <div className="lg:hidden"><MemberSwitch members={data.members} value={who} onChange={switchMember} /></div> : <span />}
                     {view.valueDate && <span className="eyebrow">NAVs of {day(view.valueDate)}</span>}
@@ -498,15 +531,9 @@ export default function App({ me }: { me: Me }) {
                     total={view.grandTotal}
                     change={view.change}
                     prev={view.prev}
+                    today={todayChange}
                     label={who === EVERYONE ? (multi ? "Family net worth" : "Net worth") : `${view.members[0]?.name.split(" ")[0]}'s net worth`}
                   />
-                  {view.est.n > 0 && (
-                    <p className="mt-3 max-w-xl text-[13px] text-muted-foreground">
-                      At the latest NAV, with {view.est.n} SIP instalment{view.est.n === 1 ? "" : "s"} ({inr(view.est.amount)}) estimated since
-                      your statement of {day(view.asOf)}
-                      {view.est.running > 0 && <>, {view.est.running} still in progress</>}. A newer statement replaces the estimates.
-                    </p>
-                  )}
                   <div className="mt-6 flex flex-1 flex-col">
                     <ValueChart
                       data={view.history}
@@ -527,133 +554,87 @@ export default function App({ me }: { me: Me }) {
                       </p>
                     )}
                   </div>
-                  <div className="mt-6 border-t border-border pt-5">
+                  <div className="mt-6 border-t border-border pt-4">
                     {view.dashReturns?.complete ? (
-                      <ReturnBoxes returns={view.dashReturns} />
+                      <div className="pt-1"><ReturnBoxes returns={view.dashReturns} /></div>
+                    ) : view.returns ? (
+                      <PartialNotice
+                        inline
+                        returns={view.returns}
+                        included={view.allHoldings.filter((h) => h.invested != null && h.cashflows?.length).map((h) => h.name)}
+                        missing={view.allHoldings.filter((h) => !(h.invested != null && h.cashflows?.length)).map((h) => h.name)}
+                        total={view.total}
+                        request={(label) => <RequestLink onOpen={() => setAdd("mf")} label={label} />}
+                      />
                     ) : (
                       <p className="max-w-xl text-sm text-muted-foreground">
-                        Invested amount, returns and XIRR show here once every fund has its full purchase history
-                        {view.returns ? " (partial figures are under Partial data below)" : ""}.{" "}
-                        <RequestLink onAdded={load} label="Request a full statement" />
+                        Invested amount, returns and XIRR show here once a fund has its full purchase history.{" "}
+                        <RequestLink onOpen={() => setAdd("mf")} label="Add a full CAMS / KFintech statement" />
                       </p>
                     )}
                   </div>
                 </Cell>
 
-                <div className="flex min-w-0 flex-col gap-4 md:col-span-6 lg:col-span-4 lg:gap-5">
-                  {multi ? (
-                    <Cell delay={80} lift={false} label="Family">
-                      <CellHead title="Family" aside={<span className="text-muted-foreground">Tap to focus</span>} />
-                      <FamilyCard rows={family} value={who} onChange={switchMember} />
-                    </Cell>
-                  ) : (
-                    <Cell delay={80} label="Allocation">
-                      <CellHead title="Allocation" aside={<span className="eyebrow">{view.allSlices.length} categories</span>} />
-                      <AllocationDonut
-                        slices={view.allSlices}
-                        total={view.grandTotal}
-                        funds={view.allHoldings.length}
-                        others={view.manual.length}
-                        onSelect={(c) => {
-                          if (!view.slices.some((s) => s.category === c)) return openFixedIncome(view.metals.some((r) => r.category === c) ? "gold-silver" : "fixed-income") // added by hand
-                          const h = view.allHoldings.find((x) => x.category === c)
-                          setAssetKind(h ? holdingKind(h) : null)
-                          setCategory(c); setHovered(null); setTab("assets")
-                        }}
-                      />
+                {/* Beside the hero: Family (2+ members) with the asset classes as a 2×2 grid under it, so the column matches
+                    the hero. One member: the hero takes the full width and the asset classes follow in a row. */}
+                {side.length > 0 && (
+                  <div className="flex min-w-0 flex-col gap-4 max-lg:order-3 md:col-span-6 lg:col-span-4 lg:gap-5">
+                    {side.includes("family") && (
+                      <Cell className="max-lg:order-2" delay={80} lift={false} label="Family">
+                        <CellHead title="Family" aside={<span className="text-muted-foreground">Tap to focus</span>} />
+                        <FamilyCard rows={family} value={who} onChange={switchMember} />
+                      </Cell>
+                    )}
+                    {side.length === 1 && <div className="hidden lg:block">{assetClasses(true)}</div>}
+                  </div>
+                )}
 
-                    </Cell>
-                  )}
-                  <Cell className="flex-1" delay={140} label="Upcoming SIPs">
+                <section aria-label="Where it's invested" className={cn("max-lg:order-2 md:col-span-6 lg:col-span-12", side.length === 1 && "lg:hidden")}>
+                  {assetClasses(false)}
+                </section>
+
+                {/* Two half-and-half rows (owner): holdings beside allocation, then coming up beside recent activity.
+                    A card with nothing to show drops out and its partner takes the full width. */}
+                <Cell className={cn("max-lg:order-4 md:col-span-6", view.allSlices.length ? "lg:col-span-6" : "lg:col-span-12")} delay={340} label="Top holdings">
+                  <CellHead title="Top holdings" aside={viewAll("assets", `View all ${view.allHoldings.length + view.manual.length}`)} />
+                  <HoldingBars holdings={view.allHoldings} total={view.total} members={memberMap} showMember={showMember} />
+                </Cell>
+                {view.allSlices.length > 0 && (
+                  <Cell className="flex flex-col max-lg:order-5 md:col-span-6 lg:col-span-6" delay={380} label="Allocation">
+                    <CellHead title="Allocation" aside={<span className="text-muted-foreground">{view.allSlices.length} categories</span>} />
+                    {/* centred in the card, so a taller Top holdings beside it never leaves a gap at the bottom */}
+                    <div className="flex flex-1 flex-col justify-center">
+                      <AllocationDonut side slices={view.allSlices} total={view.grandTotal} funds={view.allHoldings.length} others={view.manual.length} onSelect={openCategory} />
+                    </div>
+                  </Cell>
+                )}
+
+                {hasSips && (
+                  <Cell className={cn("max-lg:order-6 md:col-span-6", view.activity.length ? "lg:col-span-6" : "lg:col-span-12")} delay={420} label="Coming up">
                     <CellHead
-                      title="Upcoming SIPs"
-                      aside={upcoming.list.length ? <span className="eyebrow">Next {upcoming.days} day{upcoming.days === 1 ? "" : "s"}</span> : undefined}
+                      title="Coming up"
+                      aside={activeSips.length ? (
+                        <span className="text-muted-foreground">
+                          {inr(activeSips.reduce((t, x) => t + monthly(x.amount, x.frequency), 0))} a month · {activeSips.length} SIP{activeSips.length === 1 ? "" : "s"}
+                        </span>
+                      ) : undefined}
                     />
                     <SipTimeline upcoming={upcoming} members={memberMap} showMember={showMember} />
                     {activeSips.length > 0 && <div className="mt-2 text-[13px]"><button className="-my-3 inline-flex min-h-11 items-center text-primary underline-offset-4 hover:underline" onClick={() => { setAssetKind("mf"); setCategory(null); goTo("assets", "sips") }}>View all SIPs</button></div>}
-
-                  </Cell>
-                </div>
-
-                <section aria-label="Where it's invested" className="md:col-span-6 lg:col-span-12">
-                  <div className="mb-3 flex items-baseline justify-between gap-3 px-1">
-                    <h2 className="text-base font-semibold tracking-tight">Where it's invested</h2>
-                    <span className="eyebrow">{who === EVERYONE ? (multi ? "Whole family" : "") : view.members[0]?.name.split(" ")[0]}</span>
-                  </div>
-                  <AssetClasses classes={classes} total={view.grandTotal} onOpen={openClass} />
-                </section>
-
-                <Cell className="min-h-[172px] md:col-span-3 lg:col-span-3" delay={120} label="Today">
-                  <TodayTile daily={daily} onOpen={openDaily} />
-                </Cell>
-                <Cell className="min-h-[172px] md:col-span-3 lg:col-span-3" delay={160}>
-                  <SipTile sips={activeSips} missing={view.sipsMissing.length > 0} />
-                </Cell>
-                <Cell className="min-h-[172px] md:col-span-3 lg:col-span-3" delay={200}>
-                  <LargestTile holding={view.allHoldings[0]} total={view.total} />
-                </Cell>
-                <Cell className="min-h-[172px] md:col-span-3 lg:col-span-3" delay={240}>
-                  <FundsTile holdings={view.allHoldings} />
-                </Cell>
-
-                {view.returns && !view.returns.complete && (
-                  <PartialNotice
-                    returns={view.returns}
-                    included={view.allHoldings.filter((h) => h.invested != null && h.cashflows?.length).map((h) => h.name)}
-                    missing={view.allHoldings.filter((h) => !(h.invested != null && h.cashflows?.length)).map((h) => h.name)}
-                    total={view.total}
-                    request={(label) => <RequestLink onAdded={load} label={label} />}
-                  />
-                )}
-
-                <Cell className={cn("md:col-span-6", multi ? "lg:col-span-7" : "lg:col-span-12")} delay={340} label="Top holdings">
-                  <CellHead title="Top holdings" aside={viewAll("assets", `View all ${view.allHoldings.length + view.manual.length}`)} />
-                  <HoldingBars holdings={view.allHoldings} total={view.total} members={memberMap} showMember={showMember} />
-
-                </Cell>
-                {multi && (
-                  <Cell className="md:col-span-6 lg:col-span-5" delay={390} label="Allocation">
-                    <CellHead title="Allocation" aside={<span className="eyebrow">{view.allSlices.length} categories</span>} />
-                    <AllocationDonut
-                      slices={view.allSlices}
-                      total={view.grandTotal}
-                      funds={view.allHoldings.length}
-                      others={view.manual.length}
-                      onSelect={(c) => {
-                        if (!view.slices.some((s) => s.category === c)) return openFixedIncome(view.metals.some((r) => r.category === c) ? "gold-silver" : "fixed-income") // added by hand
-                        const h = view.allHoldings.find((x) => x.category === c)
-                        setAssetKind(h ? holdingKind(h) : null)
-                        setCategory(c); setHovered(null); setTab("assets")
-                      }}
-                    />
-
                   </Cell>
                 )}
-
-                <div id="fixed-income" className="scroll-mt-24 md:col-span-6 lg:col-span-12">
-                  <Cell className="h-full" delay={420} lift={false} label="Fixed income">
-                    <CellHead
-                      title="Fixed income"
-                      aside={view.fixed.length ? <span className="flex items-center gap-3"><span className="eyebrow">{inr(view.fixedTotal)}</span><AddAssetButton onClick={() => setAssetDlg({ kind: "add", group: "fixed", member: who === EVERYONE ? undefined : who })} /></span> : undefined}
+                {view.activity.length > 0 && (
+                  <Cell className={cn("max-lg:order-7 md:col-span-6", hasSips ? "lg:col-span-6" : "lg:col-span-12")} delay={460} label="Recent activity">
+                    <CellHead title="Recent activity" aside={viewAll("transactions", "View all")} />
+                    {/* beside Coming up: about as many rows as its timeline and list take; alone: two columns */}
+                    <ActivityGrid
+                      items={view.activity.slice(0, hasSips ? Math.min(5, upcoming.list.length + upcoming.running.length + 2) : 6)}
+                      members={memberMap}
+                      showMember={showMember}
+                      columns={hasSips ? 1 : 2}
                     />
-                    <FixedIncome rows={view.fixed} memberName={showMember ? assetMemberName : undefined} failed={assets.failed} onAction={setAssetDlg} onChanged={assets.reload} />
                   </Cell>
-                </div>
-
-                <div id="gold-silver" className="scroll-mt-24 md:col-span-6 lg:col-span-12">
-                  <Cell className="h-full" delay={430} lift={false} label="Gold and silver">
-                    <CellHead
-                      title="Gold & silver"
-                      aside={view.metals.length ? <span className="flex items-center gap-3"><span className="eyebrow">{inr(view.metalTotal)}</span><AddAssetButton onClick={() => setAssetDlg({ kind: "add", group: "metal", member: who === EVERYONE ? undefined : who })} /></span> : undefined}
-                    />
-                    <GoldSilver rows={view.metals} memberName={showMember ? assetMemberName : undefined} failed={assets.failed} onAction={setAssetDlg} onChanged={assets.reload} />
-                  </Cell>
-                </div>
-
-                <Cell className="md:col-span-6 lg:col-span-12" delay={440} lift={false} label="Latest transactions">
-                  <CellHead title="Latest transactions" aside={view.activity.length ? viewAll("transactions", "View all") : undefined} />
-                  <ActivityGrid items={view.activity.slice(0, 6)} members={memberMap} showMember={showMember} />
-                </Cell>
+                )}
               </div>
             )}
 
@@ -684,23 +665,15 @@ export default function App({ me }: { me: Me }) {
 
             {tab === "insights" && (
               <>
-                <PageTitle title="Insights" detail="Worked out from the uploaded statements." />
+                <PageTitle title="Insights" detail="Worked out from the uploaded statements" />
 
-                <div id="daily-returns" className="scroll-mt-24">
-                  <Panel title="Daily returns">
-                    <DailyReturns daily={daily} />
-                  </Panel>
-                </div>
-
-                <Panel title="Allocation">
-                  <AllocationBreakdown holdings={view.allHoldings} total={view.total} fixedIncome={view.fixedTotal} gold={view.metalTotal} />
+                <Panel title="Allocation" aside={`${view.allSlices.length} categories`}>
+                  {/* the donut by category on the left; asset class and fund house stacked beside it */}
+                  <div className="grid gap-8 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-12">
+                    <AllocationDonut slices={view.allSlices} total={view.grandTotal} funds={view.allHoldings.length} others={view.manual.length} onSelect={openCategory} />
+                    <AllocationBreakdown stacked holdings={view.allHoldings} total={view.total} fixedIncome={view.fixedTotal} gold={view.metalTotal} />
+                  </div>
                 </Panel>
-
-                {data?.stocks?.enabled && (
-                  <Panel title="Stocks you own through funds">
-                    <StockExposure holdings={view.allHoldings} total={view.total} members={view.members} showMember={showMember} data={data.stocks} />
-                  </Panel>
-                )}
 
                 <div className={cn("grid gap-6", view.flowsKnown && "lg:grid-cols-2")}>
                   <Panel title="Versus the Nifty 50">
@@ -713,17 +686,40 @@ export default function App({ me }: { me: Me }) {
                   )}
                 </div>
 
+                {dailyReady && (
+                  <div id="daily-returns" className="scroll-mt-24">
+                    <Panel title="Daily returns">
+                      <DailyReturns daily={daily} />
+                    </Panel>
+                  </div>
+                )}
+
                 <Panel title="Your returns by fund" aside="Funds with full purchase history">
                   <FundPerformance holdings={view.allHoldings} members={memberMap} showMember={showMember} />
                 </Panel>
 
-                <Panel title="Fund track record" aside="1, 3 and 5 years">
+                {data?.stocks?.enabled && (
+                  <Panel title="Stocks you own through funds">
+                    <StockExposure holdings={view.allHoldings} total={view.total} members={view.members} showMember={showMember} data={data.stocks} />
+                  </Panel>
+                )}
+
+                <Panel title="Fund track record" aside="Fund NAV returns">
                   <FundReturns holdings={view.allHoldings} benchmark={data?.benchmark ?? null} />
                 </Panel>
 
                 <Panel title="Money in and out">
                   <MoneyFlow analyses={view.members.map((m) => m.analysis)} activity={view.activity} members={memberMap} showMember={showMember} />
                 </Panel>
+
+                {!dailyReady && (
+                  // no daily NAVs yet (or still loading): a quiet line at the end instead of an empty panel at the top
+                  <div id="daily-returns" className="scroll-mt-24">
+                    <Panel title="Daily returns">
+                      <DailyReturns daily={daily} />
+                    </Panel>
+                  </div>
+                )}
               </>
             )}
 
@@ -742,8 +738,8 @@ export default function App({ me }: { me: Me }) {
         )}
       </main>
       <LegalFooter className={ready ? "pb-28 md:pb-8" : undefined} />
-      {/* the "Add statement" shortcut; the header and onboarding have their own buttons */}
-      <AddStatementDialog onAdded={load} trigger={null} open={adding} onOpenChange={setAdding} />
+      <AddAssetDialog trigger={null} open={!!add} start={add && add !== "list" ? add : undefined} onOpenChange={(o) => { if (!o) setAdd(null) }}
+        onAdded={load} onAssetSaved={assets.reload} members={pickMembers} rates={assets.rates} have={have} member={who === EVERYONE ? undefined : who} />
       <AssetDialogs state={assetDlg} members={pickMembers} rates={assets.rates} onClose={() => setAssetDlg(null)} onSaved={assets.reload} onState={setAssetDlg} />
       {ready && <BottomNav tab={tab} onChange={setTab} />}
       <FundDialog

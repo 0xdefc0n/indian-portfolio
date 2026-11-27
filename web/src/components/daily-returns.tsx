@@ -5,7 +5,6 @@ import { useMemo, useState } from "react"
 import { Bar, BarChart, CartesianGrid, Cell, ReferenceLine, XAxis, YAxis } from "recharts"
 
 import { type ChartConfig, ChartContainer, ChartTooltip } from "@/components/ui/chart"
-import { Money, Percent } from "@/components/ui/rolling-number"
 import { Segmented } from "@/components/ui/segmented"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { Daily } from "@/lib/api"
@@ -33,55 +32,6 @@ function navLine(d: Daily): string[] {
     if (today.weekday && d.as_of! < today.iso) out.push("Today's NAVs usually arrive after 9 PM")
   }
   return out
-}
-
-/* ---------------------------------------------------------------- Today tile */
-
-export function TodayTile({ daily, onOpen }: { daily: Daily | null | undefined; onOpen: () => void }) {
-  const t = daily?.today
-  const bars = (daily?.series ?? []).slice(-30)
-  const max = Math.max(...bars.map((b) => Math.abs(b.change)), 1)
-  const tone = t && t.change >= 0 ? "gain" : "loss"
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      disabled={!t}
-      aria-label={t ? `Today ${signed(t.change, inr)}. Open daily returns` : "Today's change"}
-      className="flex h-full w-full flex-col gap-1.5 rounded-[14px] text-left focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
-    >
-      <span className="eyebrow">Today{daily && daily.coverage.updated < daily.coverage.total ? " so far" : ""}</span>
-      <div className={cn("mt-2 text-[34px] leading-tight font-semibold tracking-[-0.035em]", t && (tone === "gain" ? "text-gain" : "text-loss"))}>
-        {t ? <Money value={t.change} signed /> : "—"}
-      </div>
-      {t ? (
-        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px] text-muted-foreground">
-          {t.pct != null && (
-            <span className={cn("rounded-full px-2 py-0.5 text-[12.5px] font-semibold", tone === "gain" ? "bg-gain/15 text-gain" : "bg-loss/15 text-loss")}>
-              <Percent value={t.pct * 100} digits={2} signed />
-            </span>
-          )}
-          <span className="truncate">{navLine(daily!)[0]}</span>
-        </p>
-      ) : (
-        <p className="text-[13.5px] text-muted-foreground">{daily === undefined ? "Loading…" : "Shows once your funds have NAVs"}</p>
-      )}
-      {daily && t && navLine(daily)[1] && <p className="text-[12.5px] text-muted-foreground">{navLine(daily)[1]}</p>}
-      {bars.length > 1 && (
-        <div className="mt-auto flex h-12 gap-[3px] pt-3" aria-hidden>
-          {bars.map((b) => {
-            const h = `${Math.max((Math.abs(b.change) / max) * 100, 6)}%`
-            return (
-              <span key={b.date} className="flex h-full flex-1 flex-col">
-                <span className="flex flex-1 items-end">{b.change >= 0 && <span className="w-full rounded-t-[2px] bg-gain/70" style={{ height: h }} />}</span>
-                <span className="flex flex-1 items-start">{b.change < 0 && <span className="w-full rounded-b-[2px] bg-loss/70" style={{ height: h }} />}</span>
-              </span>
-            )
-          })}
-        </div>
-      )}
-    </button>
-  )
 }
 
 /* ---------------------------------------------------------------- Insights panel */
@@ -233,15 +183,24 @@ export function DailyReturns({ daily }: { daily: Daily | null | undefined }) {
         </BarChart>
       </ChartContainer>
 
-      <div className={cn("mt-6 grid gap-x-5 gap-y-4", months.length > 3 ? "grid-cols-3 sm:grid-cols-4 lg:grid-cols-6" : "grid-cols-2 sm:grid-cols-3")}>
-        {months.map((m) => <MonthGrid key={m} month={m} byDate={byDate} />)}
-      </div>
+      {/* The calendar adds a pattern view over 3M and 1Y. Over 1M the bars above already show every day, and two
+          month grids would leave the panel half empty, so it's left out there. Columns follow the month count. */}
+      {months.length > 2 && (
+        <>
+          <div
+            className={cn("mt-6 grid gap-x-5 gap-y-4", months.length > 4 ? "grid-cols-3 sm:grid-cols-4 lg:grid-cols-6" : "grid-cols-2 sm:[grid-template-columns:var(--months)]")}
+            style={{ "--months": `repeat(${months.length}, minmax(0, 1fr))` } as React.CSSProperties}
+          >
+            {months.map((m) => <MonthGrid key={m} month={m} byDate={byDate} />)}
+          </div>
       <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground" aria-hidden>
         <span>Loss</span>
         {[90, 55, 25].map((s) => <span key={`l${s}`} className="size-3 rounded-[3px]" style={{ background: `color-mix(in srgb, var(--loss) ${s}%, transparent)` }} />)}
         {[25, 55, 90].map((s) => <span key={`g${s}`} className="size-3 rounded-[3px]" style={{ background: `color-mix(in srgb, var(--gain) ${s}%, transparent)` }} />)}
         <span>Gain</span>
       </div>
+        </>
+      )}
 
       {flagged.length > 0 && (
         <p className="mt-4 flex items-center gap-1.5 text-xs text-muted-foreground">

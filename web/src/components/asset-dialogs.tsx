@@ -219,6 +219,21 @@ const GROUP_TYPES: Record<AssetGroup, { id: AssetType; label: string }[]> = {
   metal: [{ id: "gold", label: "Gold" }, { id: "silver", label: "Silver" }, { id: "sgb", label: "SGB" }],
 }
 
+/** One-choice chips (FD tenure, gold purity): the picked chip takes the app's selection style (gold tint and ring). */
+function Chips({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: { id: string; label: string }[] }) {
+  return (
+    <ToggleGroup type="single" variant="outline" size="sm" spacing={1.5} className="w-full flex-wrap" aria-label={label}
+      value={value} onValueChange={(v) => v && onChange(v)}>
+      {options.map((o) => (
+        <ToggleGroupItem key={o.id} value={o.id}
+          className="h-9 px-3 text-muted-foreground transition-[color,background-color,border-color,box-shadow] duration-300 hover:text-foreground pointer-coarse:h-11 data-[state=on]:border-primary/50 data-[state=on]:bg-primary/10 data-[state=on]:font-semibold data-[state=on]:text-foreground data-[state=on]:ring-1 data-[state=on]:ring-primary/25 data-[state=on]:hover:bg-primary/15">
+          {o.label}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  )
+}
+
 /** A native select in the Input's style (there's no Select component; §13 keeps the existing styles). */
 function SeriesSelect({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
   const today = todayIst()
@@ -232,17 +247,27 @@ function SeriesSelect({ id, value, onChange }: { id: string; value: string; onCh
   )
 }
 
-export function AssetForm({ open, asset, member, group = "fixed", members, rates, onClose, onSaved }: {
+/** Full names for a form picked from the Add asset list. */
+const TYPE_NAME: Record<AssetType, string> = { fd: "a fixed deposit", ppf: "PPF", epf: "EPF", gold: "gold", silver: "silver", sgb: "a Sovereign Gold Bond" }
+
+/**
+ * `preset`: the type was picked already (Add asset list), so the type switch is hidden.
+ * `embedded`: render inside another dialog (Add asset), with `back` above the title, instead of a dialog of its own.
+ */
+export function AssetForm({ open, asset, member, group = "fixed", preset, embedded = false, back, members, rates, onClose, onSaved }: {
   open: boolean
   asset?: AssetRow
   member?: string | null
   group?: AssetGroup
+  preset?: AssetType
+  embedded?: boolean
+  back?: React.ReactNode
   members: PickMember[]
   rates: RateTable
   onClose: () => void
   onSaved: () => void
 }) {
-  const [type, setType] = useState<AssetType>(asset?.type ?? GROUP_TYPES[group][0]!.id)
+  const [type, setType] = useState<AssetType>(asset?.type ?? preset ?? GROUP_TYPES[group][0]!.id)
   const [who, setWho] = useState<string>(asset ? (asset.member_id ?? "") : (member ?? (members.length === 1 ? members[0].id : "")))
   const [d, setD] = useState<Draft>(() => draftFrom(asset))
   const [busy, setBusy] = useState(false)
@@ -267,15 +292,15 @@ export function AssetForm({ open, asset, member, group = "fixed", members, rates
     if (ok) onSaved()
   }
 
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-md">
+  const body = (
+    <>
         <DialogHeader>
-          <DialogTitle>{asset ? `Edit ${TYPE_LABEL[type]}` : group === "metal" ? "Add gold or silver" : "Add FD, PPF or EPF"}</DialogTitle>
+          {back}
+          <DialogTitle>{asset ? `Edit ${TYPE_LABEL[type]}` : preset ? `Add ${TYPE_NAME[preset]}` : group === "metal" ? "Add gold or silver" : "Add FD, PPF or EPF"}</DialogTitle>
           <DialogDescription>{group === "metal" || isMetalType(type) ? "Only weights and dates, no bills or certificate numbers needed." : "Only amounts and dates, no account details needed."}</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="grid gap-4" noValidate>
-          {!asset && (
+          {!asset && !preset && (
             <Segmented kind="radio" label="Type" value={type} onChange={(t) => { setType(t); setError(null) }} options={GROUP_TYPES[group]} />
           )}
           {members.length > 1 && (
@@ -294,12 +319,7 @@ export function AssetForm({ open, asset, member, group = "fixed", members, rates
               </div>
               <div className="grid gap-2">
                 <span className="text-sm font-medium">Tenure</span>
-                <ToggleGroup type="single" variant="outline" size="sm" spacing={1.5} className="w-full flex-wrap" aria-label="Tenure"
-                  value={d.chip} onValueChange={(v) => v && set("chip")(v)}>
-                  {[...TENURE_CHIPS, { id: "custom", label: "Custom" }].map((c) => (
-                    <ToggleGroupItem key={c.id} value={c.id} className="h-9 px-3">{c.label}</ToggleGroupItem>
-                  ))}
-                </ToggleGroup>
+                <Chips label="Tenure" value={d.chip} onChange={set("chip")} options={[...TENURE_CHIPS, { id: "custom", label: "Custom" }]} />
                 {d.chip === "custom" && (
                   <div className="grid grid-cols-3 gap-3">
                     <Field id="fd-years" label="Years"><Input id="fd-years" inputMode="numeric" value={d.years} onChange={(e) => set("years")(e.target.value)} className="h-11" /></Field>
@@ -327,12 +347,8 @@ export function AssetForm({ open, asset, member, group = "fixed", members, rates
               {type === "gold" && (
                 <div className="grid gap-2">
                   <span className="text-sm font-medium">Purity</span>
-                  <ToggleGroup type="single" variant="outline" size="sm" spacing={1.5} className="w-full flex-wrap" aria-label="Purity"
-                    value={d.purity} onValueChange={(v) => v && set("purity")(v)}>
-                    {GOLD_PURITIES.map((p) => (
-                      <ToggleGroupItem key={p.purity} value={String(p.purity)} className="h-9 px-3">{p.karat} ({p.purity})</ToggleGroupItem>
-                    ))}
-                  </ToggleGroup>
+                  <Chips label="Purity" value={d.purity} onChange={set("purity")}
+                    options={GOLD_PURITIES.map((p) => ({ id: String(p.purity), label: `${p.karat} (${p.purity})` }))} />
                 </div>
               )}
               <More>
@@ -400,7 +416,12 @@ export function AssetForm({ open, asset, member, group = "fixed", members, rates
             </Button>
           </DialogFooter>
         </form>
-      </DialogContent>
+    </>
+  )
+  if (embedded) return body
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-md">{body}</DialogContent>
     </Dialog>
   )
 }

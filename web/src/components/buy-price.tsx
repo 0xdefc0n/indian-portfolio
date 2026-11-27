@@ -77,7 +77,7 @@ export function BuyPrice({ h, cost, onChanged }: { h: Holding; cost: StockCost |
           {src === "partial" && unknown > 0
             ? `The buy price of ${units(unknown)} of ${units(h.units)} shares isn't known (bought before your tradebook starts, or through another broker).`
             : "Your CDSL statement doesn't say what you paid."}{" "}
-          Add a broker tradebook (Add statement → Broker), or your average buy price below.
+          Add a broker tradebook (Add asset → Buy prices for shares), or your average buy price below.
         </p>
       )}
       {cost && !editing && (
