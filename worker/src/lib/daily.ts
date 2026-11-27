@@ -17,6 +17,11 @@
 // IDCW: a payout the statement shows in (p, d] is added back to that day. A day-on-day move the NAV store flagged
 // (nav_anomaly, ±20%) with no payout to explain it is left out of the day and flagged.
 //
+// Shares and bonds (M20) work the same way on their daily exchange closes: the snapshot marks them
+// `price_source: 'exchange'`, and the caller keys their series `px:{isin}` (`series_key`). A close-to-close move
+// beyond ±20% (the widest exchange price band) is flagged like a NAV jump: it's a corporate action the units don't
+// show yet.
+//
 // Privacy (§0.1): this runs on the user's own data for the user; nothing here logs.
 
 export type UnitsPoint = [string, number]
@@ -25,6 +30,10 @@ export type DailyHolding = {
   member_id: string
   isin: string
   amfi_code: string | null
+  /** 'exchange': a share or bond valued at its daily close (M20). */
+  price_source?: 'nav' | 'exchange' | 'statement'
+  /** The key of its series in `navs` (default: amfi_code). */
+  series_key?: string | null
   units_timeline: UnitsPoint[] | null
   units_exact?: boolean
   payouts?: [string, number][] | null
@@ -50,7 +59,7 @@ export type DailyResult = {
 export type DailyInput = {
   holdings: DailyHolding[]
   navs: Map<string, NavSeries>
-  /** `${amfi_code}|${iso date}` of flagged NAV moves (nav_anomaly). */
+  /** `${series key}|${iso date}` of flagged moves (nav_anomaly; ±20% exchange closes). */
   anomalies?: Set<string>
   /** The latest full market day (market status). Dates after it are ignored. */
   latest: string | null
@@ -104,19 +113,20 @@ export function unitsBefore(tl: UnitsPoint[], d: string, dates?: readonly string
   return unitsAt(tl, addDaysIso(d, -1), dates)
 }
 
-type Live = DailyHolding & { amfi_code: string; units_timeline: UnitsPoint[]; series: NavSeries; dates: string[] }
+type Live = DailyHolding & { key: string; units_timeline: UnitsPoint[]; series: NavSeries; dates: string[] }
 
 /** The daily series, today's change and the notes for the holdings given (already filtered to a member). */
 export function dailySeries(input: DailyInput): DailyResult {
   const live: Live[] = []
   let excluded = 0
   for (const h of input.holdings) {
-    const series = h.amfi_code ? input.navs.get(h.amfi_code) : undefined
-    if (!h.amfi_code || !h.units_timeline?.length || !series?.dates.length) {
+    const key = h.series_key ?? h.amfi_code
+    const series = key ? input.navs.get(key) : undefined
+    if (!key || !h.units_timeline?.length || !series?.dates.length) {
       excluded++
       continue
     }
-    live.push({ ...h, amfi_code: h.amfi_code, units_timeline: h.units_timeline, series, dates: h.units_timeline.map((p) => p[0]) })
+    live.push({ ...h, key, units_timeline: h.units_timeline, series, dates: h.units_timeline.map((p) => p[0]) })
   }
   const notes: DailyResult['notes'] = {
     units_as_of: live.map((h) => h.statement?.as_of ?? h.units_timeline.at(-1)![0]).sort().at(-1) ?? null,
@@ -127,7 +137,7 @@ export function dailySeries(input: DailyInput): DailyResult {
     },
     excluded,
   }
-  const codes = [...new Set(live.map((h) => h.amfi_code))]
+  const codes = [...new Set(live.map((h) => h.key))]
   const empty: DailyResult = { as_of: null, coverage: { updated: 0, total: codes.length }, today: null, series: [], notes }
   if (!live.length) return empty
 
@@ -166,12 +176,12 @@ export function dailySeries(input: DailyInput): DailyResult {
       if (navNow !== undefined) value += atEnd * navNow
       const nd = navOn(h.series, d)
       if (nd === undefined) continue // not published for d: its move rolls into its next market day
-      day.updated.add(h.amfi_code)
+      day.updated.add(h.key)
       const np = navOnOrBefore(h.series, p)
       const u = unitsBefore(h.units_timeline, d, h.dates)
       if (np === undefined || u <= 0) continue
       const paid = (h.payouts ?? []).filter(([t]) => t > p && t <= d).reduce((s, [, a]) => s + a, 0)
-      if (!paid && anomalies.has(`${h.amfi_code}|${d}`)) {
+      if (!paid && anomalies.has(`${h.key}|${d}`)) {
         flag = 'nav_jump'
         continue
       }

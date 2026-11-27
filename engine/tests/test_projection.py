@@ -276,7 +276,9 @@ def test_units_timeline_sources():
     beta = by[("m-beta", synthetic.F3["isin"])]  # two CDSL statements: two points
     assert [p[0] for p in beta["units_timeline"]] == ["2026-09-30", "2026-10-31"]
     eq = by[("m-alpha", synthetic.EQ["isin"])]  # a listed share: no NAV, not in daily returns
-    assert eq["amfi_code"] is None and eq["units_timeline"] is None and eq["value"] == eq["statement"]["value"]
+    # a share (M20): CDSL units at the statement date, valued at the latest exchange close
+    assert eq["amfi_code"] is None and eq["price_source"] == "exchange" and eq["units_timeline"] == [["2026-10-31", 10.0]]
+    assert eq["as_of"] == "2026-11-24" and eq["value"] == round(10 * eq["nav"], 2) != eq["statement"]["value"]
     assert all(h["amfi_code"] for h in snap["holdings"] if h["isin"].startswith("INF"))
 
 

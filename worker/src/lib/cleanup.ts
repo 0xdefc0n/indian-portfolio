@@ -130,12 +130,15 @@ async function appRows(env: CleanupEnv, now: number): Promise<number> {
   )
 }
 
-/** Public market data: schemes nobody has held for 90 days, and old NAV-run bookkeeping. */
+/** Public market data: schemes, shares and bonds nobody has held for 90 days, and old NAV-run bookkeeping. */
 async function marketRows(env: CleanupEnv, now: number): Promise<number> {
   const db = env.MARKET
   return changes(
     await db.batch([
       db.prepare('DELETE FROM tracked_scheme WHERE last_seen_at < ?1').bind(now - TRACKED_UNSEEN_MS),
+      // Shares and bonds nobody has held for 90 days, with their closes (M20). Their R2 series stay (a few KB each).
+      db.prepare('DELETE FROM stock_price WHERE isin IN (SELECT isin FROM tracked_equity WHERE last_seen_at < ?1)').bind(now - TRACKED_UNSEEN_MS),
+      db.prepare('DELETE FROM tracked_equity WHERE last_seen_at < ?1').bind(now - TRACKED_UNSEEN_MS),
       db.prepare('DELETE FROM nav_run WHERE at < ?1').bind(now - NAV_RUN_KEEP_MS),
     ]),
   )

@@ -128,7 +128,8 @@ function Body({ h, member, showMember, activity, sips, benchmark, stocks, allTxn
         <Fact label="XIRR" value={x == null ? "—" : signed(x * 100, (n) => pct(n, 2))} className={x == null ? "" : x >= 0 ? "text-gain" : "text-loss"} />
         <Fact label="Units" value={units(h.units)} />
         <Fact label="Average cost" value={avgCost == null ? "—" : inrExact(avgCost)} detail="per unit" />
-        <Fact label="Current NAV" value={h.nav == null ? "—" : `₹${nav(h.nav)}`} detail={h.as_of ? day(h.as_of) : undefined} />
+        <Fact label={h.isin.startsWith("INF") ? "Current NAV" : "Last price"} value={h.nav == null ? "—" : `₹${nav(h.nav)}`}
+          detail={h.as_of ? (h.price_source === "statement" && !h.isin.startsWith("INF") ? `${day(h.as_of)}, from your statement` : day(h.as_of)) : undefined} />
       </dl>
       {invested == null && (
         <p className="-mt-2 text-xs text-muted-foreground">

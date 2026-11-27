@@ -8,9 +8,12 @@
 //    Worker added ~250 ms to every cached call, the edge cache a few ms. It's the same sealed bytes (household key), so
 //    the edge holds nothing readable, and crypto-shredding the household makes it useless too.
 // 1. Otherwise: open the snapshot (units timelines, AMFI codes), read the window's NAVs and flagged NAV moves in one
-//    batch on a MARKET read replica (D17), run dailySeries(), and store the result.
+//    batch on a MARKET read replica (D17), run dailySeries(), and store the result. Shares and bonds valued at
+//    exchange prices (M20) add their closes to the same batch, keyed `px:{isin}`.
 import type { MarketStatus } from '../routes/market'
 import { blobKeys, deletePrefix, getJsonBlob, openJson, ownsKey, sealJson } from './blob'
+import { ANOMALY_MOVE } from '../market/amfi'
+import { EQUITY_ISIN } from '../market/prices'
 import { addDaysIso, type DailyHolding, type DailyResult, dailySeries, LEAD_DAYS, type NavSeries, sliceDays } from './daily'
 import type { Vault } from './crypto'
 
@@ -18,7 +21,7 @@ import type { Vault } from './crypto'
 export const DAILY_FULL_DAYS = 366
 /** A partial-coverage entry is recomputed after this long, so late NAVs show up. */
 export const DAILY_PARTIAL_FRESH_MS = 30 * 60_000
-const CACHE_FORMAT = 1
+const CACHE_FORMAT = 2 // 2: shares and bonds included (M20)
 
 type CacheBlob = { format: number; computed_at: number; partial: boolean; result: DailyResult }
 type Snapshot = { holdings?: DailyHolding[] }
@@ -90,11 +93,14 @@ export async function dailyFor(env: Env, req: DailyRequest): Promise<DailyAnswer
 
   if (!ownsKey(req.householdId, req.snapshotKey)) throw new Error('snapshot key outside the household')
   const snap = await getJsonBlob<Snapshot>(env, req.vault, req.snapshotKey)
-  const holdings = (snap?.holdings ?? []).filter((h) => req.member === 'all' || h.member_id === req.member)
+  const holdings = (snap?.holdings ?? [])
+    .filter((h) => req.member === 'all' || h.member_id === req.member)
+    .map((h) => (h.price_source === 'exchange' && EQUITY_ISIN.test(h.isin) ? { ...h, series_key: priceKey(h.isin) } : h))
   const codes = [...new Set(holdings.map((h) => h.amfi_code).filter((c): c is string => !!c && /^\d{1,9}$/.test(c)))]
+  const isins = [...new Set(holdings.filter((h) => h.series_key).map((h) => h.isin))]
   const latest = req.market.latest_nav_date
   const from = addDaysIso(latest ?? new Date(now).toISOString().slice(0, 10), -(DAILY_FULL_DAYS + LEAD_DAYS + 1))
-  const { navs, anomalies } = codes.length ? await readNavs(env, codes, isoToYmd(from)) : { navs: new Map(), anomalies: new Set<string>() }
+  const { navs, anomalies } = codes.length || isins.length ? await readNavs(env, codes, isins, isoToYmd(from)) : { navs: new Map(), anomalies: new Set<string>() }
 
   const result = dailySeries({ holdings, navs, anomalies, latest, days: DAILY_FULL_DAYS })
   const blob: CacheBlob = { format: CACHE_FORMAT, computed_at: now, partial: result.coverage.updated < result.coverage.total, result }
@@ -107,16 +113,19 @@ export async function dailyFor(env: Env, req: DailyRequest): Promise<DailyAnswer
   return { result: sliceDays(result, req.days), cache: 'miss', source: 'computed' }
 }
 
+const priceKey = (isin: string) => `px:${isin}`
+
 /**
- * One batch on a replica: the window's NAV rows for the codes (one JSON array parameter, so no bound-parameter cap)
- * and the flagged NAV moves. ~50 funds × 280 days ≈ 14k rows.
+ * One batch on a replica: the window's NAV rows for the codes (one JSON array parameter, so no bound-parameter cap),
+ * the flagged NAV moves, and the exchange closes of the shares and bonds (M20). ~50 funds × 280 days ≈ 14k rows.
  */
-async function readNavs(env: Env, codes: string[], fromYmd: number) {
+async function readNavs(env: Env, codes: string[], isins: string[], fromYmd: number) {
   const read = env.MARKET.withSession('first-unconstrained')
   const list = JSON.stringify(codes.map(Number))
-  const [navRes, anomalyRes] = await read.batch([
+  const [navRes, anomalyRes, priceRes] = await read.batch([
     read.prepare('SELECT amfi_code, date, nav FROM nav WHERE amfi_code IN (SELECT value FROM json_each(?1)) AND date >= ?2 ORDER BY amfi_code, date').bind(list, fromYmd),
     read.prepare('SELECT amfi_code, date FROM nav_anomaly WHERE amfi_code IN (SELECT value FROM json_each(?1)) AND date >= ?2').bind(list, fromYmd),
+    read.prepare('SELECT isin, date, close FROM stock_price WHERE isin IN (SELECT value FROM json_each(?1)) AND date >= ?2 ORDER BY isin, date').bind(JSON.stringify(isins), fromYmd),
   ])
   const navs = new Map<string, NavSeries>()
   for (const r of navRes!.results as { amfi_code: number; date: number; nav: number }[]) {
@@ -127,6 +136,18 @@ async function readNavs(env: Env, codes: string[], fromYmd: number) {
     s.navs.push(r.nav)
   }
   const anomalies = new Set((anomalyRes!.results as { amfi_code: number; date: number }[]).map((a) => `${a.amfi_code}|${ymdToIsoStr(a.date)}`))
+  // Closes: a move beyond ±20% from the previous close is flagged like a NAV jump (a split or bonus not yet adjusted).
+  let prev = null as { isin: string; close: number } | null
+  for (const r of priceRes!.results as { isin: string; date: number; close: number }[]) {
+    const key = priceKey(r.isin)
+    let s = navs.get(key)
+    if (!s) navs.set(key, (s = { dates: [], navs: [] }))
+    const iso = ymdToIsoStr(r.date)
+    if (prev?.isin === r.isin && Math.abs(r.close / prev.close - 1) > ANOMALY_MOVE) anomalies.add(`${key}|${iso}`)
+    s.dates.push(iso)
+    s.navs.push(r.close)
+    prev = { isin: r.isin, close: r.close }
+  }
   return { navs, anomalies }
 }
 

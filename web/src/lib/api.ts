@@ -99,6 +99,9 @@ export type Holding = {
   // M12: units / nav / value / as_of are at the latest NAV, estimated SIP units included; the statement's own figures:
   statement?: { units: number | null; nav: number | null; value: number; as_of: string }
   amfi_code?: string | null
+  /** M20: "exchange" = a share or bond at its latest exchange close; "nav" = a fund at its latest NAV; "statement" =
+   *  the statement's own price (unlisted, or no price yet). */
+  price_source?: "nav" | "exchange" | "statement"
   units_exact?: boolean
   estimated?: (EstimatedTotals & { since: string; units: number }) | null
 }

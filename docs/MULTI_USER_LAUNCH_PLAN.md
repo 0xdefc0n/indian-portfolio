@@ -1437,6 +1437,65 @@ consumer):
     merger, IDCW record date, or an AMFI typo.
   - Daily returns show flagged days with a ⚠ note (§10.5).
 
+#### 10.4.5 Exchange prices for shares and bonds (M20)
+Shares and bonds in CDSL statements (INE/IN9 ISINs, the engine's `equity_or_bond`) are valued at their latest exchange
+close and join daily returns. Funds **and ETFs** are INF ISINs: CDSL tags them `mutual_fund`, so since M12 they're
+already valued at their AMFI NAV (an ETF's NAV tracks its market price closely). SGBs (IN00…) stay on the gold rate
+(§21.5). Public market data only: nothing here links to a user.
+
+**Source** (⚠️ VERIFY results, 2026-11-27, live):
+- ❌ **NSE/BSE end-of-day files** (bhavcopy), the plan's first choice: both turn away automated clients. NSE's archive
+  drops the connection (HTTP/2 INTERNAL_ERROR) and BSE answers 403. We don't pose as a browser to get round that.
+- ✅ **Upstox's public candle API** (owner's choice, 2026-11-27; Upstox's holiday API already serves §10.5.1), by ISIN,
+  no key: `GET https://api.upstox.com/v3/historical-candle/{NSE_EQ|BSE_EQ}|{ISIN}/days/1/{to}/{from}`. 10 years of
+  daily candles in one call (2,479 rows, 168 KB, 0.15 s; CDN-cached), newest first, `[ts, open, high, low, close,
+  volume, oi]`. NSE shares, BSE shares and ETFs answer. Holidays have no row (24 Nov 2026). An unknown ISIN is 400 with
+  `errorCode: UDAPI100011`.
+  - Today's candle isn't in the history yet in the evening; `…/historical-candle/intraday/{key}/days/1` has it.
+  - **History is adjusted for bonuses and splits**: Reliance's 1:1 bonus (Oct 2024) shows ~₹1,340 before it, not
+    ~₹2,700. So a stored close can change after a corporate action.
+  - ⚠️ **Terms:** Upstox's terms for third-party commercial use are unclear (a community-forum answer suggests only
+    Upstox customers should consume the data). **Before production (M17), get Upstox's written OK or move to a
+    licensed feed.** The source sits in one section of `worker/src/market/prices.ts`, so swapping it changes nothing
+    else.
+
+**Tables** (`migrations/market/0008_stock_price.sql`): `tracked_equity` (ISIN, exchange `NSE`/`BSE`/`none`,
+last seen, latest stored date, backfilled / checked / failed times), `stock_price` (ISIN, `YYYYMMDD`, close; WITHOUT
+ROWID), and `price_state` (a version bumped whenever closes change; part of the snapshot inputs hash).
+
+**Jobs** (`worker/src/market/prices.ts`, on `pf-market`, max_concurrency 4 → ≤ 4 Upstox requests at a time):
+- **Upload:** the INE/IN9 ISINs a statement holds go to `tracked_equity`; ones with no history yet get a `prices`
+  message straight away (asked again after 6 h if it never ran).
+- **Cron:** the 23:00 IST nav-ingest run (today's close, from the intraday candle after 16:00 IST) and the 07:00 IST
+  one (the exchange's official close replaces it) send every ISIN seen in 90 days, 50 per message.
+- **Per ISIN:** NSE first, BSE if NSE doesn't know it; neither → `none`, looked up again after 30 days (unlisted
+  shares, many bonds). A first fetch takes 5 years. Later fetches start 10 days before the latest stored close: closes
+  are upserted only when they differ (a re-run writes 0 rows), and a read-back close more than 2% off means the
+  source adjusted its history, so the ISIN's whole series is fetched again and replaced. Retries: 3 tries with 2 s / 8
+  s backoff on network errors, 429 and 5xx; a message where every ISIN failed is retried by the queue.
+- A changed ISIN's series is written to R2 `market/px/{isin}.json` = `{isin, dates, closes}` and `price_state` goes
+  up. Cleanup (M14) deletes ISINs unseen for 90 days with their closes.
+- Logs carry counts and error classes, never ISINs (§0.1).
+
+**Build and daily returns:**
+- The engine reads `GET http://market.internal/px/{isin}.json` through the market gateway (only `IN[E9]…` ISINs),
+  cached by `market.price_key` (`nav_key|px{version}`); `market.price_refresh` lists ISINs still downloading (read
+  fresh, and the build follows up like a NAV backfill). `SNAPSHOT_VERSION` 5.
+- A priced holding has `price_source: "exchange"`, CDSL units at each statement date as its `units_timeline`, and
+  `units × latest close` as its value (`as_of` = the close's date). With no price it keeps the statement's
+  (`price_source: "statement"`). Funds say `"nav"`.
+- `/api/portfolio/daily` reads the window's closes with the NAVs (one more query in the same batch) under the key
+  `px:{isin}`. A close-to-close move beyond ±20% (the widest exchange price band) is flagged like a NAV jump and left
+  out of that day, as a corporate action the units don't show yet.
+- The Assets tab's Stocks & bonds table shows the price date ("Valued at the closing price of 26 Nov on NSE …").
+
+**Limits, measured or not yet:** 2 requests per ISIN a night. ⚠️ Upstox publishes no rate limit for this public
+endpoint; measure in M16's load test (2,000 tracked ISINs ≈ 4,000 requests through 4 consumers).
+
+**Later:** corporate actions (M21): with adjusted history, a bonus or split after the newest statement values the old
+unit count at the new price until the next statement, and the daily series before it is scaled down. Stocks have no
+cost in CDSL, so they don't join XIRR until M21 brings buy prices.
+
 ### 10.5 Daily returns (D15)
 
 **Goal:**
@@ -1482,7 +1541,7 @@ consumer):
   - **Today's value.** Every coded mutual fund is valued at its latest NAV (`units`, `nav`, `value`, `as_of` move to
     that day). The statement's own figures stay in `holding.statement`, and members get `statement_total`,
     `value_date` and `estimated` totals. The month-end chart carries on to the latest NAV when it already covers every
-    fund. ETFs and shares keep the statement's value.
+    fund. Shares and bonds are valued at their latest exchange close (M20, §10.4.5).
   - **A newer statement replaces every estimate:** estimates only ever start after the newest statement date.
   - **Deploys that change the build** bump `SNAPSHOT_VERSION`. Each snapshot row records the version it was built
     with (`snapshot.version`, `app/0007`), and an older one counts as stale, so the next read rebuilds it (M12 fix:
@@ -1498,8 +1557,9 @@ consumer):
     `DELETE /api/sips/skip`, `POST /api/sips/cancel` (`confirm: true` required), each audited and followed by a
     rebuild.
   - Tax figures (`tax`, `analysis.harvest`) stay as of the statement.
-- **ETFs and shares held in CDSL** (`asset_type == "equity_or_bond"`) have no AMFI NAV. They're excluded and listed
-  as "not included".
+- **Shares and bonds held in CDSL** (`asset_type == "equity_or_bond"`) use their daily exchange closes instead of a
+  NAV (M20, §10.4.5). ETFs are INF ISINs and already count at their AMFI NAV. Holdings with neither (unlisted shares,
+  most bonds) are excluded and counted as "not included".
 
 #### 10.5.2 Calculation (`worker/src/lib/daily.ts`, a pure function with golden tests)
 For each holding *h* and each NAV date *d* in the window, where *p* is the previous NAV date for that scheme:
@@ -2330,7 +2390,8 @@ get a nightly rebuild; parse ~1.5 vCPU-s on average; build ~0.5 vCPU-s.
 - Shared households (invite a spouse with roles), billing and plans, an NSDL CAS parser, and a native mobile app.
 - Daily web push ("PocketFolio today: +₹2,340") after the market day is final. Needs the installed PWA on iOS
   (16.4+), the user's opt-in and VAPID keys. It builds on §10.5 and §13A.
-- Exchange prices for ETFs and stocks held in CDSL, so they're included in daily returns. Scheduled as M20 (before launch).
+- ~~Exchange prices for ETFs and stocks held in CDSL~~: built in M20 (§10.4.5). A licensed price feed in place of
+  Upstox's public API, if Upstox won't confirm its terms (M17).
 - Manually entered FD, PPF and EPF with approximate returns (M19), and stock gains from broker tradebooks or manual buy
   prices (M21). Owner request, 2026-11-26; see `docs/MILESTONES.md` Phase 8. Design to be written before each starts.
 - AI portfolio analysis (M32) and the admin panel (M33) are scheduled after launch (§21.8, §21.9).

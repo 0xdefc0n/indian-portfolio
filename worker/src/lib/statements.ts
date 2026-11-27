@@ -8,7 +8,8 @@ import { deleteBlobs, putJsonBlob } from './blob'
 import { type Bytes, hmacHex, type Vault } from './crypto'
 import { engineApi, type EngineParse, type ParsedStatement } from './engine-client'
 import { parkUpload, type QueuedUpload } from './jobs'
-import { type MarketMessage, marketQueue } from '../market/jobs'
+import { type MarketMessage, marketQueue, sendPrices } from '../market/jobs'
+import { equityIsins, trackEquities } from '../market/prices'
 import { pendingBackfillStatement, resolveTrackedStatement } from '../market/store'
 import { ApiError, notFound } from './errors'
 import { failQuota, LIMITS, uploadQuota } from './limits'
@@ -417,6 +418,10 @@ export async function storeStatement(t: Tenant, vault: Vault, s: StoreInput): Pr
 
   await trackSchemes(env, facts.holdings, now, facts.firstTxn).catch((e) => console.error('tracked_scheme_failed', (e as Error).name))
   await backfillCodes(env, facts.soldCodes, now).catch((e) => console.error('sold_backfill_failed', (e as Error).name))
+  // Shares and bonds (M20): tracked for the price job; a new one's history is asked for now.
+  await trackEquities(env, equityIsins(facts.holdings), now)
+    .then((ask) => sendPrices(env, ask))
+    .catch((e) => console.error('tracked_equity_failed', (e as Error).name))
 
   const created = newMember?.id === memberId
   let name: string | null

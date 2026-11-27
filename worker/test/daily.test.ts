@@ -26,6 +26,7 @@ const holding = (code: string, timeline: [string, number][], extra: Partial<Dail
   ...extra,
 })
 const byDate = (r: ReturnType<typeof dailySeries>) => new Map(r.series.map((p) => [p.date, p]))
+const round6 = (v: number) => Math.round(v * 1e6) / 1e6
 
 // Mon 16 … Wed 18 Nov 2026
 const A = series([['2026-11-16', 100], ['2026-11-17', 102], ['2026-11-18', 101]])
@@ -138,6 +139,24 @@ describe('dailySeries (golden, worked by hand)', () => {
     expect(r.notes).toEqual({ units_as_of: '2026-11-01', units_exact: false, estimated: { instalments: 0, amount: 0 }, excluded: 1 })
     const exact = dailySeries({ holdings: [holding('2', [['2026-11-01', 5]])], navs: new Map([['2', B]]), latest: '2026-11-18', days: 30 })
     expect(exact.notes.units_exact).toBe(true)
+  })
+
+  it('a share valued at exchange closes (M20) counts like a fund, under its own series key', () => {
+    const r = dailySeries({
+      holdings: [
+        holding('1', [['2026-11-01', 10]]),
+        { member_id: 'm-1', isin: 'INE000000001', amfi_code: null, price_source: 'exchange', series_key: 'px:INE000000001', units_timeline: [['2026-10-31', 4]], units_exact: false, statement: { as_of: '2026-10-31' } },
+      ],
+      navs: new Map([['1', A], ['px:INE000000001', series([['2026-11-16', 1000], ['2026-11-17', 1010], ['2026-11-18', 990]])]]),
+      latest: '2026-11-18',
+      days: 30,
+    })
+    // 17 Nov: 10 × 2 + 4 × 10 = 60 on a base of 10 × 100 + 4 × 1000 = 5,000; 18 Nov: −10 − 80 = −90 on 1,020 + 4,040
+    expect(byDate(r).get('2026-11-17')).toMatchObject({ change: 60, pct: 0.012, value: 5060 })
+    expect(r.today).toMatchObject({ change: -90, pct: round6(-90 / 5060) })
+    expect(r.today!.by_fund.map((f) => f.isin)).toEqual(['INF1', 'INE000000001'])
+    expect(r.coverage).toEqual({ updated: 2, total: 2 })
+    expect(r.notes).toMatchObject({ excluded: 0, units_exact: false })
   })
 
   it('by member, and the window and slicing', () => {
@@ -380,6 +399,41 @@ describe('GET /api/portfolio/daily', () => {
     expect(late.result.coverage).toEqual({ updated: 2, total: 2 })
     // complete coverage stays cached
     expect((await dailyFor(env, { ...req, now: now + 10 * DAILY_PARTIAL_FRESH_MS })).cache).toBe('hit')
+  })
+
+  it('shares at exchange prices (M20): their closes join the day; a split-sized jump is flagged and left out', async () => {
+    await setMarketDay(20261118)
+    const h = await newHousehold('daily-shares')
+    const m = await addMember(h, FAKE_PAN, 'SYNTHETIC SHARES')
+    await storedStatement(h, m)
+    const c = ++codeSeq
+    await navRows(c, [[20261116, 100], [20261117, 102], [20261118, 101]])
+    const px = (isin: string, rows: [number, number][]) =>
+      env.MARKET.prepare(`INSERT INTO stock_price (isin, date, close) SELECT ?1, json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?2) WHERE true ON CONFLICT DO NOTHING`)
+        .bind(isin, JSON.stringify(rows)).run()
+    await px('INE9D0000011', [[20261116, 1000], [20261117, 1010], [20261118, 990]])
+    await px('INE9D0000029', [[20261116, 500], [20261117, 250], [20261118, 255]]) // a 1:1 bonus the units don't show yet
+    const share = (isin: string, units: number) => ({ member_id: m, isin, amfi_code: null, price_source: 'exchange', units_timeline: [['2026-10-31', units]], units_exact: false, statement: { as_of: '2026-10-31' }, payouts: [] })
+    const snapshot = {
+      members: [{ id: m }],
+      holdings: [
+        { member_id: m, isin: 'INF000D00011', amfi_code: String(c), price_source: 'nav', units_timeline: [['2026-11-01', 10]], units_exact: true, statement: { as_of: '2026-11-01' }, payouts: [] },
+        share('INE9D0000011', 4),
+        share('INE9D0000029', 2),
+        { member_id: m, isin: 'INE9D0000037', amfi_code: null, price_source: 'statement', units_timeline: null }, // unlisted
+      ],
+      activity: [], sips: [], benchmark: null, stocks: { enabled: false },
+    }
+    fakeBuild({ answer: () => okBuild(snapshot) })
+    await requestRebuild(env, h.householdId)
+    expect((await deliverRebuilds(takeRebuilds(h.householdId)))[0]?.outcome).toBe('built')
+    const body = await (await daily(h, '?days=30')).json<ReturnType<typeof dailySeries>>()
+    // 17 Nov: fund +20, first share +40; the second share's −500 is a bonus, left out and flagged
+    expect(body.series.find((p) => p.date === '2026-11-17')).toMatchObject({ change: 60, flag: 'nav_jump' })
+    // 18 Nov: fund −10, first share −80, second share +10
+    expect(body.today).toMatchObject({ change: -80 })
+    expect(body.coverage).toEqual({ updated: 3, total: 3 })
+    expect(body.notes).toMatchObject({ excluded: 1 })
   })
 
   it('no snapshot yet: an empty result', async () => {

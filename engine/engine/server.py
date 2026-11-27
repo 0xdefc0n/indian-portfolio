@@ -13,6 +13,8 @@ POST /build   JSON {statements, market, today, format?, overrides?} → the port
               format "gzip": the body is the gzip-compressed snapshot JSON itself (application/x-snapshot+gzip, no
               Content-Encoding), with the metrics in X-Engine-* headers. The Worker seals those bytes as they are and
               never parses the snapshot (plan §10.2 "stream, don't parse").
+              market.price_key / market.price_refresh: as nav_key / refresh, for the exchange-price series of shares
+              and bonds (M20), read from the same store (navstore.load_prices).
               market.stocks: stock data the Worker loaded (stocks.py), or null. The funds the stocks view needs data
               for come back as X-Engine-Stocks-Want (base64url JSON [[isin, name], ...]; `stocks_want` in the JSON
               metrics), so the Worker's BharatStock job can fetch them (plan §10.3.1, M11). Public scheme ids only.
@@ -193,6 +195,9 @@ def _build(statements: list, market: dict, today: date | None, gz: bool,
         need = market_requirements(statements, market.get("isin_to_code") or {})
         refresh = {str(c) for c in market.get("refresh") or []}
         market["navs"] = navstore.load(need["codes"], str(market.get("nav_key") or market["market_date"]), refresh=refresh)
+        if need["price_isins"] and market.get("prices") is None:
+            market["prices"] = navstore.load_prices(need["price_isins"], str(market.get("price_key") or market.get("nav_key") or market["market_date"]),
+                                                    refresh={str(i) for i in market.get("price_refresh") or []})
     snapshot = build_portfolio(statements, market, today, overrides)
     want = stocks.wanted(snapshot["holdings"], market.get("stocks"))
     if not gz:

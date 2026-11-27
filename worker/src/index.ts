@@ -9,7 +9,8 @@ import { withEngine } from './lib/engine-client'
 import { ApiError } from './lib/errors'
 import { handleParseBatch, type ParseMessage, TMP_SWEEP_CRON, tmpSweep } from './lib/jobs'
 import { handleRebuildBatch, PREBUILD_CRON, prebuild, type RebuildMessage } from './lib/snapshot'
-import { handleMarketBatch, type MarketMessage, NAV_INGEST_CRONS, NAV_REPAIR_CRON, navIngest, navRepair } from './market/jobs'
+import { handleMarketBatch, type MarketMessage, NAV_INGEST_CRONS, NAV_REPAIR_CRON, navIngest, navRepair, requestAllPrices } from './market/jobs'
+import { PRICE_CRONS } from './market/prices'
 import { refreshHolidays } from './market/holidays'
 import { AMC_CRON, requestAmc } from './market/amc-scrape'
 import { requestStocks, STOCKS_CRON } from './market/stocks'
@@ -141,6 +142,8 @@ export default {
     }
     if (NAV_INGEST_CRONS.includes(cron)) {
       ctx.waitUntil(navIngest(env, { cron, now: controller.scheduledTime }).then(() => undefined))
+      // Exchange prices for shares and bonds (M20): today's close at 23:00 IST, the official one at 07:00 IST.
+      if (PRICE_CRONS.includes(cron)) ctx.waitUntil(requestAllPrices(env, controller.scheduledTime))
       return
     }
     if (cron === PREBUILD_CRON) {
