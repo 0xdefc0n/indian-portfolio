@@ -16,6 +16,11 @@ POST /build   JSON {statements, market, today, format?, overrides?} → the port
               market.stocks: stock data the Worker loaded (stocks.py), or null. The funds the stocks view needs data
               for come back as X-Engine-Stocks-Want (base64url JSON [[isin, name], ...]; `stocks_want` in the JSON
               metrics), so the Worker's BharatStock job can fetch them (plan §10.3.1, M11). Public scheme ids only.
+POST /stocks/parse  one AMC monthly portfolio disclosure file (plan §10.3.1, M18). Body: the want JSON
+              ([[isin, name, amfi_name], ...], the AMC's funds the stocks view needs) followed by the file's raw bytes;
+              headers X-Want-Bytes (the JSON's length), X-Amc (adapter slug), X-Filename. The Worker downloaded the
+              file; the engine never calls out. → {ok, schemes, months, matched: {isin: {scheme_name, score, as_of,
+              rows}}}, or {ok: false, code: unreadable} (422) when it isn't a workbook. Public market data only.
 GET  /health  {version, isin_db} (no auth, no data)
 
 One job at a time per process: a second concurrent /parse or /build gets 503 `busy` straight away. EnginePool
@@ -38,12 +43,14 @@ from datetime import date
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
-from . import VERSION, navstore, stocks
+from . import VERSION, amc, navstore, stocks
 from .parse import parse_pdf, peak_rss_mb
 from .portfolio import build_portfolio, market_requirements
 
 MAX_PDF_BYTES = 10 * 1024 * 1024
 MAX_BUILD_BYTES = 64 * 1024 * 1024
+MAX_DISCLOSURE_BYTES = 48 * 1024 * 1024
+MAX_WANT_BYTES = 1024 * 1024
 
 logging.basicConfig(level=os.getenv("ENGINE_LOG_LEVEL", "WARNING"), format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("engine.server")
@@ -145,6 +152,38 @@ async def build(request: Request):
         if isinstance(result, bytes):
             return Response(result, media_type="application/x-snapshot+gzip", headers=_metric_headers(want))
         return JSONResponse({"ok": True, "snapshot": result, "metrics": {**_metrics(), "stocks_want": want}})
+
+
+@app.post("/stocks/parse")
+async def stocks_parse(request: Request):
+    if _job.locked():
+        return _error(503, "busy", "Engine is busy")
+    async with _job:
+        slug = request.headers.get("x-amc", "")
+        filename = request.headers.get("x-filename", "")[:200]
+        want_bytes = request.headers.get("x-want-bytes", "")
+        if slug not in amc.SLUGS or not want_bytes.isdigit() or int(want_bytes) > MAX_WANT_BYTES:
+            return _error(400, "bad_request", "Expected X-Amc, X-Want-Bytes and a body")
+        body = await _read_body(request, MAX_DISCLOSURE_BYTES + MAX_WANT_BYTES)
+        if body is None:
+            return _error(413, "too_large", "Disclosure file too large")
+        n = int(want_bytes)
+        try:
+            want = json.loads(body[:n])
+            if not isinstance(want, list) or not all(isinstance(w, list) and w and isinstance(w[0], str) for w in want):
+                raise TypeError("want")
+        except (ValueError, TypeError):
+            return _error(400, "bad_request", "Bad want list")
+        content = body[n:]
+        del body
+        try:
+            result = await asyncio.to_thread(amc.parse_file, slug, content, filename, want)
+        except amc.UnreadableFile as e:
+            return _error(422, "unreadable", str(e)[:40])
+        except Exception as e:  # public data, but keep logs to the class like everywhere else
+            log.warning("disclosure parse failed: %s", type(e).__name__)
+            return _error(500, "parse_error", "Could not parse the disclosure")
+        return JSONResponse({**result, "metrics": {"peak_rss_mb": peak_rss_mb()}})
 
 
 def _build(statements: list, market: dict, today: date | None, gz: bool,

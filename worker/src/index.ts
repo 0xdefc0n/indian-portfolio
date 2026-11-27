@@ -11,6 +11,7 @@ import { handleParseBatch, type ParseMessage, TMP_SWEEP_CRON, tmpSweep } from '.
 import { handleRebuildBatch, PREBUILD_CRON, prebuild, type RebuildMessage } from './lib/snapshot'
 import { handleMarketBatch, type MarketMessage, NAV_INGEST_CRONS, NAV_REPAIR_CRON, navIngest, navRepair } from './market/jobs'
 import { refreshHolidays } from './market/holidays'
+import { AMC_CRON, requestAmc } from './market/amc-scrape'
 import { requestStocks, STOCKS_CRON } from './market/stocks'
 import { requireSession } from './middleware/session'
 import { accountRoutes } from './routes/account'
@@ -125,7 +126,7 @@ class EngineUnavailable extends Error {
 export default {
   fetch: app.fetch,
 
-  // Dispatch on event.cron (wrangler.jsonc triggers). Still to come: M18 (AMC scrapers).
+  // Dispatch on event.cron (wrangler.jsonc triggers).
   async scheduled(controller, env, ctx) {
     const cron = controller.cron
     if (cron === CLEANUP_CRON) {
@@ -147,6 +148,11 @@ export default {
     }
     if (cron === NAV_REPAIR_CRON) {
       ctx.waitUntil(navRepair(env, { now: controller.scheduledTime }).then(() => undefined))
+      return
+    }
+    if (cron === AMC_CRON) {
+      // The AMC disclosure scrapers (M18): each AMC once a month, retried daily until its month is out.
+      ctx.waitUntil(requestAmc(env, controller.scheduledTime, true).then(() => undefined))
       return
     }
     if (cron === STOCKS_CRON) {

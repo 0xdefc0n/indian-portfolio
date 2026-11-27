@@ -380,7 +380,7 @@ describe('single flight', () => {
     // Hold the first pass at its first D1 read until the second run has tried.
     vi.spyOn(env.MARKET, 'prepare').mockImplementation((sql: string) => {
       const stmt = realGet(sql)
-      if (!held && sql.startsWith('SELECT isin, name, provider_name')) {
+      if (!held && sql.includes('FROM stock_match m WHERE m.wanted_at')) {
         held = true
         const bindAll = stmt.bind.bind(stmt)
         return Object.assign(stmt, {

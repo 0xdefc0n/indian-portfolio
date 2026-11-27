@@ -3,6 +3,7 @@
 // and a date, nothing else. Logs carry counts, dates and error class names, never scheme codes: a backfill logged
 // right after an upload would tie that household to a fund it holds (§0.1).
 import { prebuild } from '../lib/snapshot'
+import { EngineBusy, runAmc } from './amc-scrape'
 import { runStocks } from './stocks'
 import { amcId } from './amc-ids'
 import { addDays, AmfiFormatError, anomalies, istToday, type NavRow, parseAmfiNav, parseMfapi, type Ymd, ymdToAmfi, ymdToIso } from './amfi'
@@ -48,6 +49,7 @@ export type MarketMessage =
   | { type: 'series'; codes: number[] }
   | { type: 'repair'; date: Ymd }
   | { type: 'stocks' } // the BharatStock job (src/market/stocks.ts, M11)
+  | { type: 'amc' } // the AMC disclosure scrapers (src/market/amc-scrape.ts, M18)
 
 /** pf-market sends, through one object so tests can capture them instead of the real queue. */
 export const marketQueue = {
@@ -348,6 +350,16 @@ export async function handleMarketBatch(batch: MessageBatch<MarketMessage>, env:
         await writeSeries(env, body.codes.filter((c) => Number.isSafeInteger(c) && c > 0).slice(0, SERIES_CODES_PER_MESSAGE))
       } else if (body?.type === 'repair' && validYmd(body.date)) {
         await runRepair(env, body.date)
+      } else if (body?.type === 'amc') {
+        // Busy: another run is going (it re-sends for what it didn't reach). EngineBusy: no batch slot, try later.
+        const res = await runAmc(env).catch((err) => {
+          if (err instanceof EngineBusy) return { status: 'busy' as const }
+          throw err
+        })
+        if (res.status === 'busy' && msg.attempts < MARKET_MAX_ATTEMPTS) {
+          msg.retry({ delaySeconds: 120 })
+          continue
+        }
       } else if (body?.type === 'stocks') {
         // Another run holds the lock: it runs one more pass if this was asked after it started. Try again in a
         // minute anyway, in case it was just finishing.

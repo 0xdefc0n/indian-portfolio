@@ -1150,7 +1150,7 @@ Engine `/parse` timeout: 60 s. On timeout return `parse_timeout`, and count it i
 |---|---|---|
 | `nav-ingest`, `nav-backfill`, `nav-repair` | see §10.4 | Official AMFI NAVs for every scheme into D1, several times a night. This replaces the old per-scheme mfapi refresh. |
 | `snapshot-prebuild` | triggered when a market day becomes final (§10.4), at the latest `0 5 * * *` | Enqueue a rebuild for households with `last_active_at` in the last 7 days, with `sendBatch` (100 per call). The `rebuild` queue's `max_concurrency` and the `EngineBatch` cap set the drain rate, so this is the nightly burst handled at a steady pace. The per-message delay is spread over 0–30 min to smooth the wake-ups. |
-| `stocks-monthly` | `0 5 10-20 * *` | §10.3.1. ✅ M11: until the AMC scrapers ship (M18) this cron is replaced by a daily BharatStock run, `stocks` at `0 4 * * *` (09:30 IST: after BharatStock's UTC day resets, before the 10:00 IST final NAV run and prebuild). M18 adds the monthly scrape cron back. |
+| `stocks-monthly` | `0 5 10-20 * *` | §10.3.1. ✅ M11: until the AMC scrapers ship (M18) this cron is replaced by a daily BharatStock run, `stocks` at `0 4 * * *` (09:30 IST: after BharatStock's UTC day resets, before the 10:00 IST final NAV run and prebuild). ✅ M18: `amc` at `0 2 * * *` (07:30 IST, daily: each AMC is scraped once a month, retried daily until its month is out), then the 09:30 BharatStock run fills the gaps. |
 | `cleanup` | `0 21 * * *` | Expire pending passwords and old quota windows. Drop `tracked_scheme` rows unseen for 90 days. Delete finished `parse_job` rows older than 7 days and expired Better Auth `session` / `verification` rows. Send DPDP inactivity notices and do erasures (§12). ✅ M14 (`src/lib/cleanup.ts`): also expired `rate_limit` rows, `audit_event` older than 400 days, SIP skips older than the member's newest statement, `nav_run` older than 90 days, and `stock_match` rows unwanted for 90 days with every `fund_portfolio` row (and R2 blob) no wanted row reads. Inactivity: 500 notices and 50 erasures per run. Each step fails alone (logged by class) |
 | `tmp-sweep` | `15 * * * *` (hourly) | Parked PDFs past `expires_at`: delete the R2 object, set `expired`. Re-enqueue `queued` jobs whose message was lost (no change for 15 min). Counts only in logs. ✅ M8: also deletes leftover PDFs of finished jobs and recounts the parked PDFs for `EnginePool` (§10.1 D, as built). |
 
@@ -1184,14 +1184,58 @@ website (typically one Excel file per month, one sheet per scheme). We scrape **
      expected to include SBI, ICICI Prudential, HDFC, Nippon India, Kotak, Axis, UTI, Aditya Birla Sun Life, Mirae
      Asset and PPFAS.
   3. Add more AMCs over time.
-- **⚠️ VERIFY per AMC:**
-  - the disclosure page URL and file naming;
-  - whether it is behind bot protection, which blocks container egress (if so, mark the AMC `blocked` and rely on the fallback);
-  - its terms of use.
+- **VERIFY per AMC** (✅ M18, checked live 2026-11-27 for October 2026; each adapter file's header has the details):
 
-  Write each AMC's findings in a comment at the top of its adapter file.
+  | AMC | Page and files | Bot protection / robots.txt | Terms of use | Status |
+  |---|---|---|---|---|
+  | SBI | ✅ the page's own POST `/ajaxcall/CMS/GetSchemePortfolioSheets`; one combined xlsx (119 schemes) | ✅ none; `?query` disallowed, so the version tag is dropped | ✅ general disclaimer, nothing on reuse | active |
+  | ICICI Prudential | ✅ the page's own API (`apimf…/nms/v1/downloads/files`); one zip, 151 workbooks, 26 MB | ✅ none | ⚠️ voice-assistant terms forbid systematic extraction without consent; no site-wide clause | active |
+  | HDFC | ✅ one xlsx per scheme on `files.hdfcfund.com` | ⚠️ www.hdfcfund.com: Akamai 403 to a plain client, robots.txt included | ⚠️ non-commercial / personal use only | **blocked** (fallback). The adapter can probe 68 known file names on the open files host, a way around the wall: off unless the owner decides otherwise |
+  | Nippon India | ✅ one combined xls linked from the page | ⚠️ robots.txt `Disallow: /InvestorServices/Factsheets` covers the files folder | ✅ general disclaimer | **blocked** (fallback) |
+  | Kotak | ✅ one xlsx per scheme through `java17vlbapi.kotakmf.com` | ⚠️ www.kotakmf.com: Radware bot manager challenge; the API host is open, but using it goes around the wall | ⚠️ unreadable (behind the wall); Kotak group sites say non-commercial only | **blocked** (fallback) |
+  | Axis | ⚠️ files only listed by the page's `/cms/` API (upload ids and hashes in the URLs) | ⚠️ robots.txt `Disallow: /cms/` | ⚠️ personal, non-commercial use only; no storing a significant portion | **blocked** (fallback) |
+  | UTI | ✅ the page's own API `/api/get-consolidate-portfolio-disclosure`; one zip (85 schemes in one 9,375-row sheet) | ✅ none | ✅ informational disclaimer only | active |
+  | Aditya Birla Sun Life | ✅ the page's own JSON list; one zip per month (106 schemes) | ✅ none | ⚠️ no downloading or copying without written consent | active |
+  | Mirae Asset | ✅ the page's own POST `/AjaxService/GetDownloadsData`; one xlsx per scheme (101) | ✅ none | ⚠️ personal, non-commercial use only | active (only wanted schemes' files are fetched) |
+  | PPFAS | ✅ links on the page; one combined workbook (7 schemes) | ✅ none | ⚠️ non-commercial / personal use only | active |
+
+  Every active adapter's October 2026 files parse with every scheme's weights at 95–105% (`engine.amc.cli`), and the
+  AMFI names tested match the right scheme. **Terms: 6 of the 10 restrict commercial use or reuse without written
+  consent.** Whether PocketFolio may scrape them is the owner's call; until then production runs none
+  (`AMC_SCRAPERS: ""`), staging and dev run all (`"all"`). Checked from a laptop: Cloudflare egress may meet bot
+  walls this didn't (a run then records `blocked`).
 - **Snapshot.** The `stocks` section of the portfolio is built in the engine from these blobs (same shape as today's
   `stocks.snapshot`). `refreshing` becomes `true` when a tracked equity ISIN has no data yet.
+- ✅ **M18, as built (rollout step 2)** — `worker/src/market/amc-scrape.ts`, `worker/src/market/amc/*`,
+  `engine/engine/amc/*`, migration `market/0005_amc.sql`. Changes from the design above:
+  - **The engine still never calls out.** Each adapter is split: `discover` is TypeScript in the Worker
+    (`worker/src/market/amc/<slug>.ts`), parsing is Python in the engine (`engine/engine/amc`, with optional per-AMC
+    hooks in `adapters/<slug>.py`). The Worker downloads the files through `AmcFetcher` (robots.txt, ≥ 1 s per host,
+    the adapter's hosts only, redirects off them refused, 48 MB cap, bot walls → `blocked`) and posts each one to
+    `POST /stocks/parse` on an EngineBatch slot with the AMC's wanted funds. So EngineBatch keeps no route to the
+    internet, as decided in M10, and there is no `/stocks/scrape`.
+  - **Which funds:** `stock_match` (the funds builds report, as in M11), not all of `tracked_scheme`. Each gets its
+    fund house from AMFI's `scheme` list (`stock_match.amc`). The top 10 were taken from the expected list: staging
+    holds one family's funds, too few to rank AMCs by.
+  - **Matching** is in the engine (`engine.amc.match`): the stocks.py token matcher over the fund's display name and
+    AMFI's name, with option and plan words ignored, best ≥ 0.6, a tie is no match, plus `OVERRIDES` per adapter.
+  - **Rows** are the stocks view's existing shape (`{isin, symbol, name, sector, type, pct}`, type EQUITY /
+    FOREIGN_EQUITY / MUTUAL_FUND_UNIT / DEBT / CASH / OTHER), so the engine's snapshot code is unchanged: builds key
+    an AMC fund as `amc:{isin}` in `market.stocks`. The section decides the type (an `INE…` ISIN is a bond in the debt
+    section), fractions are scaled to percent, negative cash (net payables) is kept so weights add to 100.
+  - **The job:** one `amc` message on pf-market (single-flight, `job_lock` 'amc'), from the daily cron `0 2 * * *`
+    (07:30 IST) and from builds that find new or waiting funds. The target month is the previous month (IST). An AMC
+    is due while a wanted fund isn't covered for it and wasn't tried in the last 20 h, so each AMC is scraped once a
+    month and retried daily until published. Not published yet and a fund has no data at all: the month before is
+    fetched too. Every run writes `scrape_run` (ok / not_published / failed / blocked). One-file-per-scheme AMCs
+    (Mirae) fetch only the files whose scheme could be a wanted fund.
+  - **Fallback** (`amc/coverage.ts` `amcCovers`): BharatStock skips a fund when its AMC has an active adapter and it
+    has AMC data for the target month, or it's before day 15 and the scraper hasn't tried it yet or has older data to
+    show. A fund the scraper tried and found nothing for goes to BharatStock straight away. An AMC row replaces a
+    BharatStock row for the same month; BharatStock never overwrites an AMC row.
+  - **Done when, not met yet:** ≥ 80% of tracked equity schemes from AMCs by day 15. On staging today (8 wanted
+    funds, one family) 2 are under active adapters, 2 under blocked ones (HDFC, Nippon, Kotak, Axis) and 4 under 2
+    fund houses with no adapter: 25%. It depends on the owner's terms decision, the blocked AMCs and rollout step 3.
 - ✅ **M11, as built (BharatStock only, rollout step 1)** — `worker/src/market/stocks.ts`, migration
   `market/0003_stocks.sql`:
   - **Which funds.** The Worker doesn't classify funds. Each `/build` returns the funds its stocks view needs in
