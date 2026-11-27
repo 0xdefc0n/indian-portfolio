@@ -3,6 +3,8 @@
 import type { Holding } from "@/lib/api"
 
 export type HoldingKind = "mf" | "etf" | "stock"
+/** The Assets tab's switch: the holding kinds plus FD/PPF/EPF entered by hand. */
+export type AssetKind = HoldingKind | "fixed"
 
 const ETF_RE = /\bETF\b|exchange traded|\bBeES\b/i
 
@@ -11,7 +13,7 @@ export function holdingKind(h: Pick<Holding, "isin" | "name" | "sebi_category">)
   return ETF_RE.test(h.name) || ETF_RE.test(h.sebi_category ?? "") ? "etf" : "mf"
 }
 
-export const KIND_LABEL: Record<HoldingKind | "fixed", string> = {
+export const KIND_LABEL: Record<AssetKind, string> = {
   mf: "Mutual funds",
   etf: "ETFs",
   stock: "Stocks & bonds",

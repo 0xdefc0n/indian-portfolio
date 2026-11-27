@@ -8,6 +8,7 @@ import { type AssetDialogState, AssetDialogs } from "@/components/asset-dialogs"
 import { AddAssetButton, FixedIncome } from "@/components/fixed-income"
 import type { Slice } from "@/components/allocation-strip"
 import { AssetsView } from "@/components/assets-view"
+import { type AssetKind, holdingKind } from "@/lib/asset-kind"
 import { BottomNav, type TabId, TabNav, useTab } from "@/components/tab-nav"
 import { TransactionsView } from "@/components/transactions-view"
 import { AllocationBreakdown, BenchmarkComparison, FundPerformance, FundReturns, MoneyFlow, UpsAndDowns } from "@/components/insights"
@@ -161,6 +162,7 @@ export default function App({ me }: { me: Me }) {
   // An old #sips link opens Assets scrolled to the SIPs (read before useTab settles on "assets").
   const [sipsLink] = useState(() => window.location.hash === "#sips")
   const [tab, setTab] = useTab()
+  const [assetKind, setAssetKind] = useState<AssetKind | null>(() => (window.location.hash === "#sips" ? "mf" : null))
   const [fund, setFund] = useState<Holding | null>(null)
   const [offline, setOffline] = useState(false)
   // FD, PPF and EPF (M19): loaded beside the snapshot, valued here on every render with the shared calculator.
@@ -479,6 +481,8 @@ export default function App({ me }: { me: Me }) {
                     others={view.fixed.length}
                     onSelect={(c) => {
                       if (!view.slices.some((s) => s.category === c)) return openFixedIncome() // FD, PPF, EPF
+                      const h = view.allHoldings.find((x) => x.category === c)
+                      setAssetKind(h ? holdingKind(h) : null)
                       setCategory(c); setHovered(null); setTab("assets")
                     }}
                   />
@@ -517,7 +521,7 @@ export default function App({ me }: { me: Me }) {
                     aside={upcoming.list.length ? <span className="eyebrow">Next {upcoming.days} day{upcoming.days === 1 ? "" : "s"}</span> : undefined}
                   />
                   <SipTimeline upcoming={upcoming} members={memberMap} showMember={showMember} />
-                  {activeSips.length > 0 && <div className="mt-2 text-[13px]">{viewAll("assets", "View all SIPs", "sips")}</div>}
+                  {activeSips.length > 0 && <div className="mt-2 text-[13px]"><button className="-my-2 py-2 text-primary underline-offset-4 hover:underline" onClick={() => { setAssetKind("mf"); setCategory(null); goTo("assets", "sips") }}>View all SIPs</button></div>}
                 </Cell>
 
                 <div id="fixed-income" className="scroll-mt-24 md:col-span-6 lg:col-span-12">
@@ -542,7 +546,8 @@ export default function App({ me }: { me: Me }) {
                 holdings={view.allHoldings}
                 fixed={view.fixed}
                 total={view.grandTotal}
-                slices={view.allSlices}
+                kind={assetKind}
+                onKind={setAssetKind}
                 category={category}
                 onCategory={setCategory}
                 hovered={hovered}
