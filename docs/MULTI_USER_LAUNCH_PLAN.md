@@ -2444,3 +2444,112 @@ encryption, and demo data only in every screenshot, image and post.
 - `docs/marketing/SOCIAL_PLAYBOOK.md`: Reddit (subreddits, each one's self-promotion rules with links, comment-first,
   cadence), LinkedIn and X (profiles, content pillars, cadence), and ready drafts. **The owner creates the accounts
   and posts; Claude never does.** Images use demo data only.
+
+### 21.12 Manual assets: FD, PPF, EPF (M19) — draft, waits for the owner's OK
+Written in M19's first session (2026-11-27). Nothing below is built until the owner OKs it, including the choices
+marked **Owner:**. Values are always labelled "approximate": we model the rules, not the bank's or EPFO's ledger.
+
+**Who owns an asset (the member question).** Today a member exists only from a statement (`pan_hmac`, `pan_enc` and
+`pan_masked` are NOT NULL, D19). Two options:
+- **A. Members added by hand (recommended).** A member gets a name (required) and an optional PAN. The three PAN
+  columns become nullable (`migrations/app/0011_member_manual.sql` rebuilds `member`, since SQLite can't drop a
+  NOT NULL; `PRAGMA defer_foreign_keys = on` keeps `statement`, `parse_job` and the new table pointing at it).
+  `UNIQUE (household_id, pan_hmac)` still holds, because SQLite treats NULLs as distinct. If a PAN is given, a later
+  statement for that PAN is filed under this member, as today. The PAN-password loop in upload (`statements.ts`,
+  `jobs.ts`) skips members without a PAN. Hand-added members count towards the 10-member limit. The Members page shows
+  them with "No statement yet" instead of a masked PAN. Cost: about 45 PAN references in 4 Worker files to make
+  null-safe, and the dashboard's member switcher must add members that are not in the snapshot.
+- **B. Household-owned assets with an optional member.** No member change: `manual_asset.member_id` is nullable and
+  points only at statement members. Simpler, but a spouse with only an FD (no funds) can't be named, the member
+  filter can't show them, and M29 (gold) and M27 (FIRE) inherit the gap.
+- **Owner:** A or B.
+
+**Instruments and inputs** (validated in the Worker; amounts in whole rupees, ≤ ₹100 crore; rates 0–20 %; dates
+YYYY-MM-DD, not in the future except a maturity):
+| Type | Inputs | Optional |
+|---|---|---|
+| FD | principal, rate % p.a., start date, maturity date, **cumulative** or **payout** (monthly / quarterly), compounding (quarterly by default; monthly, half-yearly, yearly) | label (e.g. bank name), closed early on a date + penalty % (default 1 %) |
+| PPF | opening date, deposits as a list of `{date, amount}` (the form offers "same amount every April" to fill it) | label, closed on a date, rate override |
+| EPF | balance on a date (from the passbook), monthly contribution (employee + employer EPF share together) | label, contributions stopped on a date, rate override |
+RD, NSC, SCSS, NPS and bonds are out of scope (they go under "Later").
+
+**Calculations** (`worker/src/lib/manual-assets.ts`, pure, golden-tested):
+- **FD, cumulative:** `P·(1 + r/n)^k` for the `k` whole compounding periods held, then simple interest for the days
+  left (Actual/365), which is how Indian bank calculators value a broken period. Tenure under 6 months: simple interest.
+  **Payout:** the value stays at the principal; interest paid so far is shown as "interest received". After maturity
+  the value freezes at the maturity amount with a "Matured" badge (we don't guess a renewal). **Closed early:** valued
+  at `rate − penalty` for the time actually held. Banks use the card rate for that shorter tenure, which we don't
+  have, so this is approximate by design.
+- **PPF:** interest for each month on the lowest balance between the 5th and the month end (a deposit on or before the
+  5th counts that month), at that quarter's government rate / 12, credited on 31 March. The current value includes
+  this year's accrued interest (labelled). Deposits over ₹1.5 lakh in a financial year show a warning, not an error.
+  After the 15 years it keeps earning (the extension rules), unless marked closed.
+- **EPF:** interest each month on the month's closing balance at that financial year's EPFO rate / 12, credited on
+  31 March. A contribution counts from the month after it's made. The current value includes accrued, not yet
+  credited interest (labelled). "Invested" = the opening balance plus contributions; the gain is interest since then.
+- **Rates** (`worker/src/lib/rates.ts`, a small table in code, `checked: '2026-11-27'`):
+  PPF 7.1 % for every quarter from April 2020 to December 2026 ✅ (Finance Ministry notification of 30 Sep 2026, also
+  Business Standard, Upstox). EPF 8.50 % FY 2019-20 and 2020-21, 8.10 % 2021-22, 8.15 % 2022-23, 8.25 % 2023-24,
+  2024-25 and 2025-26 ✅ (FY 2025-26 notified by EPFO in July 2026). A period after the table ends uses the last rate
+  and is marked `provisional`, e.g. EPF for FY 2026-27, which is declared only next year. An asset's own rate override
+  wins over the table. The table is updated by hand each quarter. An ops checklist item goes in M16; fetching rates
+  automatically goes under "Later".
+- Pre-tax values everywhere (no TDS, no 80C), said in a footnote.
+
+**Storage** (`migrations/app/0012_manual_asset.sql`, the `DB` database):
+```sql
+CREATE TABLE manual_asset (
+  id           TEXT PRIMARY KEY,               -- uuid
+  household_id TEXT NOT NULL REFERENCES household(id) ON DELETE CASCADE,
+  member_id    TEXT REFERENCES member(id) ON DELETE CASCADE,   -- NOT NULL under option A
+  type         TEXT NOT NULL CHECK (type IN ('fd','ppf','epf')),
+  inputs_enc   BLOB NOT NULL,                  -- sealed JSON of every input above, including the label (§8)
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX manual_asset_household ON manual_asset(household_id, created_at);
+```
+- Inputs are sealed with the household DEK under the field key `asset/{id}/inputs` (the §8 format). Only the type is in
+  the clear, so D1 holds no amounts, rates, dates or bank names. A test scans the D1 columns for the plaintext.
+- Limits (§11): 50 assets per household, 100 PPF deposits per asset, 30 writes a day per household.
+- Deleting a member deletes their assets (cascade; the confirm dialog says so). Account deletion needs nothing new:
+  the rows cascade with the household and the DEK is shredded first (§8). Export (M14) adds a `manual_assets` section
+  with the decrypted inputs and today's computed values.
+
+**API** (all behind `requireSession()` and the tenant guard, §9.1; `member_id` checked with `assertMember`; another
+household's asset id is a 404):
+| Method & path | Purpose |
+|---|---|
+| `GET /api/assets` | `{ as_of, assets: [{ id, type, member_id, inputs, value: { current, invested, gain, income, rate_now, accrued, matured, provisional } }], rates: { checked } }` |
+| `POST /api/assets` | create `{ type, member_id, inputs }` → `201 { asset }`. `400 bad_input` names the field only, never the value |
+| `PATCH /api/assets/:id` | replace `inputs` (and `member_id`) |
+| `DELETE /api/assets/:id` | delete |
+
+**Deviation from the milestone text (Owner: OK?).** MILESTONES.md says `GET /api/portfolio` adds manual assets at read
+time. But that route streams the sealed gzip snapshot without parsing it (§10.2, "stream, don't parse"), so it can't
+add anything without giving up the flat CPU and memory it was built for. Instead, the SPA fetches `/api/assets` in
+parallel with `/api/portfolio` (one D1 read, a few ms of CPU) and merges them in the client. There's still no engine
+rebuild, and a change shows straight away.
+
+**Dashboard and totals.**
+- Total value, invested and gain include manual assets. Allocation adds them under **Debt**, with the categories
+  "Fixed deposit", "PPF" and "EPF", so the existing category colours and strip work unchanged.
+- **XIRR stays funds-only** and is labelled "Funds XIRR" once manual assets exist. Mixing modelled values into a
+  measured XIRR would make it look more exact than it is. **Owner:** OK, or include them?
+- Daily returns (§10.5) leave manual assets out: they don't move with the market day to day.
+- A **"Fixed income"** panel (the `Panel` pattern) lists each asset: label, member, value, gain, the rate used and an
+  "Approximate" `Badge`, plus "Matured" or "Provisional rate" where they apply. Empty state: "Add an FD, PPF or EPF".
+- **Members** page: each member's assets under their statements, with an **Add** button (and, under option A,
+  **Add member**).
+- **Add/edit dialog:** the existing `Dialog`, a `Segmented` control for FD / PPF / EPF, `Input`/`Label` fields, and
+  the PPF deposit list as rows with add/remove. Checked at 360 px and desktop, dark and light (plan §13).
+
+**Golden tests** (values worked out by hand in the test file and cross-checked against a bank / EPFO-style
+calculator): FD cumulative quarterly with a broken period; FD under 6 months; FD payout; FD after maturity; a premature
+FD with a penalty; PPF with irregular deposits (one before and one after the 5th, a skipped year, a year over
+₹1.5 lakh); PPF across a rate change (a synthetic rate table, since the real rate hasn't changed since 2020); EPF across
+a financial year whose rate differs from the year before; EPF past the end of the rate table (provisional);
+EPF with contributions stopped.
+
+**Later:** RD, NSC, SCSS, NPS, bonds; rates fetched automatically; matching a new statement member to a hand-added
+member without a PAN ("Is this Asha?"); tax views (TDS, 80C).
