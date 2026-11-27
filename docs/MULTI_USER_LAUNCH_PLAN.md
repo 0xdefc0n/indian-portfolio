@@ -3179,7 +3179,11 @@ date are stored, sealed. The name is used only as the member's name.
   - web: `statement-upload.tsx` ("Whose is this?", `SamePerson`) and the Members page.
 - **One upload.** `POST /api/statements` sends anything that isn't a PDF to the broker-file path. Up to 5 MB, the
   direct path only: a busy engine answers 503 `engine_busy` and the SPA tries again, as for M21 tradebooks. The
-  `/api/tradebooks` upload with a member picker stays.
+  `/api/tradebooks` upload with a member picker stays in the API.
+- **Two tabs, one upload** (owner, 2026-11-28). The Stocks & ETFs screen has a "CDSL statement | Broker file" switch.
+  Each tab has its own guide, file types and password hint, so the two aren't confused. The server reads either file
+  from either tab. "Buy prices for shares" opens the Broker file tab, which replaced the separate M21 tradebook form.
+  Broker files are listed and deleted on the Members page.
 - **Whose file it is**, in this order:
   1. the member whose PAN the file names;
   2. the member this account's earlier file went to;

@@ -642,12 +642,6 @@ export const api = {
   deleteAsset: (id: string) => call<{ ok: true }>(`/api/assets/${encodeURIComponent(id)}`, { method: "DELETE" }),
   /** Stock gains (M21): broker tradebooks and manual average buy prices. The dashboard rebuilds after each change. */
   tradebooks: () => call<{ tradebooks: Tradebook[]; costs: StockCost[] }>("/api/tradebooks"),
-  addTradebook: (file: File, memberId: string) => {
-    const fd = new FormData()
-    fd.append("member_id", memberId)
-    fd.append("file", file)
-    return call<{ tradebook: Tradebook }>("/api/tradebooks", { method: "POST", body: fd })
-  },
   deleteTradebook: (id: string) => call<{ ok: true }>(`/api/tradebooks/${encodeURIComponent(id)}`, { method: "DELETE" }),
   /** Broker holdings statements (M34), with the tradebooks. */
   brokerFiles: () => call<{ holdings: BrokerHoldings[]; tradebooks: Tradebook[] }>("/api/broker-files"),

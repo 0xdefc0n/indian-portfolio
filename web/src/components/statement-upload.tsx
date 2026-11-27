@@ -1,6 +1,7 @@
 // The statement upload (plan §13 item 5): a CDSL or CAMS / KFintech PDF and an optional password. Shown inside the
-// Add asset dialog (add-asset-dialog.tsx) for mutual funds and for stocks & ETFs. For stocks it also takes a broker
-// file (M34, plan §21.13): a holdings statement or tradebook, CSV or Excel. Those carry no PAN, so when the server
+// Add asset dialog (add-asset-dialog.tsx) for mutual funds and for stocks & ETFs. For stocks a switch picks a CDSL
+// statement or a broker file (M34, plan §21.13: a holdings statement or tradebook, CSV or Excel), each with its own
+// guide so the two aren't confused; the server reads either whichever is picked. Broker files carry no PAN, so when the server
 // can't tell whose it is, the form asks ("Whose is this?") and sends the file again with the answer. After a
 // statement makes a new member, a member made earlier from a broker file with the same name is offered as the same
 // person (SamePerson).
@@ -11,6 +12,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Segmented } from "@/components/ui/segmented"
 import { QueuedUpload } from "@/components/jobs"
 import {
   type AddedBrokerFile, type AddedStatement, ApiFailure, api, type BrokerOwner, type MemberSummary, type QueuedUpload as Queued, SignedOut,
@@ -43,12 +45,37 @@ function report(added: Added) {
   })
 }
 
-/** Where each broker's holdings statement is (plan §21.13). Tradebooks: tradebook-form.tsx. */
+/** Where each broker's holdings statement is (plan §21.13). */
 const HOLDINGS_WHERE: [string, string][] = [
   ["Groww", "Profile → Reports → Holdings statement (stocks), Excel."],
   ["Zerodha", "Console → Portfolio → Holdings → Download (XLSX)."],
   ["Dhan", "Statements → Holding summary (Excel or CSV). It has no buy prices: add them on each share."],
 ]
+
+/** Where each broker's tradebook is (plan §21.6 "Brokers"). */
+const TRADEBOOK_WHERE: [string, string][] = [
+  ["Zerodha", "Console → Reports → Tradebook (Equity), CSV or XLSX. Up to a year per file: add one per year."],
+  ["Groww", "Profile → Reports → Transactions → Stocks order history (Excel)."],
+  ["Angel One", "Account → Trades and charges → Download trade history."],
+  ["Upstox", "Reports → Trade report (Excel)."],
+  ["ICICI Direct", "Trade & Invest → Equity → Trade book (CSV or Excel)."],
+  ["Paytm Money", "Statements → Tradebook (Excel)."],
+  ["Dhan", "Journal → Global transactions (CSV)."],
+]
+
+/** "Where to download it", per broker. */
+function Where({ title, list }: { title: string; list: [string, string][] }) {
+  return (
+    <details className="text-xs text-muted-foreground">
+      <summary className="flex min-h-11 cursor-pointer items-center text-primary">{title}</summary>
+      <ul className="mt-1 grid gap-1.5">
+        {list.map(([b, w]) => <li key={b}><span className="font-medium text-foreground">{b}:</span> {w}</li>)}
+      </ul>
+    </details>
+  )
+}
+
+const LINK = "-my-2 py-2 text-primary underline-offset-4 hover:underline"
 
 type Problem = { message: string; hint?: string }
 type Phase = "uploading" | "reading" | "updating"
@@ -217,12 +244,16 @@ function UpdatingDashboard({ added, onDone }: { added: Added; onDone: () => void
  * Only the file and an optional password (D19). Members' PANs and pending passwords are tried on the server. Every
  * check the user could fix happens before anything is queued, so a queued upload never needs them again (§10.1 A).
  */
-export function UploadForm({ onDone, onQueued, kind = "mf" }: {
+export function UploadForm({ onDone, onQueued, kind = "mf", source: startSource = "cdsl" }: {
   onDone: () => void
   onQueued: () => void
-  /** Which help to show: funds (CAMS / KFintech first) or shares (CDSL). The upload is the same. */
+  /** Which help to show: funds (CAMS / KFintech first) or shares (CDSL, or a broker file). The upload is the same. */
   kind?: "mf" | "listed"
+  /** Shares only: the tab to open on ("Buy prices for shares" opens on the broker file). */
+  source?: "cdsl" | "broker"
 }) {
+  const [source, setSource] = useState<"cdsl" | "broker">(startSource)
+  const broker = kind === "listed" && source === "broker"
   const [busy, setBusy] = useState(false)
   const [phase, setPhase] = useState<Phase>("uploading")
   const [added, setAdded] = useState<Added | null>(null)
@@ -275,7 +306,7 @@ export function UploadForm({ onDone, onQueued, kind = "mf" }: {
           suggested: typeof err.data.suggested_name === "string" ? err.data.suggested_name : null })
       } else if (err instanceof ApiFailure && err.code === "file_locked") {
         setShowPassword(true)
-        setProblem({ message: err.message, hint: "Groww's files open with the account holder's PAN. Others: the password the broker gave you." })
+        setProblem({ message: err.message, hint: "Groww's files open with the account holder's PAN in capital letters." })
         requestAnimationFrame(() => passwordRef.current?.focus())
       } else if (err instanceof ApiFailure && err.code === "password_required") {
         // Nothing was stored: open the password field and say what to type (plan §10.1 A5).
@@ -319,55 +350,61 @@ export function UploadForm({ onDone, onQueued, kind = "mf" }: {
       />
     )
 
+  const pickSource = (v: "cdsl" | "broker") => {
+    setSource(v)
+    setFile(null)
+    setProblem(null)
+  }
+
   return (
     <form onSubmit={submit} className="grid gap-4">
+      {kind === "listed" && (
+        <Segmented kind="radio" label="What are you adding?" value={source} onChange={pickSource} className="w-full [&>button]:flex-1"
+          options={[{ id: "cdsl", label: "CDSL statement" }, { id: "broker", label: "Broker file" }]} />
+      )}
       <div className="grid gap-2">
-        <Label htmlFor="u-file">{kind === "listed" ? "Statement PDF or broker file" : "Statement PDF"}</Label>
+        <Label htmlFor="u-file">{broker ? "Holdings statement or tradebook" : "Statement PDF"}</Label>
         <label
           htmlFor="u-file"
           className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-dashed px-4 py-4 text-sm transition-colors hover:bg-muted/60 focus-within:outline-2 focus-within:outline-ring"
         >
           <FileUpIcon className="size-5 shrink-0 text-muted-foreground" />
-          <span className={file ? "min-w-0 truncate font-medium" : "text-muted-foreground"}>{file ? file.name : kind === "listed" ? "Choose a PDF, CSV or Excel file" : "Choose a PDF"}</span>
-          <input id="u-file" type="file" accept={kind === "listed" ? `application/pdf,.pdf,${BROKER_ACCEPT}` : "application/pdf"} required className="sr-only"
+          <span className={file ? "min-w-0 truncate font-medium" : "text-muted-foreground"}>{file ? file.name : broker ? "Choose a CSV or Excel file" : "Choose a PDF"}</span>
+          <input key={source} id="u-file" type="file" accept={broker ? BROKER_ACCEPT : "application/pdf,.pdf"} required className="sr-only"
             onChange={(e) => { setFile(e.target.files?.[0] ?? null); setProblem(null) }} />
         </label>
         {kind === "mf" ? (
           <p className="text-xs text-muted-foreground">
             A{" "}
-            <a className="-my-2 py-2 text-primary underline-offset-4 hover:underline" href="https://www.camsonline.com" target="_blank" rel="noopener noreferrer">
-            CAMS / KFintech
-          </a>{" "}
+            <a className={LINK} href="https://www.camsonline.com" target="_blank" rel="noopener noreferrer">CAMS / KFintech</a>{" "}
             statement has every fund with its full history: choose “Detailed” with the earliest start date to see
             returns. A{" "}
-            <a className="-my-2 py-2 text-primary underline-offset-4 hover:underline" href="https://www.cdslindia.com/CAS/LoginCAS.aspx" target="_blank" rel="noopener noreferrer">
-            CDSL
-          </a>{" "}
+            <a className={LINK} href="https://www.cdslindia.com/CAS/LoginCAS.aspx" target="_blank" rel="noopener noreferrer">CDSL</a>{" "}
             statement works too.
           </p>
+        ) : broker ? (
+          <>
+            <p className="text-xs text-muted-foreground">
+              Your broker's <span className="text-foreground">holdings statement</span> has each share's quantity and
+              average buy price. A <span className="text-foreground">tradebook</span> adds the buy dates, for XIRR and tax.
+              Read once and never kept: only the figures are saved, encrypted.
+            </p>
+            <Where title="Where to download a holdings statement" list={HOLDINGS_WHERE} />
+            <Where title="Where to download a tradebook" list={TRADEBOOK_WHERE} />
+          </>
         ) : (
           <p className="text-xs text-muted-foreground">
             A{" "}
-            <a className="-my-2 py-2 text-primary underline-offset-4 hover:underline" href="https://www.cdslindia.com/CAS/LoginCAS.aspx" target="_blank" rel="noopener noreferrer">
-            CDSL
-          </a>{" "}
+            <a className={LINK} href="https://www.cdslindia.com/CAS/LoginCAS.aspx" target="_blank" rel="noopener noreferrer">CDSL</a>{" "}
             eCAS lists every share and ETF in your demat account, with its funds. The password is usually the PAN in
-            capital letters. No CDSL statement? Your broker's holdings statement works too: it has the buy prices.
+            capital letters. No CDSL statement?{" "}
+            <button type="button" className={LINK} onClick={() => pickSource("broker")}>Add a broker file</button>.
           </p>
-        )}
-        {kind === "listed" && (
-          <details className="text-xs text-muted-foreground">
-            <summary className="-my-2 cursor-pointer py-2 text-primary">Where to download a holdings statement</summary>
-            <ul className="mt-1 grid gap-1.5">
-              {HOLDINGS_WHERE.map(([b, w]) => <li key={b}><span className="font-medium text-foreground">{b}:</span> {w}</li>)}
-            </ul>
-            <p className="mt-1.5">A broker tradebook (CSV or Excel) works here too. Files are read once and never kept.</p>
-          </details>
         )}
       </div>
       {showPassword ? (
         <div className="grid gap-2">
-          <Label htmlFor="u-password">{file && !isPdfFile(file) ? "File password" : "PDF password"}</Label>
+          <Label htmlFor="u-password">{broker || (file && !isPdfFile(file)) ? "File password" : "PDF password"}</Label>
           <Input id="u-password" ref={passwordRef} name="password" type="password" autoComplete="off" className="h-11"
             aria-describedby="u-password-hint" value={password} onChange={(e) => { setPassword(e.target.value); if (problem?.hint) setProblem(null) }} />
           <p id="u-password-hint" className="text-xs text-muted-foreground">
@@ -390,7 +427,7 @@ export function UploadForm({ onDone, onQueued, kind = "mf" }: {
         <Progress phase={phase} />
       ) : (
         <Button type="submit" className="h-11" disabled={!file}>
-          Add statement
+          {broker ? "Add file" : "Add statement"}
         </Button>
       )}
     </form>
