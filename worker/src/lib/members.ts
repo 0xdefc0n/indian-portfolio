@@ -129,21 +129,22 @@ export async function renameMember(t: Tenant, memberId: string, name: string, au
 }
 
 /**
- * Delete a member, their statements and any queued job for them (rows cascade), then their R2 blobs: statement
- * JSON under h/ and parked PDFs under tmp/. Rows go first, in one transaction, so nothing ever points at a missing
+ * Delete a member, their statements, tradebooks and any queued job for them (rows cascade), then their R2 blobs:
+ * statement and tradebook JSON under h/ and parked PDFs under tmp/. Rows go first, in one transaction, so nothing ever points at a missing
  * blob; a blob delete that fails leaves only an unreferenced object, which account deletion's prefix sweep removes.
  * False if the member isn't this household's.
  */
 export async function deleteMember(t: Tenant, memberId: string, audit: D1PreparedStatement): Promise<boolean> {
   const db = t.env.DB
-  const [statementKeys, jobKeys, del] = await db.batch<{ blob_key: string }>([
+  const [statementKeys, jobKeys, tradebookKeys, del] = await db.batch<{ blob_key: string }>([
     db.prepare('SELECT blob_key FROM statement WHERE member_id = ?1 AND household_id = ?2').bind(memberId, t.householdId),
     db.prepare('SELECT blob_key FROM parse_job WHERE member_id = ?1 AND household_id = ?2 AND blob_key IS NOT NULL').bind(memberId, t.householdId),
+    db.prepare('SELECT blob_key FROM tradebook WHERE member_id = ?1 AND household_id = ?2').bind(memberId, t.householdId), // M21
     db.prepare('DELETE FROM member WHERE id = ?1 AND household_id = ?2').bind(memberId, t.householdId),
     audit, // written only if the DELETE removed the row (auditStatement onlyIfChanged)
   ])
   if (!(del?.meta.changes ?? 0)) return false
-  const keys = [...(statementKeys?.results ?? []), ...(jobKeys?.results ?? [])].map((r) => r.blob_key)
+  const keys = [...(statementKeys?.results ?? []), ...(jobKeys?.results ?? []), ...(tradebookKeys?.results ?? [])].map((r) => r.blob_key)
   try {
     await deleteBlobs(t.env, t.householdId, keys)
   } catch (err) {

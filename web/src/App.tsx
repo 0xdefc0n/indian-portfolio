@@ -28,7 +28,7 @@ import {
 import { Segmented } from "@/components/ui/segmented"
 import { OpenFundContext } from "@/lib/fund-context"
 import {
-  api, type Daily, type Holding, isOffline, type MarketStatus, type Me, type Member, type Portfolio, SignedOut, waitForPortfolio,
+  api, type Daily, type Holding, isOffline, type MarketStatus, type Me, type Member, type Portfolio, SignedOut, type StockCost, waitForPortfolio,
 } from "@/lib/api"
 import { DailyReturns, TodayTile } from "@/components/daily-returns"
 import { byFund } from "@/lib/daily"
@@ -170,7 +170,10 @@ export default function App({ me }: { me: Me }) {
   const assetRows = useMemo(() => valued(assets.assets ?? [], assets.rates), [assets.assets, assets.rates])
   const [assetDlg, setAssetDlg] = useState<AssetDialogState>(null)
 
+  // Manual buy prices of shares (M21), for the holding dialog's form. Not needed to draw the dashboard.
+  const [costs, setCosts] = useState<StockCost[]>([])
   const load = useCallback(() => {
+    api.tradebooks().then((t) => setCosts(t.costs), () => undefined)
     api.portfolio().then(
       (d) => {
         setOffline(false)
@@ -661,6 +664,11 @@ export default function App({ me }: { me: Me }) {
         sips={data?.sips ?? []}
         benchmark={data?.benchmark ?? null}
         stocks={data?.stocks ?? null}
+        costs={costs}
+        onChanged={() => {
+          setFund(null)
+          load()
+        }}
       />
     </div>
     </OpenFundContext.Provider>

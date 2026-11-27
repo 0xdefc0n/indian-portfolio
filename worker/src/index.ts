@@ -26,6 +26,7 @@ import { metricRoutes } from './routes/metrics'
 import { portfolioRoutes } from './routes/portfolio'
 import { sipRoutes } from './routes/sips'
 import { statementRoutes } from './routes/statements'
+import { tradebookRoutes } from './routes/tradebooks'
 import type { AppBindings, AppEnv } from './types'
 
 export { EngineBatch, EngineFast } from './engine'
@@ -104,6 +105,7 @@ app.route('/', jobRoutes)
 app.route('/', portfolioRoutes)
 app.route('/', sipRoutes)
 app.route('/', assetRoutes)
+app.route('/', tradebookRoutes)
 app.route('/', metricRoutes)
 
 app.notFound((c) => c.json({ ok: false, code: 'not_found' }, 404))
@@ -143,7 +145,7 @@ export default {
     if (NAV_INGEST_CRONS.includes(cron)) {
       ctx.waitUntil(navIngest(env, { cron, now: controller.scheduledTime }).then(() => undefined))
       // Exchange prices for shares and bonds (M20): today's close at 23:00 IST, the official one at 07:00 IST.
-      if (PRICE_CRONS.includes(cron)) ctx.waitUntil(requestAllPrices(env, controller.scheduledTime))
+      if (PRICE_CRONS.includes(cron)) ctx.waitUntil(requestAllPrices(env, controller.scheduledTime, cron))
       return
     }
     if (cron === PREBUILD_CRON) {

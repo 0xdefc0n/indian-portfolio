@@ -40,7 +40,9 @@ export const ASK_AGAIN_MS = 6 * 3_600_000
 const INTRADAY_FROM_HOUR = 16
 const ROWS_PER_STATEMENT = 2_000
 
-export type PriceRow = { isin: string; date: Ymd; close: number }
+/** `high` only on 31 Jan 2018: the grandfathered cost of shares bought before then (M21, stock_fmv_2018). */
+export type PriceRow = { isin: string; date: Ymd; close: number; high?: number }
+export const FMV_DATE: Ymd = 20180131
 export type Exchange = 'NSE' | 'BSE'
 
 export class PriceFormatError extends Error {
@@ -70,14 +72,16 @@ export function parseCandles(body: unknown, isin: string, today: Ymd): PriceRow[
   const b = body as { status?: unknown; data?: { candles?: unknown } }
   if (b?.status !== 'success' || !Array.isArray(b.data?.candles)) throw new PriceFormatError('shape')
   const byDate = new Map<Ymd, number>()
+  let high: number | undefined
   for (const c of b.data.candles as unknown[]) {
     if (!Array.isArray(c) || typeof c[0] !== 'string' || !/^\d{4}-\d{2}-\d{2}/.test(c[0])) throw new PriceFormatError('candle')
     const date = Number(c[0].slice(0, 10).replaceAll('-', ''))
     const close = Number(c[4])
     if (date > today || !Number.isFinite(close) || close <= 0) continue
     byDate.set(date, close)
+    if (date === FMV_DATE && Number(c[2]) > 0) high = Number(c[2])
   }
-  return [...byDate.entries()].sort((x, y) => x[0] - y[0]).map(([date, close]) => ({ isin, date, close }))
+  return [...byDate.entries()].sort((x, y) => x[0] - y[0]).map(([date, close]) => (date === FMV_DATE && high ? { isin, date, close, high } : { isin, date, close }))
 }
 
 export type FetchOpts = { tries?: number; sleep?: (ms: number) => Promise<void>; timeoutMs?: number }
@@ -261,6 +265,12 @@ export async function runPrices(env: { MARKET: D1Database; BUCKET: R2Bucket }, i
         owner.push(isin)
       }
       out.rows += got.rows.length
+      const fmv = got.rows.find((r) => r.date === FMV_DATE && r.high)
+      if (fmv) {
+        stmts.push(
+          db.prepare('INSERT INTO stock_fmv_2018 (isin, high) VALUES (?1, ?2) ON CONFLICT (isin) DO UPDATE SET high = excluded.high WHERE high <> excluded.high').bind(isin, fmv.high),
+        )
+      }
       stmts.push(
         db
           .prepare(

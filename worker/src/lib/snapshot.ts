@@ -27,6 +27,7 @@ import { mffKey } from '../market/mfforecast'
 import { sendPrices } from '../market/jobs'
 import { EQUITY_ISIN, pricesPending, priceVersion, trackEquities } from '../market/prices'
 import { scoresFor, scoreVersion } from '../market/score'
+import { corpFor, corpVersion } from '../market/corp'
 import { apiKey, budgetLeft, recordWants, requestStocks, stockData, stocksEnabled, stocksVersion } from '../market/stocks'
 import { blobKeys, deleteBlobs, getJsonBlob, isUuid } from './blob'
 import { FLAG_GZIP, hmacHex, toBytes, type Vault } from './crypto'
@@ -35,16 +36,18 @@ import { engineApi } from './engine-client'
 import { waitDelay } from './jobs'
 import { cleanName, fieldKey } from './members'
 import { sipFieldKey } from './sip-overrides'
+import { stockCostKey } from './tradebooks'
 import { soldSchemeCodes } from './statements'
 import { Tenant } from './tenant'
 
 /**
  * Bump to rebuild every snapshot (a change in what the Worker sends to /build, or in what the engine builds).
  * 2: stock data (M11). 3: units timelines, estimated SIPs and values at the latest NAV (M12). 4: the SIP mandate day
- * follows a date change (M12 fix). 5: shares and bonds at the latest exchange price (M20). 6: benchmark scores (M28). An older snapshot is stale,
+ * follows a date change (M12 fix). 5: shares and bonds at the latest exchange price (M20). 6: benchmark scores (M28).
+ * 7: stock gains, corporate actions and dividends (M21). An older snapshot is stale,
  * so it rebuilds on its next read (snapshot.version).
  */
-export const SNAPSHOT_VERSION = 6
+export const SNAPSHOT_VERSION = 7
 /** Debounce: every trigger's message arrives this much later (§10.2). */
 export const REBUILD_DELAY_S = 10
 /** A claim outlives the engine call (100 s) and matches the batch lease (120 s). */
@@ -144,8 +147,14 @@ export function usedStatements(rows: StatementRow[]): StatementRow[] {
  * `holidays`: exchange holidays for SIP run days (M12); a new one rebuilds.
  * `prices`: price_state.version (M20), so new exchange closes rebuild.
  * `scores`: score_state.version (M28), so new benchmark scores rebuild.
+ * `corp`: corp_state.version (M21), so new corporate actions or symbols rebuild.
  */
-export type MarketInputs = { marketDate: string; navKey: string; stocks?: number; holidays?: string[]; prices?: number; scores?: number }
+export type MarketInputs = { marketDate: string; navKey: string; stocks?: number; holidays?: string[]; prices?: number; scores?: number; corp?: number }
+
+/** Broker tradebooks (M21): their parsed trades are sealed at `blob_key`. */
+export type TradebookRow = { id: string; member_id: string; broker: string; blob_key: string }
+/** Manual average buy prices (M21): `cost_enc` is sealed {isin, avg_price, since}. */
+export type StockCostRow = { id: string; member_id: string; cost_enc: number[]; updated_at: number }
 
 /** The user's SIP skips and cancels (M12): `sip_enc` is sealed {isin, folio}. */
 export type OverrideRow = { id: string; member_id: string; kind: 'skip' | 'cancel'; due: string; sip_enc: number[] }
@@ -162,9 +171,20 @@ const hex = (b: ArrayLike<number> | null) => (b ? Array.from(toBytes(b), (x) => 
  * What the snapshot depends on, as an opaque 32-hex HMAC: the statements used, each member's (sealed) name, the market
  * day, the stock data version and SNAPSHOT_VERSION. Keyed with PAN_PEPPER, so it reveals nothing.
  */
-export async function inputsHash(env: { PAN_PEPPER: string }, market: MarketInputs, statements: StatementRow[], members: MemberRow[], overrides: { id: string }[] = []): Promise<string> {
+export async function inputsHash(
+  env: { PAN_PEPPER: string },
+  market: MarketInputs,
+  statements: StatementRow[],
+  members: MemberRow[],
+  overrides: { id: string }[] = [],
+  tradebooks: { id: string }[] = [],
+  costs: { id: string; updated_at: number }[] = [],
+): Promise<string> {
   const doc = JSON.stringify({
     v: SNAPSHOT_VERSION,
+    cp: market.corp ?? 0,
+    tb: tradebooks.map((t) => t.id).sort(),
+    cost: costs.map((c) => `${c.id}:${c.updated_at}`).sort(),
     nav: market.navKey,
     st: market.stocks ?? 0,
     px: market.prices ?? 0,
@@ -207,30 +227,35 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
   const started = Date.now()
 
   // 1. Inputs and their hash.
-  const [hRes, sRes, mRes, snapRes, oRes] = await db.batch([
+  const [hRes, sRes, mRes, snapRes, oRes, tRes, cRes] = await db.batch([
     db.prepare('SELECT dek_wrapped, kek_version, owner_user_id FROM household WHERE id = ?1').bind(hid),
     db.prepare('SELECT id, member_id, kind, as_of, created_at, blob_key FROM statement WHERE household_id = ?1').bind(hid),
     db.prepare('SELECT id, display_name_enc FROM member WHERE household_id = ?1').bind(hid),
     db.prepare(`SELECT ${SNAPSHOT_COLUMNS} FROM snapshot WHERE household_id = ?1`).bind(hid),
     db.prepare('SELECT id, member_id, kind, due, sip_enc FROM sip_override WHERE household_id = ?1').bind(hid),
+    db.prepare('SELECT id, member_id, broker, blob_key FROM tradebook WHERE household_id = ?1').bind(hid),
+    db.prepare('SELECT id, member_id, cost_enc, updated_at FROM stock_cost WHERE household_id = ?1').bind(hid),
   ])
   const household = hRes!.results[0] as { dek_wrapped: number[]; kek_version: number; owner_user_id: string } | undefined
   const snap = snapRes!.results[0] as SnapshotRow | undefined
   if (!household || !snap) return done(env, msg, 'gone')
   const loadedAt = now
   // Fresh, not the 5-minute edge copy: right after a day turns final, prebuild messages must see the new nav_key.
-  const [status, stocks, holidays, prices, scores] = await Promise.all([
+  const [status, stocks, holidays, prices, scores, corp] = await Promise.all([
     marketStatus(env),
     stocksVersion(env),
     holidayDates(env, addDays(istToday(now), -HOLIDAY_LOOKBACK_DAYS)),
     priceVersion(env),
     scoreVersion(env),
+    corpVersion(env),
   ])
-  const market = { ...marketInputs(status, now), stocks, holidays, prices, scores }
+  const market = { ...marketInputs(status, now), stocks, holidays, prices, scores, corp }
   const used = usedStatements(sRes!.results as StatementRow[])
   const members = mRes!.results as MemberRow[]
   const overrides = oRes!.results as OverrideRow[]
-  const hash = await inputsHash(env, market, used, members, overrides)
+  const tradebooks = tRes!.results as TradebookRow[]
+  const costs = cRes!.results as StockCostRow[]
+  const hash = await inputsHash(env, market, used, members, overrides, tradebooks, costs)
 
   if (!used.length) return clearSnapshot(env, msg, snap, hash, market, loadedAt)
 
@@ -265,7 +290,7 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
     // 4. Decrypt, build, seal.
     const t = new Tenant(env, hid, household.owner_user_id)
     const vault = await t.vaultFromRow(household)
-    const request = await buildRequest(env, vault, used, members, market, now, overrides)
+    const request = await buildRequest(env, vault, used, members, market, now, overrides, tradebooks, costs)
     holding = false
     const built = await engineApi.build(env, slot, request.body)
     if (!built.ok) throw new BuildError(built.code)
@@ -395,7 +420,17 @@ type BuildItem = { member_id: string; name: string | null; data: Record<string, 
  * whose NAV history is still being backfilled (`refresh`: the engine reads them fresh, and we build again later), and
  * the stored stock data for the held funds (M11).
  */
-async function buildRequest(env: Env, vault: Vault, used: StatementRow[], members: MemberRow[], market: MarketInputs, now: number, overrideRows: OverrideRow[] = []) {
+async function buildRequest(
+  env: Env,
+  vault: Vault,
+  used: StatementRow[],
+  members: MemberRow[],
+  market: MarketInputs,
+  now: number,
+  overrideRows: OverrideRow[] = [],
+  tradebookRows: TradebookRow[] = [],
+  costRows: StockCostRow[] = [],
+) {
   const names = new Map<string, string | null>()
   for (const m of members) names.set(m.id, m.display_name_enc ? await vault.openText(fieldKey.name(m.id), m.display_name_enc) : null)
   const items: BuildItem[] = []
@@ -449,7 +484,31 @@ async function buildRequest(env: Env, vault: Vault, used: StatementRow[], member
     const sip = JSON.parse(await vault.openText(sipFieldKey(o.id), o.sip_enc)) as { isin: string; folio: string | null }
     overrides.push({ member_id: o.member_id, isin: sip.isin, folio: sip.folio, kind: o.kind, due: o.due })
   }
+  // Stock gains (M21): each member's tradebook trades, manual prices, and the corporate actions they need.
+  const trades: { member_id: string; broker: string; trades: Array<Record<string, unknown>> }[] = []
+  const symbols = new Set<string>()
+  const tradeNames = new Set<string>()
+  const tradeIsins = new Set<string>()
+  for (const tb of tradebookRows) {
+    const blob = await getJsonBlob<{ trades?: Array<Record<string, unknown>> }>(env, vault, tb.blob_key)
+    if (!blob) throw new BuildError('tradebook_missing')
+    const list = Array.isArray(blob.trades) ? blob.trades : []
+    for (const tr of list) {
+      if (typeof tr.symbol === 'string') symbols.add(tr.symbol)
+      if (typeof tr.isin === 'string') tradeIsins.add(tr.isin)
+      if (typeof tr.name === 'string' && !tr.symbol && !tr.isin) tradeNames.add(tr.name)
+    }
+    trades.push({ member_id: tb.member_id, broker: tb.broker, trades: list })
+  }
+  const stockCosts = []
+  for (const c of costRows) {
+    const v = JSON.parse(await vault.openText(stockCostKey(c.id), c.cost_enc)) as { isin: string; avg_price: number; since: string | null }
+    stockCosts.push({ member_id: c.member_id, isin: v.isin, avg_price: v.avg_price, since: v.since ?? null })
+  }
+  const corp = await corpFor(env, [...isins, ...tradeIsins].filter((i) => /^IN[EF9]/.test(i)), [...symbols], [...tradeNames])
   const body = JSON.stringify({
+    trades,
+    stock_costs: stockCosts,
     statements: items,
     market: {
       market_date: market.marketDate,
@@ -461,6 +520,9 @@ async function buildRequest(env: Env, vault: Vault, used: StatementRow[], member
       price_key: `${market.navKey}|px${market.prices ?? 0}`,
       price_refresh: pending,
       scores: await scoresFor(env, [...isins]), // benchmark scores by ISIN (M28)
+      corp_actions: corp.corp_actions, // M21
+      symbols: corp.symbols,
+      fmv_2018: corp.fmv_2018,
     },
     today: ymdToIso(istToday(now)),
     format: 'gzip',

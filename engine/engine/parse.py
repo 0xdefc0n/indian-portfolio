@@ -11,6 +11,7 @@ import sys
 import time
 
 from .parsers import CASParseError, parse_statement
+from .parsers.tradebook import TradebookError, parse_tradebook
 
 log = logging.getLogger("engine.parse")
 
@@ -57,3 +58,18 @@ def parse_pdf(data: bytes, password: str, kind: str | None = None) -> dict:
 
 def _metrics(t0: float) -> dict:
     return {"cpu_ms": round((time.process_time() - t0) * 1000), "peak_rss_mb": peak_rss_mb()}
+
+
+def parse_trades(data: bytes, password: str) -> dict:
+    """A broker tradebook (M21): {ok: True, kind: "TRADEBOOK", source: broker slug, pan, statement, metrics} or
+    {ok: False, code, ...}. `password` is the member's PAN, for brokers whose reports open with it (Groww)."""
+    t0 = time.process_time()
+    try:
+        tb = parse_tradebook(data, [password.upper(), password] if password else [])
+    except TradebookError as e:
+        log.info("tradebook failed: %s", e.code)
+        return {"ok": False, "code": e.code, "message": str(e), "metrics": _metrics(t0)}
+    except Exception as e:
+        log.warning("tradebook parser crashed: %s", type(e).__name__)
+        return {"ok": False, "code": "parse_error", "message": "Could not read this tradebook", "metrics": _metrics(t0)}
+    return {"ok": True, "kind": "TRADEBOOK", "source": tb["broker"], "pan": tb.pop("pan"), "statement": tb, "metrics": _metrics(t0)}

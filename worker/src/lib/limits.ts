@@ -14,6 +14,9 @@ export const LIMITS = {
   metricEventsPerDay: 30, // plan §13A.6: POST /api/metrics (a normal day sends a handful)
   assetsPerHousehold: MAX_ASSETS, // plan §21.12: FD, PPF, EPF entered by hand (M19)
   assetWritesPerDay: 30, // adds and edits; deleting is never limited
+  tradebookBytes: 5 * 1024 * 1024, // plan §21.6: a broker tradebook (CSV or Excel)
+  tradebooksPerMember: 24,
+  stockCostsPerHousehold: 500, // manual average buy prices (M21)
 } as const
 
 /** Product counters: caps what one account can add to the shared daily totals. */
