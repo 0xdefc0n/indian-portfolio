@@ -6,6 +6,29 @@ the owner; link in the M24 session report). All names and figures there are made
 This is a proposal. Nothing in `web/` changes until the owner picks a direction. After that, the build session turns
 the chosen direction into plan §13 (design system v2) and applies it to every screen.
 
+## 0. Owner's decisions (2026-11-27)
+
+- **Logo:** wordmark option 1 (Glass tile). **App icon:** the owner's stacked design ("Pocket" over the gold "folio"
+  block on a dark tile). The favicon at 32/16 px uses the gold block alone.
+- **Dashboard:** direction A's colours and material, **with a better layout** and a richer phone layout. On first
+  sight it should feel smooth and simple and invite exploring: an interactive chart and slow, smooth motion.
+- **Member split:** yes, with **"Everyone" first, then each member**, in both the switcher and the Family card.
+- **Statement dates per member:** **no** (drop "last statement" from the dashboard).
+- **Asset-class cards first:** yes.
+- **Other pages** are redesigned in code during the build session, in the approved system, and checked on staging.
+  The canvas only settles the look.
+
+**A v2 on the canvas (for the owner's OK):**
+- The chart sits inside the hero and drives the big number: scrubbing shows any month's value and its change.
+- The member switcher (Everyone, Ravi, Asha, Amma) morphs the number, the chart and the asset cards over 0.9 s.
+- The asset cards carry a sparkline and their share, under an allocation bar.
+- The Family card has a share ring per member and lists Everyone first.
+- "Worth a look" is insight cards (a horizontal carousel on the phone), next to a "Coming up" timeline.
+- Motion: a staggered 0.9 s rise on load, the total counting up over 1.6 s, the chart drawing in over 1.8 s, and
+  cards lifting on hover or pressing on tap. All of it is off under `prefers-reduced-motion`.
+- The tax-free-gains insight is shown only if the build has that figure; otherwise it's left out (no new
+  calculations in M24).
+
 ## 1. What stays
 
 - The layout rules of plan §13: 360 px first, `BottomNav` on mobile, 44 px touch targets, loading/empty/error states,
