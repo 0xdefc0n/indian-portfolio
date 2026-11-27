@@ -62,7 +62,8 @@ Status values: `todo` · `in progress` · `blocked (needs owner: …)` · `done`
    the whole plan every time.
 2. **Pick the milestone:** the one the owner named, otherwise the first row in the Status table that isn't `done`.
    Never skip ahead. If the previous milestone isn't `done`, finish or unblock it first.
-3. **Check "Needs from owner".** If anything is missing, stop before writing code. Set the row to
+3. **Check "Needs from owner"**, and any **"From M23"** line (open decisions from the research): ask the owner
+   those questions before building. If anything is missing, stop before writing code. Set the row to
    `blocked (needs owner: …)` and tell the owner exactly what's needed and how to provide it. **Secrets go in a
    git-ignored file (`worker/.dev.vars`, `.env`), never in chat.** Claude reads them from there and never prints them.
 4. **Branch:** all milestones are built on the single branch **`multi-user`**, one or more commits per milestone, with
@@ -401,6 +402,10 @@ dashboard, applied to every existing screen.
 **Read:** plan §13, §21.1, `docs/research/COMPETITORS.md` (M23).
 **Needs from owner:** OK on the design direction (a written spec with 2–3 rendered options of the dashboard and the logo,
 in the first session), then OK on the final look.
+**From M23 (ask the owner in the first session, with the design options):** read `docs/research/COMPETITORS.md` §5 (dashboard) and §3
+(feature matrix). Ask: (1) add a per-member split under the family total? (2) add "last statement: <date>" per member
+(Claude's idea, not seen elsewhere)? (3) asset-class cards for every type instead of a funds-first layout? The logo and
+copy must not echo Portfolio360's "Your family's wealth, in one number" (§3).
 **Build:**
 - **Logo:** a two-part wordmark in SVG: "Pocket" in plain text, "folio" on a gold, glass-like rounded block. Light and
   dark versions, a square mark, the favicon, the PWA icons and maskable icons (replacing the M15 ones), and the Google
@@ -440,6 +445,11 @@ household, no user row is created, and no email is queued), and phone-to-desktop
 **Read:** plan §21.2, §13 (v2 from M24), `docs/research/COMPETITORS.md`.
 **Needs from owner:** OK on the landing copy (drafted from M23). OK to install the SEO skill after Claude's review (below).
 A Google Search Console property for `pocketfolio.in` (owner verifies it by DNS), done any time before M17.
+**From M23 (ask the owner before writing copy):** read `docs/research/COMPETITORS.md` §1 (positioning), §4 (landing) and §7 (keywords,
+AI search). Ask: (1) is the positioning line OK? (2) headline A, B or C (§4)? (3) the answer to FAQ 6, "is it free, and
+how do you make money?" (D7 says free with fair-use limits; pricing waits for M31), (4) robots.txt: allow
+`OAI-SearchBot` and `PerplexityBot`; block or allow `GPTBot` and `Google-Extended` (training)? Never invent proof
+points (§4).
 **Build:**
 - **SEO tooling:** read the third-party code of github.com/AgricIDaniel/claude-seo (and what claudeseoskill.com
   describes) in full. Check that it sends nothing anywhere and runs nothing unexpected. Write the review into
@@ -462,6 +472,9 @@ light.
 **Goal:** helpful articles that bring families to PocketFolio from Google and AI search.
 **Read:** plan §21.2, `docs/research/COMPETITORS.md` (keywords), `docs/research/SEO.md`.
 **Needs from owner:** a review of each draft. **A post goes live only after the owner's OK.**
+**From M23:** the 8 post titles and the keyword clusters are in `docs/research/COMPETITORS.md` §7, and the sources per post are in
+`docs/research/competitors/keywords-communities.md` §1. Ask the owner which posts to draft first, and recheck the CAS
+password rules against official sources before post 1 (published guides disagree, §3).
 **Build:**
 - `/blog` and `/blog/<slug>`, prerendered from Markdown in the repo, with a `draft` flag that keeps a post out of the
   build, the sitemap and the feed. RSS feed, `Article` structured data, author and dates, related posts, a call to
@@ -479,6 +492,11 @@ OK'd each post that goes live.
 plan from the user's real portfolio after sign-in.
 **Read:** plan §21.3, `docs/research/COMPETITORS.md` (FIRE section).
 **Needs from owner:** OK on the plan section (inputs, formulas, outputs) written in the first session.
+**From M23 (ask the owner when writing the plan section):** read `docs/research/COMPETITORS.md` §6 and
+`docs/research/competitors/fire-calculators.md` §4. Ask: (1) the defaults that have no source: healthcare and education
+inflation (10%?), gold return (8%?), Monte Carlo volatility; (2) include the optional Monte Carlo "stress test" tab?
+(3) bootstrap from the Nifty TRI history M28 stores, given the niftyindices.com terms question? Verify the EPF
+withdrawal tax rules before modelling them.
 **Build:**
 - **Public `/fire`** (prerendered, SEO page): age, retirement age, monthly expenses, current savings, monthly SIP,
   expected returns, inflation, withdrawal rate. Out: FIRE number, years to FI, the SIP needed, a corpus chart, and Lean,
@@ -496,6 +514,11 @@ checked at 360 px and desktop, dark and light.
 **Goal:** a plan for reaching families on Reddit, LinkedIn and X, with the first posts ready.
 **Read:** plan §21.11, `docs/research/COMPETITORS.md` (communities), the published blog posts.
 **Needs from owner:** the owner creates the accounts and posts. **Claude never posts, comments or creates accounts.**
+**From M23:** communities, sizes and promotion rules are in `docs/research/COMPETITORS.md` §7 and
+`docs/research/competitors/keywords-communities.md` §3, but come from third-party directories: Reddit refused the
+research tools. **First ask the owner to check each subreddit's sidebar and rules in a browser** (or OK installing the
+last30days skill for Reddit only, with no browser cookies or Reddit login). Under SEBI's 2025 rules, posts are education
+only.
 **Build:** `docs/marketing/SOCIAL_PLAYBOOK.md`:
 - **Reddit:** which subreddits, each one's self-promotion rules (read and cited), a comment-first approach, cadence,
   and what gets accounts banned.
@@ -653,6 +676,9 @@ additions: the public pages (landing, blog, `/fire`) get CSP and caching checks,
 **Needs from owner:** read-only access to the Cloudflare usage dashboard numbers (Claude reads them through the API with
 the existing token). OK on the recommendation.
 **Order:** after M16 (owner, 2026-11-27), so it uses measured numbers, not estimates.
+**From M23:** competitor prices are in `docs/research/COMPETITORS.md` §2 (free, ₹499, ₹999 + ₹749 per member, ₹1,499, ₹2,500, ₹2,999,
+₹18,000+), and what paid tiers sell (tax pack, family view, scores, FIRE, AI) is in §1.5. The study also answers M25's
+FAQ 6, "how do you make money?".
 **Build:** `docs/research/COST_AND_PRICING.md`:
 - Cost per user per year at 1k, 10k and 100k users, by line item (containers, D1, R2, queues, email, BharatStock,
   domains), from the load tests and staging usage. Update plan §18.
