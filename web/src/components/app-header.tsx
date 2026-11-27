@@ -2,16 +2,12 @@
 import { Link } from "wouter"
 
 import { AccountMenu } from "@/components/account-menu"
+import { Wordmark } from "@/components/brand"
 import { LegalFooter } from "@/components/legal-footer"
 import { ThemeToggle } from "@/components/theme-toggle"
 import type { Me } from "@/lib/api"
 
-const mark = (
-  <>
-    <span className="grid size-[30px] place-items-center rounded-[9px] bg-foreground text-sm font-bold text-background">₹</span>
-    <span className="hidden font-semibold tracking-tight sm:inline">PocketFolio</span>
-  </>
-)
+const mark = <Wordmark className="h-[24px] sm:h-[26px]" />
 
 /** onHome: the dashboard resets its tab instead of navigating; other pages link back to "/". */
 export function AppHeader({ me, onHome, nav, actions }: { me: Me; onHome?: () => void; nav?: React.ReactNode; actions?: React.ReactNode }) {
@@ -20,9 +16,9 @@ export function AppHeader({ me, onHome, nav, actions }: { me: Me; onHome?: () =>
       <div className="mx-auto flex h-[68px] max-w-[1240px] items-center justify-between gap-5 px-4 sm:px-7">
         <div className="flex min-w-0 items-center gap-6">
           {onHome ? (
-            <button className="flex shrink-0 items-center gap-2.5" onClick={onHome}>{mark}</button>
+            <button className="flex min-h-11 shrink-0 items-center gap-2.5" aria-label="PocketFolio, go to the overview" onClick={onHome}>{mark}</button>
           ) : (
-            <Link href="/" aria-label="PocketFolio, go to your portfolio" className="flex shrink-0 items-center gap-2.5">{mark}</Link>
+            <Link href="/" aria-label="PocketFolio, go to your portfolio" className="flex min-h-11 shrink-0 items-center gap-2.5">{mark}</Link>
           )}
           {nav && <div className="hidden md:block">{nav}</div>}
         </div>

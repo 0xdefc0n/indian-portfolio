@@ -50,12 +50,12 @@ export const CATEGORY_COLOR: Record<string, string> = {
   "Stocks & bonds": "var(--cat-stocks)",
   "Other funds": "var(--cat-other)",
   // FD, PPF and EPF entered by hand (M19), under Debt: existing tokens, no new colours (§13)
-  "Fixed deposit": "var(--cat-debt)",
-  PPF: "var(--cat-hybrid)",
-  EPF: "var(--cat-stocks)",
+  "Fixed deposit": "var(--cat-fd)",
+  PPF: "var(--cat-ppf)",
+  EPF: "var(--cat-epf)",
   // Gold, silver and SGBs (M29), under Gold & silver: existing tokens (§13)
   Gold: "var(--cat-gold)",
-  Silver: "var(--cat-other)",
+  Silver: "var(--cat-silver)",
   SGB: "var(--cat-sector)",
 }
 export const categoryColor = (c: string) => CATEGORY_COLOR[c] ?? "var(--cat-other)"

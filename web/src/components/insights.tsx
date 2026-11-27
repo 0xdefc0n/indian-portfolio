@@ -260,7 +260,7 @@ export function MoneyFlow({ analyses, activity, members, showMember }: {
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="mt-5 inline-flex items-center gap-1.5 rounded-sm text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        className="mt-2 inline-flex min-h-11 items-center gap-1.5 rounded-sm text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       >
         {open ? "Hide details" : "Show details"}
         <ChevronDownIcon className={cn("size-4 transition-transform", open && "rotate-180")} />

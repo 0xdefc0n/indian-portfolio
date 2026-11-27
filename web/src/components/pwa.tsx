@@ -237,7 +237,7 @@ export function OfflinePanel({ className }: { className?: string }) {
 // ─── Theme colour ────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** --background of each theme in src/index.css (the class lands on <html> after this effect, so it can't be read). */
-const THEME_COLOUR = { light: "#F2F3F7", dark: "#0A0C14" } as const
+const THEME_COLOUR = { light: "#F5F3EE", dark: "#0B0D12" } as const
 
 /** The status bar and title bar follow the chosen theme (index.html starts them on the system theme). */
 export function ThemeColorSync() {

@@ -33,8 +33,8 @@ export function Cell({ children, className, delay = 0, lift = true, label }: {
       aria-label={label}
       style={{ animationDelay: `${delay}ms` }}
       className={cn(
-        "rise relative min-w-0 rounded-[22px] bg-surface p-5 ring-1 ring-border sm:p-6",
-        lift && "transition-[transform,box-shadow] duration-300 ease-[cubic-bezier(.2,.8,.2,1)] hover:-translate-y-0.5 hover:shadow-[0_24px_48px_-24px_var(--shadow)]",
+        "rise glass relative min-w-0 rounded-[24px] p-5 sm:p-6",
+        lift && "lift",
         className,
       )}
     >
@@ -46,7 +46,7 @@ export function Cell({ children, className, delay = 0, lift = true, label }: {
 export function CellHead({ title, aside }: { title: string; aside?: React.ReactNode }) {
   return (
     <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-      <h2 className="text-[15px] font-semibold tracking-tight">{title}</h2>
+      <h2 className="text-base font-semibold tracking-tight">{title}</h2>
       {aside && <div className="text-[13px]">{aside}</div>}
     </div>
   )
@@ -55,7 +55,7 @@ export function CellHead({ title, aside }: { title: string; aside?: React.ReactN
 /* ---------------------------------------------------------------- hero */
 
 /** Big total. While the value chart is scrubbed it shows that month instead. */
-export function HeroFigures({ total, change, prev }: { total: number; change: number | null; prev: { month: string; value: number } | null }) {
+export function HeroFigures({ total, change, prev, label = "Total value" }: { total: number; change: number | null; prev: { month: string; value: number } | null; label?: string }) {
   const scrub = useScrub()
   const chipRef = useRef<HTMLSpanElement>(null)
   const shown = useRef(total)
@@ -78,8 +78,8 @@ export function HeroFigures({ total, change, prev }: { total: number; change: nu
 
   return (
     <div>
-      <p className="eyebrow">{scrub ? `Value in ${month(scrub.month, true)}` : "Total value"}</p>
-      <h1 className="mt-2 text-5xl leading-none font-semibold tracking-[-0.045em] sm:text-[76px]">
+      <p className="eyebrow">{scrub ? `Value in ${month(scrub.month, true)}` : label}</p>
+      <h1 className="mt-2 text-[44px] leading-none font-semibold tracking-[-0.045em] sm:text-[64px]">
         <Money value={value} fast={!!scrub} />
       </h1>
       {delta != null && base ? (
@@ -104,19 +104,19 @@ export function HeroFigures({ total, change, prev }: { total: number; change: nu
 
 function Box({ label, children, help }: { label: string; children: React.ReactNode; help?: string }) {
   return (
-    <div className="min-w-0 rounded-2xl bg-surface-2 px-3.5 py-3 ring-1 ring-border">
+    <div className="min-w-0 py-1">
       <dt className="eyebrow flex items-center gap-1.5">
         {label}
         {help && (
           <Tooltip>
-            <TooltipTrigger aria-label={`About ${label}`} className="-m-2 p-2">
+            <TooltipTrigger aria-label={`About ${label}`} className="-m-4 p-4">
               <InfoIcon className="size-3" />
             </TooltipTrigger>
             <TooltipContent className="max-w-64 normal-case tracking-normal">{help}</TooltipContent>
           </Tooltip>
         )}
       </dt>
-      <dd className="mt-1.5 truncate text-lg font-semibold tracking-tight sm:text-xl">{children}</dd>
+      <dd className="mt-1 truncate text-lg font-semibold tracking-tight sm:text-xl">{children}</dd>
     </div>
   )
 }
@@ -129,8 +129,8 @@ export function ReturnBoxes({ returns, showValue }: { returns: Returns; showValu
   const withOverall = returns.overall !== undefined
   const overallTone = (returns.overall ?? 0) >= 0 ? "text-gain" : "text-loss"
   return (
-    // Four boxes (with Overall XIRR) sit 2×2: in one row the hero cell is too narrow for "Total returns".
-    <dl className={cn("grid grid-cols-2 gap-3", showValue ? "lg:grid-cols-4" : !withOverall && "sm:grid-cols-3")}>
+    // v2: a strip of figures split by hairlines (2×2 on a phone)
+    <dl className={cn("grid grid-cols-2 gap-x-5 gap-y-3 [&>div]:sm:border-l [&>div]:sm:border-border [&>div]:sm:pl-5 [&>div:first-child]:border-0 [&>div:first-child]:pl-0", showValue || withOverall ? "sm:grid-cols-4" : "sm:grid-cols-3")}>
       {showValue && <Box label="Value of these funds"><Money value={returns.current} /></Box>}
       <Box label="Invested"><Money value={returns.invested} /></Box>
       <Box label="Total returns">

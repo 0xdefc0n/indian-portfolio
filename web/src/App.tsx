@@ -8,6 +8,7 @@ import { type AssetDialogState, AssetDialogs } from "@/components/asset-dialogs"
 import { AddAssetButton, FixedIncome, GoldSilver } from "@/components/fixed-income"
 import type { Slice } from "@/components/allocation-strip"
 import { AssetsView } from "@/components/assets-view"
+import { type AssetClass, AssetClasses, FamilyCard, type FamilyRow } from "@/components/family"
 import { type AssetKind, holdingKind } from "@/lib/asset-kind"
 import { BottomNav, type TabId, TabNav, useTab } from "@/components/tab-nav"
 import { TransactionsView } from "@/components/transactions-view"
@@ -32,7 +33,7 @@ import {
 } from "@/lib/api"
 import { DailyReturns, TodayTile } from "@/components/daily-returns"
 import { byFund } from "@/lib/daily"
-import { day, inr } from "@/lib/format"
+import { day, inr, inrShort, pct } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { upcomingSips } from "@/lib/sips"
 import { holdingFlows, xirr } from "@/lib/xirr"
@@ -349,10 +350,59 @@ export default function App({ me }: { me: Me }) {
   }, [data, who, assetRows, assets.rates])
 
   const memberMap = useMemo(() => new Map(data?.members.map((m) => [m.id, m])), [data])
+
+  // v2 dashboard (M24): each member's total for the Family card, Everyone first
+  const family = useMemo<FamilyRow[]>(() => {
+    if (!data) return []
+    const all = revalueSgbs(data.holdings, assets.rates)
+    const total = all.reduce((s, h) => s + h.value, 0) + assetTotals(assetRows).value
+    const share = (v: number) => (total ? (v / total) * 100 : 0)
+    const rows = data.members.map((m) => {
+      const mine = all.filter((h) => h.member_id === m.id)
+      const value = mine.reduce((s, h) => s + h.value, 0) + assetTotals(forMember(assetRows, m.id)).value
+      return { id: m.id, name: m.name.split(" ")[0], value, share: share(value), detail: `${pct(share(value))} of the family · ${mine.length} holding${mine.length === 1 ? "" : "s"}` }
+    })
+    // FD/PPF/gold added without a member count only for Everyone, so members' shares can add up to less than 100%
+    const shared = total - rows.reduce((s, r) => s + r.value, 0)
+    const everyone = `${data.members.length} members${shared >= 1 ? ` · ${inrShort(shared)} not under anyone` : ""}`
+    return [{ id: EVERYONE, name: "Everyone", value: total, share: 100, detail: everyone }, ...rows]
+  }, [data, assetRows, assets.rates])
+
+  // One card per asset class for the member in view (funds, listed shares and ETFs, FD/PPF/EPF, gold and silver)
+  const classes = useMemo<AssetClass[]>(() => {
+    if (!view) return []
+    const by: Record<"mf" | "listed" | "gold", Holding[]> = { mf: [], listed: [], gold: [] }
+    for (const h of view.allHoldings) {
+      const k = holdingKind(h)
+      by[k === "mf" ? "mf" : k === "gold" ? "gold" : "listed"].push(h)
+    }
+    const sum = (hs: Holding[]) => hs.reduce((s, h) => s + h.value, 0)
+    const gain = (hs: Holding[]) => {
+      const known = hs.filter((h) => h.invested != null)
+      return known.length ? known.reduce((s, h) => s + h.value - (h.invested ?? 0), 0) : null
+    }
+    const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`
+    const fixed = assetTotals(view.fixed), metals = assetTotals(view.metals)
+    const goldGain = gain(by.gold)
+    return [
+      { key: "mf", label: "Mutual funds", value: sum(by.mf), gain: gain(by.mf), count: n(by.mf.length, "fund", "funds"), color: "var(--chart-1)" },
+      { key: "listed", label: "Stocks & ETFs", value: sum(by.listed), gain: gain(by.listed), count: n(by.listed.length, "holding", "holdings"), color: "var(--cat-stocks)" },
+      { key: "fixed", label: "FD, PPF & EPF", value: fixed.value, gain: view.fixed.length ? fixed.gain : null, count: n(view.fixed.length, "account", "accounts"), color: "var(--cat-fd)" },
+      {
+        key: "gold", label: "Gold & silver", value: sum(by.gold) + metals.value,
+        gain: goldGain == null && !view.metals.length ? null : (goldGain ?? 0) + (view.metals.length ? metals.gain : 0),
+        count: n(by.gold.length + view.metals.length, "holding", "holdings"), color: "var(--cat-gold)",
+      },
+    ]
+  }, [view])
   const pickMembers = useMemo(() => (data?.members ?? []).map((m) => ({ id: m.id, name: m.name })), [data])
   const assetMemberName = (id: string | null) => (id ? memberMap.get(id)?.name.split(" ")[0] : undefined)
   const openFixedIncome = (id = "fixed-income") => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })
   const switchMember = (v: string) => { setWho(v); setCategory(null) }
+  const openClass = (key: string) => {
+    const kind: AssetKind = key === "listed" ? (view?.allHoldings.some((h) => holdingKind(h) === "stock") ? "stock" : "etf") : (key as AssetKind)
+    setAssetKind(kind); setCategory(null); setTab("assets")
+  }
   const multi = (data?.members.length ?? 0) > 1
   const showMember = multi && who === EVERYONE
   const ready = view && data && data.members.length > 0
@@ -386,7 +436,7 @@ export default function App({ me }: { me: Me }) {
   }, [sipsLink, ready, goTo])
 
   const viewAll = (to: TabId, label: string, anchor?: string) => (
-    <button className="-my-2 py-2 text-primary underline-offset-4 hover:underline" onClick={() => goTo(to, anchor)}>
+    <button className="-my-3 inline-flex min-h-11 items-center text-primary underline-offset-4 hover:underline" onClick={() => goTo(to, anchor)}>
       {label}
     </button>
   )
@@ -437,16 +487,19 @@ export default function App({ me }: { me: Me }) {
             {multi && tab !== "overview" && <MemberSwitch members={data.members} value={who} onChange={switchMember} />}
 
             {tab === "overview" && (
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-6 lg:grid-cols-12">
-                <Cell className="dot-texture flex flex-col sm:p-7 md:col-span-6 lg:col-span-8" lift={false} label="Portfolio value">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-6 lg:grid-cols-12 lg:gap-5">
+                {/* v2 (M24): the hero's chart drives the number; Family and Coming up sit beside it */}
+                <Cell className="glass-hero flex flex-col sm:p-7 md:col-span-6 lg:col-span-8" lift={false} label="Portfolio value">
                   <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-                    {multi ? <MemberSwitch members={data.members} value={who} onChange={switchMember} /> : <span />}
-                    <span className="eyebrow">
-                      {who === EVERYONE ? (multi ? `${data.members.length} members` : "") : view.members[0]?.name.split(" ")[0]}
-                      {view.valueDate && <>{who === EVERYONE && !multi ? "" : " · "}{day(view.valueDate)}</>}
-                    </span>
+                    {multi ? <div className="lg:hidden"><MemberSwitch members={data.members} value={who} onChange={switchMember} /></div> : <span />}
+                    {view.valueDate && <span className="eyebrow">NAVs of {day(view.valueDate)}</span>}
                   </div>
-                  <HeroFigures total={view.grandTotal} change={view.change} prev={view.prev} />
+                  <HeroFigures
+                    total={view.grandTotal}
+                    change={view.change}
+                    prev={view.prev}
+                    label={who === EVERYONE ? (multi ? "Family net worth" : "Net worth") : `${view.members[0]?.name.split(" ")[0]}'s net worth`}
+                  />
                   {view.est.n > 0 && (
                     <p className="mt-3 max-w-xl text-[13px] text-muted-foreground">
                       At the latest NAV, with {view.est.n} SIP instalment{view.est.n === 1 ? "" : "s"} ({inr(view.est.amount)}) estimated since
@@ -454,17 +507,6 @@ export default function App({ me }: { me: Me }) {
                       {view.est.running > 0 && <>, {view.est.running} still in progress</>}. A newer statement replaces the estimates.
                     </p>
                   )}
-                  <div className="mt-6">
-                    {view.dashReturns?.complete ? (
-                      <ReturnBoxes returns={view.dashReturns} />
-                    ) : (
-                      <p className="max-w-xl text-sm text-muted-foreground">
-                        Invested amount, returns and XIRR show here once every fund has its full purchase history
-                        {view.returns ? " (partial figures are under Partial data below)" : ""}.{" "}
-                        <RequestLink onAdded={load} label="Request a full statement" />
-                      </p>
-                    )}
-                  </div>
                   <div className="mt-6 flex flex-1 flex-col">
                     <ValueChart
                       data={view.history}
@@ -485,23 +527,61 @@ export default function App({ me }: { me: Me }) {
                       </p>
                     )}
                   </div>
+                  <div className="mt-6 border-t border-border pt-5">
+                    {view.dashReturns?.complete ? (
+                      <ReturnBoxes returns={view.dashReturns} />
+                    ) : (
+                      <p className="max-w-xl text-sm text-muted-foreground">
+                        Invested amount, returns and XIRR show here once every fund has its full purchase history
+                        {view.returns ? " (partial figures are under Partial data below)" : ""}.{" "}
+                        <RequestLink onAdded={load} label="Request a full statement" />
+                      </p>
+                    )}
+                  </div>
                 </Cell>
 
-                <Cell className="md:col-span-6 lg:col-span-4" delay={80} label="Allocation">
-                  <CellHead title="Allocation" aside={<span className="eyebrow">{view.allSlices.length} categories</span>} />
-                  <AllocationDonut
-                    slices={view.allSlices}
-                    total={view.grandTotal}
-                    funds={view.allHoldings.length}
-                    others={view.manual.length}
-                    onSelect={(c) => {
-                      if (!view.slices.some((s) => s.category === c)) return openFixedIncome(view.metals.some((r) => r.category === c) ? "gold-silver" : "fixed-income") // added by hand
-                      const h = view.allHoldings.find((x) => x.category === c)
-                      setAssetKind(h ? holdingKind(h) : null)
-                      setCategory(c); setHovered(null); setTab("assets")
-                    }}
-                  />
-                </Cell>
+                <div className="flex min-w-0 flex-col gap-4 md:col-span-6 lg:col-span-4 lg:gap-5">
+                  {multi ? (
+                    <Cell delay={80} lift={false} label="Family">
+                      <CellHead title="Family" aside={<span className="text-muted-foreground">Tap to focus</span>} />
+                      <FamilyCard rows={family} value={who} onChange={switchMember} />
+                    </Cell>
+                  ) : (
+                    <Cell delay={80} label="Allocation">
+                      <CellHead title="Allocation" aside={<span className="eyebrow">{view.allSlices.length} categories</span>} />
+                      <AllocationDonut
+                        slices={view.allSlices}
+                        total={view.grandTotal}
+                        funds={view.allHoldings.length}
+                        others={view.manual.length}
+                        onSelect={(c) => {
+                          if (!view.slices.some((s) => s.category === c)) return openFixedIncome(view.metals.some((r) => r.category === c) ? "gold-silver" : "fixed-income") // added by hand
+                          const h = view.allHoldings.find((x) => x.category === c)
+                          setAssetKind(h ? holdingKind(h) : null)
+                          setCategory(c); setHovered(null); setTab("assets")
+                        }}
+                      />
+
+                    </Cell>
+                  )}
+                  <Cell className="flex-1" delay={140} label="Upcoming SIPs">
+                    <CellHead
+                      title="Upcoming SIPs"
+                      aside={upcoming.list.length ? <span className="eyebrow">Next {upcoming.days} day{upcoming.days === 1 ? "" : "s"}</span> : undefined}
+                    />
+                    <SipTimeline upcoming={upcoming} members={memberMap} showMember={showMember} />
+                    {activeSips.length > 0 && <div className="mt-2 text-[13px]"><button className="-my-3 inline-flex min-h-11 items-center text-primary underline-offset-4 hover:underline" onClick={() => { setAssetKind("mf"); setCategory(null); goTo("assets", "sips") }}>View all SIPs</button></div>}
+
+                  </Cell>
+                </div>
+
+                <section aria-label="Where it's invested" className="md:col-span-6 lg:col-span-12">
+                  <div className="mb-3 flex items-baseline justify-between gap-3 px-1">
+                    <h2 className="text-base font-semibold tracking-tight">Where it's invested</h2>
+                    <span className="eyebrow">{who === EVERYONE ? (multi ? "Whole family" : "") : view.members[0]?.name.split(" ")[0]}</span>
+                  </div>
+                  <AssetClasses classes={classes} total={view.grandTotal} onOpen={openClass} />
+                </section>
 
                 <Cell className="min-h-[172px] md:col-span-3 lg:col-span-3" delay={120} label="Today">
                   <TodayTile daily={daily} onOpen={openDaily} />
@@ -526,18 +606,29 @@ export default function App({ me }: { me: Me }) {
                   />
                 )}
 
-                <Cell className="md:col-span-6 lg:col-span-7" delay={340} label="Top holdings">
+                <Cell className={cn("md:col-span-6", multi ? "lg:col-span-7" : "lg:col-span-12")} delay={340} label="Top holdings">
                   <CellHead title="Top holdings" aside={viewAll("assets", `View all ${view.allHoldings.length + view.manual.length}`)} />
                   <HoldingBars holdings={view.allHoldings} total={view.total} members={memberMap} showMember={showMember} />
+
                 </Cell>
-                <Cell className="md:col-span-6 lg:col-span-5" delay={390} label="Upcoming SIPs">
-                  <CellHead
-                    title="Upcoming SIPs"
-                    aside={upcoming.list.length ? <span className="eyebrow">Next {upcoming.days} day{upcoming.days === 1 ? "" : "s"}</span> : undefined}
-                  />
-                  <SipTimeline upcoming={upcoming} members={memberMap} showMember={showMember} />
-                  {activeSips.length > 0 && <div className="mt-2 text-[13px]"><button className="-my-2 py-2 text-primary underline-offset-4 hover:underline" onClick={() => { setAssetKind("mf"); setCategory(null); goTo("assets", "sips") }}>View all SIPs</button></div>}
-                </Cell>
+                {multi && (
+                  <Cell className="md:col-span-6 lg:col-span-5" delay={390} label="Allocation">
+                    <CellHead title="Allocation" aside={<span className="eyebrow">{view.allSlices.length} categories</span>} />
+                    <AllocationDonut
+                      slices={view.allSlices}
+                      total={view.grandTotal}
+                      funds={view.allHoldings.length}
+                      others={view.manual.length}
+                      onSelect={(c) => {
+                        if (!view.slices.some((s) => s.category === c)) return openFixedIncome(view.metals.some((r) => r.category === c) ? "gold-silver" : "fixed-income") // added by hand
+                        const h = view.allHoldings.find((x) => x.category === c)
+                        setAssetKind(h ? holdingKind(h) : null)
+                        setCategory(c); setHovered(null); setTab("assets")
+                      }}
+                    />
+
+                  </Cell>
+                )}
 
                 <div id="fixed-income" className="scroll-mt-24 md:col-span-6 lg:col-span-12">
                   <Cell className="h-full" delay={420} lift={false} label="Fixed income">

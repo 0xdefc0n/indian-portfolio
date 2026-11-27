@@ -20,5 +20,6 @@ A family mutual-fund portfolio app, moving from a single-user laptop app to a mu
   never commit them, and never upload them except to the user's own staging app when a milestone says so.
 - Secrets come from git-ignored files (`.env`, `worker/.dev.vars`). Never echo them, never put them in code or tests,
   and never ask the owner to paste them into chat.
-- Keep the existing UI design system (plan §13). No new colours, fonts or component styles.
+- Keep design system v2 (plan §13, `docs/design/M24_DESIGN_SPEC.md`): gold accent, glass cards, Geist. No new
+  colours, fonts or component styles.
 - Don't push, merge or deploy to production without the owner's OK.
