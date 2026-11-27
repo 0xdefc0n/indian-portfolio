@@ -206,7 +206,7 @@ function MetalDetails({ asset, rates, onClose, onEdit }: { asset: AssetRow; rate
 
         <dl className="grid grid-cols-2 gap-3">
           <Box label={v.status === "active" ? "Value today" : v.status === "matured" ? "Paid at maturity" : "Paid on redemption"}>{v.price ? inr(v.value) : "–"}</Box>
-          <Box label="Put in">{v.cost_unknown ? "Not entered" : inr(v.invested)}</Box>
+          <Box label={v.cost === "estimated" ? "Put in (estimated)" : "Put in"}>{v.cost_unknown ? "Not entered" : inr(v.invested)}</Box>
           {asset.type === "sgb" && <Box label="Interest paid out" tone="gain">{inr(v.received)}</Box>}
           <Box label="Gain" tone={!v.cost_unknown && v.price && v.gain >= 0 ? "gain" : undefined}>{v.cost_unknown || !v.price ? "–" : inr(v.gain)}</Box>
         </dl>
@@ -226,7 +226,9 @@ function MetalDetails({ asset, rates, onClose, onEdit }: { asset: AssetRow; rate
 
         <ul className="space-y-1 text-[13px] text-muted-foreground">
           {s && <li>{s.coupon}% a year on the issue price of {inr(s.price)}/g, paid every six months. Matures on {day(v.maturity)}; RBI buys it back from {day(addMonths(s.issue, 60))}.</li>}
-          {asset.type !== "sgb" && v.cost_unknown && <li>Add what you paid and when (Edit) to see the gain.</li>}
+          {asset.type !== "sgb" && v.cost_unknown && <li>Add what you paid, or when you bought it (Edit), to see the gain.</li>}
+          {v.cost === "estimated" && <li>The cost is estimated from the bullion rate on the day you bought it. Jewellery also carried making charges and GST, so what you actually paid was higher and the real gain lower. Add the price paid (Edit) for an exact gain.</li>}
+          {v.cost === "paid" && v.flows.length === 0 && <li>Add the date you bought it (Edit) to see the yearly return.</li>}
           <li>Valued at the bullion rate, before GST and making charges. The rate is worked out from gold and silver ETF prices: close to the IBJA rate, not exactly it.</li>
         </ul>
 

@@ -31,7 +31,9 @@ function metalDetail(r: AssetRow): string {
     if (s) parts.push(`${s.coupon}% interest`)
     if (r.v.received > 0) parts.push(`${inr(r.v.received)} interest paid out`)
   } else if (r.v.cost_unknown) {
-    parts.push("add what you paid to see the gain")
+    parts.push("add what you paid or when you bought it to see the gain")
+  } else if (r.v.cost === "estimated" && (r.type === "gold" || r.type === "silver") && r.inputs.bought) {
+    parts.push(`cost estimated from ${day(r.inputs.bought)}'s rate`)
   }
   return parts.join(" · ")
 }

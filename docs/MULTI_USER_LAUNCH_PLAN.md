@@ -2412,7 +2412,7 @@ sealed inputs, member model, limits, API, live shared calculator and dialogs. Va
 **What the forms ask** (an "Add gold or silver" dialog, `Segmented` Gold / Silver / SGB; same copy line as M19):
 | Type | Fields | Defaults and notes |
 |---|---|---|
-| Gold | weight (grams, up to 3 decimals); purity chips **24K (999), 22K (916), 18K (750)** | More options: what you paid (₹, total) and when. Without them the value shows but no gain, and it stays out of invested, gain and Overall XIRR |
+| Gold | weight (grams, up to 3 decimals); purity chips **24K (999), 22K (916), 18K (750)** | More options: what you paid (₹, total) and when, **either one enough** (owner, 2026-11-27): price only → gain, no yearly return; date only → cost estimated from that day's rate; both → gain and XIRR. Neither: the value shows but no gain, and it stays out of invested, gain and Overall XIRR |
 | Silver | weight (grams) | Purity 999. More options as for gold |
 | SGB | series (a list, newest first, with its issue date and price); units (1 unit = 1 g) | More options: "Bought later on the exchange": date and price per gram (default: the issue date and price). **Redeemed early?** is an action on a saved SGB (allowed from year 5) |
 - Names are generated: "Gold · 22K · 20 g", "Silver · 1 kg", "SGB 2018-19 Series IV · 10 g".
@@ -2484,8 +2484,12 @@ and the D1 plaintext scan cover the new types.
   before the day. "Older rate" shows when today's rate is over 7 days old.
 - **Statement SGBs** are detected in the SPA (`revalueSgbs`), not the engine: units × gold rate, category "SGB",
   asset class "Gold & silver", Assets kind Gold & silver ("SGBs in demat"). Daily returns don't revalue them yet.
-- **No price paid** (`cost_unknown`): the value counts in totals, but not invested, gain or Overall XIRR; the dashboard's
-  "current" for returns adds only the assets with a known cost, so current − invested = gain.
+- **Cost of gold and silver** (owner, 2026-11-27: either detail is enough): price and date → gain and XIRR flows;
+  price only → gain, no flows (out of Overall XIRR); date only → `cost: 'estimated'` = grams × purity × the rate on or
+  before that day (at most 35 days older; the served history is month-ends), labelled "Put in (estimated)", with a note
+  that jewellery's making charges and GST made the real cost higher; neither, or a date before the rate history →
+  `cost_unknown`: the value counts in totals, but not invested, gain or Overall XIRR. The dashboard's "current" for
+  returns adds only the assets with a cost, so current − invested = gain.
 - **Ops:** the anchors are updated by hand with the PPF/EPF table each quarter (M16 checklist): add the latest RBI
   redemption price and an IBJA silver close. First deploy: nav-ingest queues the 10 reference ETFs' backfills; each one
   finishing recomputes the history.

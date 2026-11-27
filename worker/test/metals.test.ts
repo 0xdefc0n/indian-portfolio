@@ -62,8 +62,34 @@ describe('physical gold and silver', () => {
     expect(old.warnings).toEqual(['stale_rate'])
   })
 
-  it('no price paid: the value shows, the gain is left out (cost_unknown, no XIRR flows)', () => {
-    const v = metalValue('gold', { grams: 10, purity: 916, paid: null, bought: '2020-05-01' }, '2026-11-26', rates)
+  it('price only: the gain, but no yearly return (no XIRR flows)', () => {
+    // 10 g 24K paid 1,00,000, no date: 1,28,000 − 1,00,000 = 28,000
+    const v = metalValue('gold', { grams: 10, purity: 999, paid: 100_000, bought: null }, '2026-11-26', rates)
+    expect(v).toMatchObject({ value: 128_000, invested: 100_000, gain: 28_000, cost: 'paid', cost_unknown: false, flows: [] })
+  })
+
+  it('date only: the cost is estimated from that day\'s rate (bullion), so gain and flows', () => {
+    // 20 g 22K bought 31 Oct 2026: 20 × 12,000 × 0.916 = 2,19,840; today 20 × 12,800 × 0.916 = 2,34,496; gain 14,656
+    const v = metalValue('gold', { grams: 20, purity: 916, paid: null, bought: '2026-10-31' }, '2026-11-26', rates)
+    expect(v.cost).toBe('estimated')
+    expect(v.cost_unknown).toBe(false)
+    expect(v.invested).toBeCloseTo(219_840, 6)
+    expect(v.gain).toBeCloseTo(14_656, 6)
+    expect(v.flows).toEqual([{ date: '2026-10-31', amount: -v.invested }, { date: '2026-11-26', amount: v.value }])
+    // 12 Nov: the latest rate on or before it is 31 Oct's (12 days old, within 35): same estimate
+    expect(metalValue('gold', { grams: 20, purity: 916, paid: null, bought: '2026-11-12' }, '2026-11-26', rates).invested).toBeCloseTo(219_840, 6)
+  })
+
+  it('a buy date before the rate history (or a rate too old for it) gives no estimate: cost unknown', () => {
+    expect(metalValue('gold', { grams: 10, purity: 999, paid: null, bought: '2010-01-01' }, '2026-11-26', rates).cost_unknown).toBe(true)
+    // Only 31 Jan's rate before March: 40 days old on 12 Mar (over 35, not used); 34 days on 6 Mar → 10 × 9,000
+    const sparse: RateTable = { ...RATES, metals: { gold: [['2026-01-31', 9000], ['2026-11-26', 12_800]], silver: [] } }
+    expect(metalValue('gold', { grams: 10, purity: 999, paid: null, bought: '2026-03-12' }, '2026-11-26', sparse)).toMatchObject({ cost_unknown: true, cost: null })
+    expect(metalValue('gold', { grams: 10, purity: 999, paid: null, bought: '2026-03-06' }, '2026-11-26', sparse)).toMatchObject({ cost: 'estimated', invested: 90_000 })
+  })
+
+  it('neither price nor date: the value shows, the gain is left out (cost_unknown, no XIRR flows)', () => {
+    const v = metalValue('gold', { grams: 10, purity: 916, paid: null, bought: null }, '2026-11-26', rates)
     expect(v.value).toBeCloseTo(117_248, 6) // 10 × 12,800 × 0.916
     expect(v.cost_unknown).toBe(true)
     expect(v.invested).toBe(0)
@@ -91,7 +117,7 @@ describe('physical gold and silver', () => {
     expect(parseInputs('gold', { grams: 0, purity: 916 }, today)).toEqual({ ok: false, field: 'grams' })
     expect(parseInputs('gold', { grams: 200_000, purity: 916 }, today)).toEqual({ ok: false, field: 'grams' })
     expect(parseInputs('gold', { grams: 10, purity: 900 }, today)).toEqual({ ok: false, field: 'purity' })
-    expect(parseInputs('gold', { grams: 10, purity: 916, paid: 50_000 }, today)).toEqual({ ok: false, field: 'bought' }) // XIRR needs it
+    expect(parseInputs('gold', { grams: 10, purity: 916, paid: 50_000 }, today)).toEqual({ ok: true, inputs: { grams: 10, purity: 916, paid: 50_000, bought: null } }) // price only is fine
     expect(parseInputs('gold', { grams: 10, purity: 916, paid: 50.5, bought: '2026-01-01' }, today)).toEqual({ ok: false, field: 'paid' })
     expect(parseInputs('gold', { grams: 10, purity: 916, bought: '2026-12-01' }, today)).toEqual({ ok: false, field: 'bought' })
 

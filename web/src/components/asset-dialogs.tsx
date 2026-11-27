@@ -50,7 +50,7 @@ const FIELD_HELP: Record<string, string> = {
   member: "Pick whose it is.",
   grams: "Enter the weight in grams (whole units for an SGB).",
   purity: "Pick the purity.",
-  paid: "Enter what you paid in whole rupees, with the date.",
+  paid: "Enter what you paid in whole rupees.",
   bought: "Pick the date you bought it, up to today (an SGB: after its issue, with the price per gram).",
   series: "Pick the series.",
   redeemed: "Pick a date from the 5th year after issue, before maturity.",
@@ -129,7 +129,7 @@ function Preview({ type, raw, rates }: { type: AssetType; raw: unknown; rates: R
       rows.push([v.status === "active" ? "Matures on" : v.status === "redeemed" ? "Redeemed on" : "Matured on", day(v.status === "redeemed" ? (parsed.inputs as SgbInputs).redeemed : v.maturity)])
       rows.push(["Interest every six months", inr(v.payout_amount)])
     } else if (!v.cost_unknown) {
-      rows.push(["Gain", inr(v.gain)])
+      rows.push([v.cost === "estimated" ? "Gain (estimated cost)" : "Gain", inr(v.gain)])
     }
   } else if (type === "fd") {
     const fd = parsed.inputs as FdInputs
@@ -340,7 +340,10 @@ export function AssetForm({ open, asset, member, group = "fixed", members, rates
                   <Field id="m-paid" label="What you paid"><Money id="m-paid" value={d.paid} onChange={set("paid")} placeholder="₹ in all" /></Field>
                   <Field id="m-bought" label="Bought on"><DateInput id="m-bought" value={d.bought} onChange={set("bought")} /></Field>
                 </div>
-                <p className="-mt-2 text-[13px] text-muted-foreground">Optional. With both, you see the gain; without, just the value.</p>
+                <p className="-mt-2 text-[13px] text-muted-foreground">
+                  Optional, and either one is enough for the gain: with only the date, the cost is estimated from that day's rate. Both also give the
+                  yearly return.
+                </p>
               </More>
             </>
           )}

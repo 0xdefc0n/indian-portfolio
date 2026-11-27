@@ -115,8 +115,10 @@ export type AssetValue = {
    * `stale_rate` warning when it's more than 7 days older than the valuation day, `no_rate` when there's none.
    */
   price?: { rate: number; date: string } | null
-  /** Gold or silver with no price paid: left out of invested, gain and Overall XIRR. */
+  /** Gold or silver with no cost (no price paid, no usable buy date): left out of invested, gain and Overall XIRR. */
   cost_unknown?: boolean
+  /** Gold or silver: where the cost comes from: what was paid, or estimated from the buy date's rate. */
+  cost?: 'paid' | 'estimated' | null
 }
 
 // ─── Limits (plan §21.12, §11) ──────────────────────────────────────────────────────────────────────────────────
@@ -459,28 +461,41 @@ function priceOn(rates: RateTable, metal: Metal, date: string, factor: number) {
 
 const NO_MATURITY = { uncredited: 0, provisional: false, maturity: null, maturity_amount: null, payout_amount: null }
 
+/** A buy-date rate is used to estimate the cost only if it's at most this old (the served history is month-ends). */
+export const COST_RATE_MAX_DAYS = 35
+
 /**
  * Physical gold or silver: grams × the 999 rate × the purity's share (1, 0.916, 0.75). Bullion value, before GST and
- * making charges. Without a price paid there's no gain (cost_unknown). Without a rate the value is what was paid.
+ * making charges. Either detail gives a gain (owner, 2026-11-27):
+ * - price and date: the gain and the yearly return (XIRR flows);
+ * - price only: the gain, but no flows (no date, so no yearly return; left out of Overall XIRR);
+ * - date only: the cost estimated as grams × that day's rate (`cost: 'estimated'`), so gain and flows. It's the bullion
+ *   cost: jewellery also carried making charges and GST, so the real cost was higher;
+ * - neither, or a date before the rate history: no gain (cost_unknown).
+ * Without a rate today the value is what was paid (or the estimate, or nothing).
  */
 export function metalValue(metal: Metal, inp: MetalInputs, today: string, rates: RateTable = RATES): AssetValue {
   const factor = metal === 'silver' ? 1 : purityFactor(inp.purity)
   const { r, price, warnings } = priceOn(rates, metal, today, factor)
-  const known = inp.paid !== null
-  const value = r ? inp.grams * r.rate * factor : (inp.paid ?? 0)
-  const invested = inp.paid ?? 0
+  const bought = inp.bought && inp.bought <= today ? inp.bought : null
+  const then = inp.paid === null && bought ? metalRate(rates.metals, metal, bought) : null
+  const estimate = then && daysBetween(then.date, bought!) <= COST_RATE_MAX_DAYS ? inp.grams * then.rate * factor : null
+  const invested = inp.paid ?? estimate
+  const cost: AssetValue['cost'] = inp.paid !== null ? 'paid' : estimate !== null ? 'estimated' : null
+  const value = r ? inp.grams * r.rate * factor : (invested ?? 0)
   return {
     ...NO_MATURITY,
     value,
-    invested,
+    invested: invested ?? 0,
     received: 0,
-    gain: known ? value - invested : 0,
+    gain: invested !== null ? value - invested : 0,
     rate: price?.rate ?? 0,
     status: 'active',
     warnings,
-    flows: known && inp.bought && inp.bought <= today ? [{ date: inp.bought, amount: -invested }, { date: today, amount: value }] : [],
+    flows: invested !== null && bought ? [{ date: bought, amount: -invested }, { date: today, amount: value }] : [],
     price,
-    cost_unknown: !known,
+    cost_unknown: invested === null,
+    cost,
   }
 }
 
@@ -607,7 +622,6 @@ export function parseInputs(type: unknown, raw: unknown, today: string): ParseRe
     if (paid !== null && !wholeRupees(paid, 1)) return bad('paid')
     const bought = raw.bought ?? null
     if (bought !== null && !dateOk(bought)) return bad('bought')
-    if (paid !== null && bought === null) return bad('bought') // XIRR needs the date
     return { ok: true, inputs: { grams: Math.round(raw.grams * 1000) / 1000, purity, paid, bought } }
   }
 
