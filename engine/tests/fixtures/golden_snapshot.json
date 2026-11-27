@@ -1567,6 +1567,7 @@
     }
    ],
    "history_covers_all": false,
+   "history_note": null,
    "history_source": "cdsl",
    "id": "m-alpha",
    "name": "Alpha Sample Person",
@@ -1666,6 +1667,7 @@
     }
    ],
    "history_covers_all": true,
+   "history_note": null,
    "history_source": "cdsl",
    "id": "m-beta",
    "name": "Beta Sample Person",

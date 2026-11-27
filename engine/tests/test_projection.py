@@ -258,7 +258,9 @@ def test_no_navs_keeps_the_statement_figures():
     h = next(x for x in snap["holdings"] if x["isin"] == F1["isin"])
     assert h["value"] == h["statement"]["value"] and h["as_of"] == "2026-10-12"
     assert h["estimated"]["instalments"] == 0 and h["estimated"]["pending"] == 2  # ran, but nothing to value them with
-    assert snap["members"][0]["history"] == []  # nothing to rebuild or extend without NAVs
+    # No NAV history at all: the chart is still rebuilt, at the NAVs the statement prints, and labelled as such
+    m = snap["members"][0]
+    assert len(m["history"]) > 1 and m["history_note"] == "estimated"
 
 
 # ---------------------------------------------------------------- units timelines on the shared fixture

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shutil
 import time
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -160,3 +161,51 @@ def test_parity_with_legacy_app(tmp_path, monkeypatch, legacy, with_navs):
     old = legacy.build_portfolio(parsed)
     new = build_portfolio(stmts, mkt if with_navs else {}, date.today())
     assert_same(_remap_ids(roundtrip(old), [m["id"] for m in new["members"]]), new, "legacy vs engine snapshot")
+
+
+def _with_sold_fund():
+    """The KFintech-only member plus a fund bought in Jun 2023 and fully redeemed in Feb 2025 (synthetic)."""
+    kf = copy.deepcopy([s for s in synthetic.statements() if s["data"]["statement_type"] == "RTA_CAS"])
+    st = kf[0]["data"]
+    sold = {"isin": "INF000S09SD9", "amfi": "900009", "folio": "F-9009"}
+    buy, sell = 100.0, 112.5  # the NAVs the statement prints on those days
+    st["transactions"] += [
+        {**sold, "name": "SYNTH SOLD FUND", "date": "2023-06-10", "type": "PURCHASE", "units": 400.0, "amount": 40000.0, "nav": buy},
+        {**sold, "name": "SYNTH SOLD FUND", "date": "2025-02-10", "type": "REDEMPTION", "units": -400.0, "amount": -45000.0, "nav": sell},
+    ]
+    st["transactions"].sort(key=lambda t: t["date"])
+    st["schemes"].append({"folio": sold["folio"], "isin": sold["isin"], "amfi": sold["amfi"], "name": "SYNTH SOLD FUND",
+                          "amc": "Synth AMC", "open": 0.0, "close": 0.0, "type": "EQUITY", "plan": "Direct"})
+    return kf, sold
+
+
+def test_history_with_a_sold_fund_whose_navs_are_still_downloading():
+    # Before: no NAV series for a fund held in the past → no chart at all. Now: those months use the NAVs the
+    # statement prints, the member says the chart is still being enriched, and the next build replaces them.
+    kf, sold = _with_sold_fund()
+    base = build_portfolio([s for s in synthetic.statements() if s["data"]["statement_type"] == "RTA_CAS"], synthetic.market(), synthetic.TODAY)["members"][0]
+
+    waiting = build_portfolio(kf, {**synthetic.market(), "refresh": [sold["amfi"]]}, synthetic.TODAY)["members"][0]
+    assert waiting["history_source"] == "transactions" and waiting["history_note"] == "waiting"
+    assert [p["month"] for p in waiting["history"]] == [p["month"] for p in base["history"]]  # every month, no gap
+    by = {p["month"]: p["value"] for p in waiting["history"]}
+    was = {p["month"]: p["value"] for p in base["history"]}
+    assert by["2023-05"] == was["2023-05"]  # before the purchase: unchanged
+    assert by["2023-06"] == pytest.approx(was["2023-06"] + 400 * 100.0, abs=0.01)  # 400 units at the purchase NAV
+    assert by["2024-12"] == pytest.approx(was["2024-12"] + 400 * 100.0, abs=0.01)  # last statement NAV on or before
+    assert by["2025-02"] == was["2025-02"]  # sold: gone again
+
+    # backfill finished but the fund has no NAVs anywhere (wound up): it stays on statement prices, labelled
+    assert build_portfolio(kf, synthetic.market(), synthetic.TODAY)["members"][0]["history_note"] == "estimated"
+
+    # its NAV series arrived: every month at daily NAVs, no note
+    daily = [[(date(2023, 1, 1) + timedelta(days=i)).isoformat(), 95.0] for i in range(820)]  # a flat 95 to Mar 2025
+    navs = {**synthetic.market()["navs"], sold["amfi"]: daily}
+    done = build_portfolio(kf, {**synthetic.market(), "navs": navs}, synthetic.TODAY)["members"][0]
+    assert done["history_note"] is None
+    assert {p["month"]: p["value"] for p in done["history"]}["2023-06"] == pytest.approx(was["2023-06"] + 400 * 95.0, abs=0.01)
+
+
+def test_market_requirements_ask_for_sold_funds_too():
+    kf, sold = _with_sold_fund()
+    assert sold["amfi"] in market_requirements(kf)["codes"]

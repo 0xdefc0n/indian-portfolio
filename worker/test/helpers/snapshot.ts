@@ -80,7 +80,7 @@ let n = 0
 export async function storedStatement(
   h: Household,
   memberId: string,
-  opts: { kind?: 'CDSL' | 'CAMS' | 'KFINTECH'; asOf?: string; isins?: string[]; holder?: string } = {},
+  opts: { kind?: 'CDSL' | 'CAMS' | 'KFINTECH'; asOf?: string; isins?: string[]; holder?: string; schemes?: Array<Record<string, unknown>> } = {},
 ) {
   const id = crypto.randomUUID()
   const key = blobKeys.statement(h.householdId, id)
@@ -90,6 +90,7 @@ export async function storedStatement(
     holder_name: opts.holder ?? 'SYNTHETIC HOLDER',
     period_to: opts.asOf ?? '2026-10-31',
     holdings: (opts.isins ?? ['INF000A01011']).map((isin) => ({ isin, units: 1, value: 10 })),
+    ...(opts.schemes ? { schemes: opts.schemes } : {}),
   }
   await putJsonBlob(env, await h.tenant.vault(), key, { format: 1, kind, parser_version: 'test', statement })
   await env.DB.prepare(

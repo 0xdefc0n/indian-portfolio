@@ -12,6 +12,9 @@ export type Member = {
   history: { month: string; value: number; flow?: number }[] // flow: net money in that month (transaction rebuild only)
   history_covers_all: boolean
   history_source: "transactions" | "cdsl"
+  /** "waiting": some months use the statement's own NAVs while a sold fund's daily NAVs download (rebuilt soon);
+   *  "estimated": some months stay on statement NAVs (no daily NAVs exist for that fund). */
+  history_note?: "waiting" | "estimated" | null
   sources: string[]
   sips_known: boolean // false when the member has no CAMS/KFintech statement
   accounts: Account[]

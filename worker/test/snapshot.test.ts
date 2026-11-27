@@ -223,6 +223,24 @@ describe('pf-rebuild consumer', () => {
     expect(await snapshotKeys(h)).toHaveLength(1)
   })
 
+  it("waits for a sold fund's NAV backfill too (the value chart is rebuilt from every fund ever held)", async () => {
+    const h = await newHousehold('sold')
+    const m = await addMember(h, FAKE_PAN_2, null)
+    await storedStatement(h, m, {
+      kind: 'KFINTECH',
+      isins: ['INF000C04044'],
+      schemes: [
+        { isin: 'INF000C04044', amfi: '777002', close: 1 },
+        { isin: 'INF000C05055', amfi: '777003', close: 0 }, // fully redeemed: not tracked, but backfilled
+      ],
+    })
+    await env.MARKET.prepare(`INSERT OR REPLACE INTO nav_backfill (amfi_code, status, at) VALUES (777003, 'pending', ?1)`).bind(Date.now()).run()
+    const builds = fakeBuild()
+    const r = await runRebuild(env, { household_id: h.householdId })
+    expect((builds[0] as BuildBody).market.refresh).toEqual(['777003'])
+    expect(r.requeue).toMatchObject({ msg: { force: true, followups: 1 } })
+  })
+
   it('uses every CDSL statement and only the newest CAMS/KFintech one per member', () => {
     const row = (id: string, member_id: string, kind: 'CDSL' | 'CAMS' | 'KFINTECH', as_of: string, created_at = 0) =>
       ({ id, member_id, kind, as_of, created_at, blob_key: '' })

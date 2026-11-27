@@ -234,6 +234,18 @@ export default function App({ me }: { me: Me }) {
 
   // While a rebuild is due, wait for it (status polling with backoff and Retry-After), then reload once.
   const updating = !!data && (data.stale || data.building)
+  // A sold fund's NAV history is still downloading: the Worker rebuilds by itself once it lands (a few minutes), so
+  // check back a few times and swap in the better chart without a reload.
+  const enriching = !!data?.members.some((m) => m.history_note === "waiting")
+  useEffect(() => {
+    if (!enriching || updating) return
+    let tries = 0
+    const timer = setInterval(() => {
+      if (++tries > 6) return clearInterval(timer)
+      load()
+    }, 2.5 * 60_000)
+    return () => clearInterval(timer)
+  }, [enriching, updating, load])
   useEffect(() => {
     if (!updating) return
     const ctl = new AbortController()
@@ -294,6 +306,8 @@ export default function App({ me }: { me: Me }) {
     const prev = history.length >= 2 ? history[history.length - 2] : null
     const change = prev ? history[history.length - 1].value - prev.value : null
     const historyPartial = members.some((m) => !m.history_covers_all)
+    // Months valued at the statement's own NAVs (a sold fund's daily NAVs are downloading, or don't exist)
+    const historyNote = members.some((m) => m.history_note === "waiting") ? "waiting" : members.some((m) => m.history_note === "estimated") ? "estimated" : null
     // Invested / returns / XIRR only over funds with complete purchase history (CAMS/KFintech from inception)
     const withCost = holdings.filter((h) => h.invested != null && h.cashflows?.length)
     const invested = withCost.reduce((s, h) => s + (h.invested ?? 0), 0)
@@ -333,7 +347,7 @@ export default function App({ me }: { me: Me }) {
     )
 
     return {
-      members, total, slices, history, flowsKnown, prev, change, asOf, valueDate, est, historyPartial,
+      members, total, slices, history, flowsKnown, prev, change, asOf, valueDate, est, historyPartial, historyNote,
       returns, dashReturns, fixed, fixedTotal: fixedTotals.value, grandTotal, allSlices,
       holdings: category ? holdings.filter((h) => h.category === category) : holdings,
       allHoldings: holdings,
@@ -453,6 +467,14 @@ export default function App({ me }: { me: Me }) {
                         </span>
                       }
                     />
+                    {view.historyNote && (
+                      <p className="mt-3 flex items-start gap-2 text-[13px] text-muted-foreground" role="status">
+                        {view.historyNote === "waiting" ? <Loader2Icon className="mt-0.5 size-3.5 shrink-0 animate-spin" /> : <InfoIcon className="mt-0.5 size-3.5 shrink-0" />}
+                        {view.historyNote === "waiting"
+                          ? "Enriching your chart: we're fetching daily NAVs for funds you've sold. Until then those months use the NAVs printed in your statement. It updates by itself."
+                          : "Some months use the NAVs printed in your statement: daily NAVs aren't available for a fund you've sold."}
+                      </p>
+                    )}
                   </div>
                 </Cell>
 
