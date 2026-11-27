@@ -1,11 +1,14 @@
 // /api/statements (plan §9.2, §10.1). Upload takes the file and an optional password only (D19): any `pan` or
 // `member_id` field is ignored, because the member comes from the statement itself.
+// A file that isn't a PDF is a broker file (M34, plan §21.13): a holdings statement or tradebook, CSV or Excel. Those
+// carry no PAN, so `member_id` or `new_member_name` say whose it is when the server asks (422 needs_member).
 import { Hono } from 'hono'
 import { auditStatement } from '../lib/audit'
 import { isUuid } from '../lib/blob'
 import { ApiError, notFound } from '../lib/errors'
 import { LIMITS } from '../lib/limits'
-import { deleteStatement, uploadStatement } from '../lib/statements'
+import { deleteStatement, isPdf, uploadStatement } from '../lib/statements'
+import { uploadBrokerFile } from '../lib/broker-files'
 import { tenant } from '../lib/tenant'
 import { requireSession } from '../middleware/session'
 import type { AppBindings } from '../types'
@@ -28,6 +31,14 @@ statementRoutes.post('/statements', signedIn, async (c) => {
   if (file.size > LIMITS.uploadBytes) throw new ApiError(413, 'file_too_large')
   const password = form.get('password')
   const bytes = new Uint8Array(await file.arrayBuffer())
+  if (!isPdf(bytes)) {
+    const result = await uploadBrokerFile(
+      tenant(c),
+      { bytes, password: typeof password === 'string' ? password : null, memberId: form.get('member_id'), newMemberName: form.get('new_member_name') },
+      { holdings: await auditStatement(c, 'broker_holdings_added'), tradebook: await auditStatement(c, 'tradebook_added') },
+    )
+    return c.json(result, 201)
+  }
 
   const result = await uploadStatement(
     tenant(c),

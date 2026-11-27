@@ -17,7 +17,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
-import { api, type Me, type MemberSummary, SignedOut, type StatementKind } from "@/lib/api"
+import { SamePerson } from "@/components/statement-upload"
+import { api, type BrokerHoldings, type Me, type MemberSummary, SignedOut, type StatementKind, type Tradebook } from "@/lib/api"
 import { day } from "@/lib/format"
 import { type AssetRow, useAssets, valued } from "@/lib/assets"
 import { useJobs } from "@/lib/use-jobs"
@@ -52,7 +53,7 @@ function RenameDialog({ member, onClose, onDone }: { member: MemberSummary | nul
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Rename member</DialogTitle>
-          <DialogDescription>This is the name PocketFolio shows for {member?.pan_masked}. Statements aren't changed.</DialogDescription>
+          <DialogDescription>This is the name PocketFolio shows for {member?.pan_masked || "this member"}. Statements aren't changed.</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="grid gap-4">
           <div className="grid gap-2">
@@ -177,12 +178,55 @@ function AssetSection({ rows, onAdd, onAction, onChanged }: { rows: AssetRow[]; 
   )
 }
 
-function MemberCard({ member, onRename, onDelete, onDeleteStatement, assets }: {
+/** A member's broker files (M21 tradebooks, M34 holdings statements): what was read from them, and a delete. */
+function BrokerFiles({ holdings, tradebooks, onChanged }: { holdings: BrokerHoldings[]; tradebooks: Tradebook[]; onChanged: () => void }) {
+  const [busy, setBusy] = useState<string | null>(null)
+  if (!holdings.length && !tradebooks.length) return null
+  async function remove(id: string, kind: "holdings" | "tradebook") {
+    setBusy(id)
+    try {
+      await (kind === "holdings" ? api.deleteBrokerFile(id) : api.deleteTradebook(id))
+      toast.success(kind === "holdings" ? "Holdings statement removed" : "Tradebook removed", { description: "Updating your dashboard…" })
+      onChanged()
+    } catch (err) {
+      if (!(err instanceof SignedOut)) toast.error((err as Error).message)
+    } finally {
+      setBusy(null)
+    }
+  }
+  const rows = [
+    ...holdings.map((b) => ({ id: b.id, kind: "holdings" as const, label: `${b.broker_name} holdings`, when: `as on ${day(b.as_of)}`, count: `${b.holdings_count} share${b.holdings_count === 1 ? "" : "s"}` })),
+    ...tradebooks.map((t) => ({ id: t.id, kind: "tradebook" as const, label: `${t.broker_name} tradebook`, when: t.period_to ? `to ${day(t.period_to)}` : "", count: `${t.trades_count} trade${t.trades_count === 1 ? "" : "s"}` })),
+  ]
+  return (
+    <ul className="divide-y divide-border border-t border-border">
+      {rows.map((r) => (
+        <li key={r.id} className="flex items-center justify-between gap-3 py-1 text-sm">
+          <span className="flex min-w-0 items-center gap-2.5">
+            <FileTextIcon className="hidden size-4 shrink-0 text-muted-foreground sm:block" />
+            <Badge variant="secondary">{r.label}</Badge>
+            <span className="truncate text-muted-foreground">{r.when}</span>
+          </span>
+          <span className="flex shrink-0 items-center gap-1 text-muted-foreground">
+            {r.count}
+            <Button variant="ghost" size="icon" className="-mr-2 size-11" disabled={busy === r.id} aria-label={`Delete the ${r.label} ${r.when}`}
+              onClick={() => remove(r.id, r.kind)}>
+              {busy === r.id ? <Loader2Icon className="animate-spin" /> : <Trash2Icon />}
+            </Button>
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function MemberCard({ member, onRename, onDelete, onDeleteStatement, assets, files }: {
   member: MemberSummary
   onRename: () => void
   onDelete: () => void
   onDeleteStatement: (s: Statement) => void
   assets: React.ReactNode
+  files?: React.ReactNode
 }) {
   const name = displayName(member)
   return (
@@ -190,7 +234,9 @@ function MemberCard({ member, onRename, onDelete, onDeleteStatement, assets }: {
       <div className="mb-4 flex items-start justify-between gap-3">
         <h2 className="grid min-w-0 gap-0.5 text-[15px] font-semibold tracking-tight">
           <span className="truncate">{name}</span>
-          <span className="font-mono text-[13px] font-normal text-muted-foreground">{member.pan_masked}</span>
+          {member.no_pan || !member.pan_masked
+            ? <span className="text-[13px] font-normal text-muted-foreground">No PAN yet: added from a broker file</span>
+            : <span className="font-mono text-[13px] font-normal text-muted-foreground">{member.pan_masked}</span>}
         </h2>
         <div className="-my-1.5 -mr-2 flex shrink-0">
           <Button variant="ghost" size="icon" className="size-11" aria-label={`Rename ${name}`} onClick={onRename}><PencilIcon /></Button>
@@ -216,9 +262,10 @@ function MemberCard({ member, onRename, onDelete, onDeleteStatement, assets }: {
             </li>
           ))}
         </ul>
-      ) : (
+      ) : files ? null : (
         <p className="text-sm text-muted-foreground">No statements yet.</p>
       )}
+      {files}
       {assets}
     </section>
   )
@@ -232,7 +279,7 @@ function EmptyMembers({ onAdd }: { onAdd: () => void }) {
       </div>
       <h2 className="text-2xl font-semibold tracking-tight">No members yet</h2>
       <p className="mt-3 text-muted-foreground">
-        Members appear when you add a statement. Add any family member's statement and we'll file it under the right person automatically.
+        Members appear when you add a statement or a broker file. Add any family member's statement and we'll file it under the right person automatically.
       </p>
       <div className="mt-8">
         <Button size="lg" className="h-11 px-4" onClick={onAdd}>Add asset</Button>
@@ -254,10 +301,16 @@ export function MembersPage({ me }: { me: Me }) {
       (e: Error) => !(e instanceof SignedOut) && setError(e.message),
     )
   }, [])
+  // Broker holdings statements and tradebooks (M34), listed under their member.
+  const [files, setFiles] = useState<{ holdings: BrokerHoldings[]; tradebooks: Tradebook[] }>({ holdings: [], tradebooks: [] })
+  const loadFiles = useCallback(() => {
+    api.brokerFiles().then(setFiles, () => undefined)
+  }, [])
   useEffect(load, [load])
+  useEffect(loadFiles, [loadFiles])
   // Queued uploads: a finished one reloads the members (plan §13 item 5).
   const { jobs, refresh: refreshJobs } = useJobs(load)
-  const reload = useCallback(() => { load(); refreshJobs() }, [load, refreshJobs])
+  const reload = useCallback(() => { load(); loadFiles(); refreshJobs() }, [load, loadFiles, refreshJobs])
   // "Try again" (here, or in the failed-upload toast: /members?add=1) opens Add asset on the statement upload.
   const [add, setAdd] = useState<AddPick | "list" | null>(() => new URLSearchParams(window.location.search).get("add") === "1" ? "mf" : null)
   useEffect(() => {
@@ -304,11 +357,17 @@ export function MembersPage({ me }: { me: Me }) {
         </div>
       )}
       {members && n === 0 && <EmptyMembers onAdd={() => setAdd("list")} />}
+      {members && <SamePerson members={members} onChanged={reload} />}
       {members && n > 0 && (
         <div className="grid gap-4 md:grid-cols-2">
           {members.map((m) => (
             <MemberCard key={m.id} member={m} onRename={() => setRenaming(m)} onDelete={() => setDeleting(m)}
               onDeleteStatement={(statement) => setDeletingStatement({ member: m, statement })}
+              files={(() => {
+                const hs = files.holdings.filter((b) => b.member_id === m.id)
+                const ts = files.tradebooks.filter((t) => t.member_id === m.id)
+                return hs.length || ts.length ? <BrokerFiles holdings={hs} tradebooks={ts} onChanged={reload} /> : undefined
+              })()}
               assets={section(m.id, rows.filter((r) => r.member_id === m.id))} />
           ))}
         </div>

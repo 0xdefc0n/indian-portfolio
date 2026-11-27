@@ -19,6 +19,9 @@ export type Member = {
   sips_known: boolean // false when the member has no CAMS/KFintech statement
   accounts: Account[]
   analysis: Analysis
+  /** M34: shares only in a broker holdings file newer than the CDSL statement. Not counted (CDSL's quantities win):
+   *  a newer CDSL statement is asked for. Absent on older builds. */
+  broker_notes?: { isin: string; name: string; broker: string; as_of: string }[]
   // M12: `total` is at the latest NAV (value_date); `as_of` stays the newest statement date
   statement_total?: number
   value_date?: string | null
@@ -106,8 +109,9 @@ export type Holding = {
   estimated?: (EstimatedTotals & { since: string; units: number }) | null
   /** M28: how the fund or share did against its index (market data, the same for everyone). Absent on older builds. */
   score?: Score | null
-  /** M21 (shares and ETFs): where the buy price comes from. "partial": some shares have no known price. */
-  cost_source?: "tradebook" | "manual" | "partial" | "tradebook+manual" | "none"
+  /** M21 (shares and ETFs): where the buy price comes from. "partial": some shares have no known price. M34 adds
+   *  "broker" (a broker holdings file's average buy price: invested and gain known, no buy dates, so no XIRR). */
+  cost_source?: "tradebook" | "manual" | "partial" | "tradebook+manual" | "broker" | "tradebook+broker" | "broker+manual" | "tradebook+broker+manual" | "none"
   /** Shares whose buy price isn't known (bought before the tradebook covers, or no buy price added). */
   unknown_units?: number
   avg_price?: number | null
@@ -318,6 +322,14 @@ const MESSAGES: Record<string, string> = {
   consent_required: "Accept the privacy notice to continue.",
   // Stock gains (M21)
   not_tradebook: "That doesn't look like a tradebook we can read. Download the equity tradebook (CSV or Excel) from your broker.",
+  // Broker files (M34)
+  not_broker_file: "We can't read that file. Choose a statement PDF, or your broker's holdings statement or tradebook (CSV or Excel).",
+  file_locked: "This file is password-protected. Enter its password: for Groww, it's the PAN in capital letters.",
+  no_holdings: "This holdings statement has no shares in it.",
+  older_file: "You've already added a newer holdings statement from this broker account.",
+  broker_file_limit: "This member already has the most broker accounts we keep. Delete an old holdings statement first.",
+  needs_member: "Whose file is this?",
+  not_mergeable: "Only a member without a PAN can be joined to a member with one.",
   tradebook_locked: "This file is password-protected and the member's PAN didn't open it. Download it again without a password.",
   no_trades: "This tradebook has no share trades in it.",
   engine_busy: "We're busy reading other files. Try again in a minute.",
@@ -443,7 +455,22 @@ export type MemberSummary = {
   name: string | null
   pan_masked: string
   statements: { id: string; kind: StatementKind; as_of: string; holdings_count: number }[]
+  /** M34: made from a broker file, no PAN yet (pan_masked is ""). */
+  no_pan?: boolean
+  /** M34: members without a PAN whose name matches this one's: "Is this the same person?" */
+  same_as?: { id: string; name: string }[]
 }
+
+/** GET /api/broker-files (M34): broker holdings statements (parsed rows only), with the tradebooks. */
+export type BrokerHoldings = { id: string; member_id: string; broker: string; broker_name: string; as_of: string; holdings_count: number }
+
+/** POST /api/statements with a broker file (M34): a holdings statement or a tradebook, CSV or Excel. */
+export type AddedBrokerFile =
+  | { kind: "HOLDINGS"; holdings: BrokerHoldings; member: AddedStatement["member"]; replaced: boolean }
+  | { kind: "TRADEBOOK"; tradebook: Tradebook; member: AddedStatement["member"] }
+
+/** Whose a broker file is, when the server asked (422 needs_member). */
+export type BrokerOwner = { member_id: string } | { new_member_name: string }
 
 /** GET /api/assets (plan §21.12, M19): inputs only; values are computed here with the shared calculator. */
 export type ManualAsset = { id: string; member_id: string | null; created_at: number; updated_at: number } & CalcAsset
@@ -571,11 +598,14 @@ export const api = {
    * The file and an optional password only: no PAN and no member (D19). XHR, not fetch, so the dialog can tell
    * "uploading" from "reading statement" (`onUploaded` fires once the body is sent).
    */
-  addStatement: (file: File, password: string, onUploaded?: () => void) => {
+  addStatement: (file: File, password: string, onUploaded?: () => void, owner?: BrokerOwner) => {
     const fd = new FormData()
     fd.append("file", file)
     if (password) fd.append("password", password)
-    return new Promise<AddedStatement | QueuedUpload>((resolve, reject) => {
+    // A broker file (M34) carries no PAN: when the server asked whose it is, the answer goes with the file again.
+    if (owner && "member_id" in owner) fd.append("member_id", owner.member_id)
+    if (owner && "new_member_name" in owner) fd.append("new_member_name", owner.new_member_name)
+    return new Promise<AddedStatement | QueuedUpload | AddedBrokerFile>((resolve, reject) => {
       const xhr = new XMLHttpRequest()
       xhr.open("POST", "/api/statements")
       xhr.upload.onload = () => onUploaded?.()
@@ -612,13 +642,13 @@ export const api = {
   deleteAsset: (id: string) => call<{ ok: true }>(`/api/assets/${encodeURIComponent(id)}`, { method: "DELETE" }),
   /** Stock gains (M21): broker tradebooks and manual average buy prices. The dashboard rebuilds after each change. */
   tradebooks: () => call<{ tradebooks: Tradebook[]; costs: StockCost[] }>("/api/tradebooks"),
-  addTradebook: (file: File, memberId: string) => {
-    const fd = new FormData()
-    fd.append("member_id", memberId)
-    fd.append("file", file)
-    return call<{ tradebook: Tradebook }>("/api/tradebooks", { method: "POST", body: fd })
-  },
   deleteTradebook: (id: string) => call<{ ok: true }>(`/api/tradebooks/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** Broker holdings statements (M34), with the tradebooks. */
+  brokerFiles: () => call<{ holdings: BrokerHoldings[]; tradebooks: Tradebook[] }>("/api/broker-files"),
+  deleteBrokerFile: (id: string) => call<{ ok: true }>(`/api/broker-files/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** "Is this the same person?" (D29): yes joins the member without a PAN into the one with it; no stops asking. */
+  mergeMember: (id: string, into: string) => call<{ ok: true }>(`/api/members/${encodeURIComponent(id)}/merge`, json({ into })),
+  keepSeparate: (id: string, other: string) => call<{ ok: true }>(`/api/members/${encodeURIComponent(id)}/keep-separate`, json({ other })),
   setStockCost: (body: StockCost) => call<{ cost: StockCost }>("/api/stocks/cost", { ...json(body), method: "PUT" }),
   deleteStockCost: (member_id: string, isin: string) => call<{ ok: true }>("/api/stocks/cost", { ...json({ member_id, isin }), method: "DELETE" }),
 }

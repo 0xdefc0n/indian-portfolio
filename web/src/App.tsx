@@ -35,7 +35,7 @@ import { byFund } from "@/lib/daily"
 import { day, inr, inrShort, monthly, pct } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { upcomingSips } from "@/lib/sips"
-import { holdingFlows, xirr } from "@/lib/xirr"
+import { costKnown, dated, holdingFlows, xirr } from "@/lib/xirr"
 import { assetFlows, assetTotals, fixedOnly, forMember, metalsOnly, revalueSgbs, useAssets, valued } from "@/lib/assets"
 
 const EVERYONE = "all"
@@ -290,7 +290,7 @@ export default function App({ me }: { me: Me }) {
     // Months valued at the statement's own NAVs (a sold fund's daily NAVs are downloading, or don't exist)
     const historyNote = members.some((m) => m.history_note === "waiting") ? "waiting" : members.some((m) => m.history_note === "estimated") ? "estimated" : null
     // Invested / returns / XIRR only over funds with complete purchase history (CAMS/KFintech from inception)
-    const withCost = holdings.filter((h) => h.invested != null && h.cashflows?.length)
+    const withCost = holdings.filter(costKnown)
     const invested = withCost.reduce((s, h) => s + (h.invested ?? 0), 0)
     const costValue = withCost.reduce((s, h) => s + h.value, 0)
     const returns: Returns | null = withCost.length
@@ -298,7 +298,7 @@ export default function App({ me }: { me: Me }) {
           invested,
           current: costValue,
           gain: costValue - invested,
-          xirr: xirr(holdingFlows(withCost)),
+          xirr: xirr(holdingFlows(dated(withCost))),
           funds: withCost.length,
           complete: withCost.length === holdings.length,
         }
@@ -312,7 +312,7 @@ export default function App({ me }: { me: Me }) {
             invested: returns.invested + fixedTotals.invested,
             current: returns.current + fixedTotals.costValue,
             gain: returns.gain + fixedTotals.gain,
-            overall: xirr([...holdingFlows(withCost), ...assetFlows(manual)]),
+            overall: xirr([...holdingFlows(dated(withCost)), ...assetFlows(manual)]),
           }
         : returns
     const asOf = members.map((m) => m.as_of).filter(Boolean).sort().at(-1) ?? null
@@ -561,8 +561,8 @@ export default function App({ me }: { me: Me }) {
                       <PartialNotice
                         inline
                         returns={view.returns}
-                        included={view.allHoldings.filter((h) => h.invested != null && h.cashflows?.length).map((h) => h.name)}
-                        missing={view.allHoldings.filter((h) => !(h.invested != null && h.cashflows?.length)).map((h) => h.name)}
+                        included={view.allHoldings.filter(costKnown).map((h) => h.name)}
+                        missing={view.allHoldings.filter((h) => !costKnown(h)).map((h) => h.name)}
                         total={view.total}
                         request={(label) => <RequestLink onOpen={() => setAdd("mf")} label={label} />}
                       />

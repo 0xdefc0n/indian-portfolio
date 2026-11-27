@@ -22,6 +22,11 @@ const SOURCE: Record<NonNullable<Holding["cost_source"]>, string> = {
   "tradebook+manual": "From your broker tradebook, plus your average price for the shares it doesn't cover.",
   manual: "From the average price you added.",
   partial: "Your tradebook doesn't cover every share.",
+  // M34: a broker holdings statement's average has no buy dates, so XIRR and the tax split need a tradebook
+  broker: "From your broker's holdings statement (average price). XIRR needs buy dates: add a tradebook for them.",
+  "tradebook+broker": "From your broker tradebook, plus the holdings statement's average for the shares it doesn't cover.",
+  "broker+manual": "From your broker's holdings statement, plus your average price for the shares it doesn't cover.",
+  "tradebook+broker+manual": "From your tradebook, your holdings statement and the average price you added.",
   none: "",
 }
 
@@ -76,8 +81,8 @@ export function BuyPrice({ h, cost, onChanged }: { h: Holding; cost: StockCost |
         <p className="text-xs text-muted-foreground">
           {src === "partial" && unknown > 0
             ? `The buy price of ${units(unknown)} of ${units(h.units)} shares isn't known (bought before your tradebook starts, or through another broker).`
-            : "Your CDSL statement doesn't say what you paid."}{" "}
-          Add a broker tradebook (Add asset → Buy prices for shares), or your average buy price below.
+            : "Your statement doesn't say what you paid."}{" "}
+          Add your broker's holdings statement or tradebook (Add asset → Stocks & ETFs), or your average buy price below.
         </p>
       )}
       {cost && !editing && (

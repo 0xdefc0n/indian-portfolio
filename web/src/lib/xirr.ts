@@ -40,3 +40,13 @@ export function holdingFlows(hs: { cashflows: [string, number][] | null; value: 
     { date: h.as_of, amount: h.value },
   ])
 }
+
+/**
+ * A holding whose cost is known: funds with full history and shares with lots (they have cash flows), and shares
+ * priced from a broker holdings statement's average (M34: invested and gain known, no buy dates).
+ */
+export const costKnown = (h: { invested: number | null; cashflows: [string, number][] | null; cost_source?: string }) =>
+  h.invested != null && (!!h.cashflows?.length || (h.cashflows == null && !!h.cost_source?.includes("broker")))
+
+/** Only holdings with buy dates go into an XIRR (M34: a broker average has none, so it's left out). */
+export const dated = <T extends { cashflows: [string, number][] | null }>(hs: T[]) => hs.filter((h) => !!h.cashflows?.length)

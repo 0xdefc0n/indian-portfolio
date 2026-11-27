@@ -2,6 +2,7 @@
 // the session and the tenant guard; another household's tradebook or member id is a 404.
 import { Hono } from 'hono'
 import { auditStatement } from '../lib/audit'
+import { deleteBrokerHolding, listBrokerHoldings } from '../lib/broker-files'
 import { ApiError, notFound } from '../lib/errors'
 import { LIMITS } from '../lib/limits'
 import { tenant } from '../lib/tenant'
@@ -35,6 +36,20 @@ tradebookRoutes.post('/tradebooks', signedIn, async (c) => {
 
 tradebookRoutes.delete('/tradebooks/:id', signedIn, async (c) => {
   const ok = await deleteTradebook(tenant(c), c.req.param('id'), await auditStatement(c, 'tradebook_deleted', { onlyIfChanged: true }))
+  if (!ok) throw notFound()
+  return c.json({ ok: true })
+})
+
+// Broker holdings statements (M34): uploaded through POST /api/statements, listed and deleted here.
+tradebookRoutes.get('/broker-files', signedIn, async (c) => {
+  c.header('Cache-Control', 'no-store')
+  const t = tenant(c)
+  const [holdings, tradebooks] = await Promise.all([listBrokerHoldings(t), listTradebooks(t)])
+  return c.json({ holdings, tradebooks })
+})
+
+tradebookRoutes.delete('/broker-files/:id', signedIn, async (c) => {
+  const ok = await deleteBrokerHolding(tenant(c), c.req.param('id'), await auditStatement(c, 'broker_holdings_deleted', { onlyIfChanged: true }))
   if (!ok) throw notFound()
   return c.json({ ok: true })
 })

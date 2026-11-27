@@ -8,7 +8,6 @@ import { useState } from "react"
 
 import { AssetForm, type PickMember } from "@/components/asset-dialogs"
 import { UploadForm } from "@/components/statement-upload"
-import { TradebookForm } from "@/components/tradebook-form"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
@@ -24,7 +23,7 @@ export type Have = Partial<Record<"mf" | "listed" | AssetType, number>> & {
 
 const STATEMENT: { id: "mf" | "listed"; label: string; hint: string; icon: typeof ChartPieIcon }[] = [
   { id: "mf", label: "Mutual funds", hint: "CAMS, KFintech or CDSL PDF", icon: ChartPieIcon },
-  { id: "listed", label: "Stocks & ETFs", hint: "CDSL statement PDF", icon: ChartCandlestickIcon },
+  { id: "listed", label: "Stocks & ETFs", hint: "CDSL PDF or broker file", icon: ChartCandlestickIcon },
 ]
 
 const BY_HAND: { id: AssetType; label: string; hint: string; color: string }[] = [
@@ -106,7 +105,7 @@ function Picker({ have, first, onPick }: { have: Have; first: boolean; onPick: (
         ))}
         {!!have.uncosted && (
           <StatementRow icon={ReceiptTextIcon} label="Buy prices for shares" onClick={() => onPick("costs")}
-            hint={`Broker tradebook · ${have.uncosted} ${have.uncosted === 1 ? "share has" : "shares have"} no buy price`} />
+            hint={`Broker file · ${have.uncosted} ${have.uncosted === 1 ? "share has" : "shares have"} no buy price`} />
         )}
       </section>
 
@@ -194,14 +193,15 @@ export function AddAssetDialog({
       </>
     )
   } else if (pick === "costs") {
+    // the broker file tab of the shares upload: a holdings statement or tradebook brings the buy prices (M34)
     body = (
       <>
         <DialogHeader>
           {back}
           <DialogTitle>Add buy prices for shares</DialogTitle>
-          <DialogDescription>From your broker's tradebook. The file is read once and never kept.</DialogDescription>
+          <DialogDescription>From your broker's holdings statement or tradebook. The file is read once and never kept.</DialogDescription>
         </DialogHeader>
-        <TradebookForm onDone={onAdded} />
+        <UploadForm kind="listed" source="broker" onDone={() => { close(); onAdded() }} onQueued={onAdded} />
       </>
     )
   } else if (pick) {

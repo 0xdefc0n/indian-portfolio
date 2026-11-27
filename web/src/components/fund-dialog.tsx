@@ -138,7 +138,8 @@ function Body({ h, member, showMember, activity, sips, benchmark, stocks, costs,
       <dl className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-xl bg-muted/50 p-4 text-sm sm:grid-cols-3">
         <Fact label="Invested" value={inr(invested)} />
         <Fact label="Total returns" value={gain == null ? "—" : signed(gain, inr)} className={gain == null ? "" : gain >= 0 ? "text-gain" : "text-loss"} />
-        <Fact label="XIRR" value={x == null ? "—" : signed(x * 100, (n) => pct(n, 2))} className={x == null ? "" : x >= 0 ? "text-gain" : "text-loss"} />
+        <Fact label="XIRR" value={x == null ? "—" : signed(x * 100, (n) => pct(n, 2))} className={x == null ? "" : x >= 0 ? "text-gain" : "text-loss"}
+          detail={x == null && invested != null && h.cost_source?.includes("broker") ? "needs buy dates" : undefined} />
         <Fact label="Units" value={units(h.units)} />
         <Fact label="Average cost" value={avgCost == null ? "—" : inrExact(avgCost)} detail="per unit" />
         <Fact label={h.isin.startsWith("INF") ? "Current NAV" : "Last price"} value={h.nav == null ? "—" : `₹${nav(h.nav)}`}

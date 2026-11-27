@@ -119,6 +119,8 @@ class Lot:
     bought: date
     units: float
     cost: float | None  # None: bought before the tradebook covers, price unknown
+    src: str | None = "tradebook"  # where the cost came from: tradebook | bonus | broker | manual (None: unknown)
+    dated: bool = True  # False: a broker holdings file's average (M34), no buy date, so no XIRR and no tax lots
 
 
 def _long_term(bought: date, on: date, equity: bool) -> bool:
@@ -161,7 +163,7 @@ class Book:
             for l in self.lots:
                 l.units *= f
         elif a["kind"] == "bonus":
-            self.lots.append(Lot(_d(a["ex_date"]), self.units * (f - 1), 0.0))  # nil cost, acquired on the ex-date
+            self.lots.append(Lot(_d(a["ex_date"]), self.units * (f - 1), 0.0, "bonus"))  # nil cost, acquired on the ex-date
 
     def buy(self, on: date, qty: float, price: float) -> None:
         self.lots.append(Lot(on, qty, qty * price))
@@ -188,8 +190,10 @@ class Book:
             lot = self.lots[0]
             take = min(left, lot.units)
             sale = take * price
-            if lot.cost is None:
+            if lot.cost is None or not lot.dated:  # no price, or no buy date (a broker average): no gain to report
                 self.unknown_cost_gains += 1
+                if lot.cost is not None:
+                    lot.cost -= lot.cost * take / lot.units
             else:
                 cost = lot.cost * take / lot.units
                 coa = cost
@@ -265,12 +269,15 @@ def _since(cost: dict, fallback: str) -> date:
 
 
 def member_stocks(holdings: list[dict], trades: list[dict], costs: dict[str, dict], market: Market,
-                  first_seen: dict[str, str], today: date, close: dict[str, tuple[str, float]]) -> dict:
+                  first_seen: dict[str, str], today: date, close: dict[str, tuple[str, float]],
+                  broker_costs: dict[str, list[dict]] | None = None) -> dict:
     """Gains and lots for one member's shares and ETFs.
 
     holdings:   the merged statement rows (equity_or_bond, and demat mutual_fund rows for ETFs);
     first_seen: {isin: the first CDSL statement date that shows it} (the manual price's default "since");
-    close:      {isin: (date, latest close)} for valuing open lots.
+    close:      {isin: (date, latest close)} for valuing open lots;
+    broker_costs: {isin: [{"qty", "avg_price", "as_of"}]}, one per broker account's newest holdings file (M34). They
+                fill the units no tradebook lot covers, before a manual price (plan §21.13 rule 3), with no buy date.
     Returns {"holdings": {isin: info}, "realised": [gains], "counts": {...}}.
     """
     t_iso = today.isoformat()
@@ -288,7 +295,9 @@ def member_stocks(holdings: list[dict], trades: list[dict], costs: dict[str, dic
     for t in delivery:
         by_isin[t["_isin"]].append(t)
 
-    held = {h["isin"]: h for h in holdings if h["asset_type"] == "equity_or_bond" or h["isin"] in by_isin or h["isin"] in costs}
+    broker_costs = broker_costs or {}
+    held = {h["isin"]: h for h in holdings
+            if h["asset_type"] == "equity_or_bond" or h["isin"] in by_isin or h["isin"] in costs or h["isin"] in broker_costs}
     out: dict[str, dict] = {}
     realised: list[dict] = []
     for isin in sorted(set(held) | set(by_isin)):
@@ -325,10 +334,11 @@ def member_stocks(holdings: list[dict], trades: list[dict], costs: dict[str, dic
                 rest = u - have
                 bought = _since(cost, first_seen.get(isin) or stmt) if cost else _d(first_seen.get(isin) or stmt)
                 # bought before what the tradebook covers: older than its lots
-                book.lots.insert(0, Lot(bought, rest, None))
-            if cost and not traded:
+                book.lots.insert(0, Lot(bought, rest, None, None))
+            filled = _fill_broker(book, broker_costs.get(isin), stmt, market)
+            if cost and not traded and not filled:
                 info["cost_source"] = "manual"
-            elif traded:
+            elif traded or filled:
                 info["cost_source"] = "tradebook" if all(l.cost is not None for l in book.lots) else "partial"
         if info["cost_source"] == "manual":
             # a manual price is in today's terms (what the broker shows now): one lot, scaled by the splits and
@@ -341,9 +351,7 @@ def member_stocks(holdings: list[dict], trades: list[dict], costs: dict[str, dic
         if cost and float(cost.get("avg_price") or 0) > 0:
             for l in book.lots:
                 if l.cost is None:
-                    l.cost = l.units * float(cost["avg_price"])
-            if info["cost_source"] == "partial" and all(l.cost is not None for l in book.lots):
-                info["cost_source"] = "tradebook+manual"
+                    l.cost, l.src = l.units * float(cost["avg_price"]), "manual"
         realised += book.gains
         counts["unknown_sold"] += 1 if book.unknown_sold > EPS else 0
         if h is None:
@@ -352,14 +360,25 @@ def member_stocks(holdings: list[dict], trades: list[dict], costs: dict[str, dic
         known = [l for l in book.lots if l.cost is not None]
         unknown = sum(l.units for l in book.lots if l.cost is None)
         info["unknown_units"] = round(unknown, 4)
-        if unknown > UNIT_TOLERANCE and info["cost_source"] in ("manual", "tradebook"):
-            info["cost_source"] = "partial"
+        srcs = {l.src for l in known if l.src != "bonus"}
+        if unknown > UNIT_TOLERANCE:
+            info["cost_source"] = "partial" if known else "none"
+        elif srcs:
+            # tradebook | broker | manual, or several joined: "tradebook+manual", "tradebook+broker", "broker+manual"
+            info["cost_source"] = "+".join(x for x in ("tradebook", "broker", "manual") if x in srcs)
         info["units"] = round(units, 4)
         info["unknown_cost_sales"] = book.unknown_cost_gains
         if known and unknown <= UNIT_TOLERANCE:
             invested = sum(l.cost for l in known)
             info["invested"] = round(invested, 2)
             info["avg_price"] = round(invested / units, 4) if units > EPS else None
+            if not all(l.dated for l in known):
+                # a broker average: invested and the gain are known, the buy dates aren't (no XIRR, no tax lots)
+                info["needs_dates"] = True
+                info["cashflows"] = None
+                info["traded_after"] = round(sum((e[2]["qty"] if e[1] == 1 else -e[2]["qty"]) for e in after if e[1]), 4)
+                out[isin] = info
+                continue
             info["since"] = min(l.bought for l in known).isoformat()
             flows: dict[str, float] = defaultdict(float)
             for l in known:
@@ -380,6 +399,74 @@ def member_stocks(holdings: list[dict], trades: list[dict], costs: dict[str, dic
         info["traded_after"] = round(sum((e[2]["qty"] if e[1] == 1 else -e[2]["qty"]) for e in after if e[1]), 4)
         out[isin] = info
     return {"holdings": out, "realised": realised, "counts": counts}
+
+
+def derived_positions(trades: list[dict], market: Market, today: date) -> list[dict]:
+    """What a member still holds by their tradebooks alone (M34): every trade replayed FIFO with the splits and
+    bonuses up to the last trade. [{isin, name, units, price (the last trade's), as_of (the last trade's date),
+    broker}] for each share with units left. Shares sold elsewhere can't be seen: tradebooks may be partial (§21.13)."""
+    resolved = []
+    for t in dedupe(trades):
+        isin = market.resolve(t)
+        if isin:
+            resolved.append({**t, "_isin": isin})
+    delivery, _ = remove_intraday(resolved)
+    by_isin: dict[str, list[dict]] = defaultdict(list)
+    for t in delivery:
+        by_isin[t["_isin"]].append(t)
+    out = []
+    for isin, rows in sorted(by_isin.items()):
+        last = rows[-1]["date"]
+        name = next((t.get("name") or t.get("symbol") for t in reversed(rows) if t.get("name") or t.get("symbol")), isin)
+        book = Book(isin, name, is_equity_listed(isin, name), market)
+        events = [(a["ex_date"], 0, a) for a in market.acts(isin) if a["kind"] in ADJUSTING and a["ex_date"] <= last]
+        events += [(t["date"], 1 if t["side"] == "buy" else 2, t) for t in rows]
+        events.sort(key=lambda e: (e[0], e[1], e[2].get("time") or "" if e[1] else ""))
+        for day, k, e in events:
+            if k == 0:
+                book.action(e)
+            elif k == 1:
+                book.buy(_d(day), e["qty"], e["price"])
+            else:
+                book.sell(_d(day), e["qty"], e["price"], today.isoformat())
+        if book.units > UNIT_TOLERANCE:
+            brokers = sorted({str(t.get("broker") or "") for t in rows} - {""})
+            out.append({"isin": isin, "name": name, "units": round(book.units, 6), "price": rows[-1]["price"], "as_of": last,
+                        "broker": ", ".join(b.replace("_", " ").title() for b in brokers)})
+    return out
+
+
+def _fill_broker(book: Book, files: list[dict] | None, stmt: str, market: Market) -> float:
+    """Give the units of unknown cost a broker holdings file's average (plan §21.13 rule 3), up to the units those
+    files hold. Each file's quantity and average are in its own date's terms; they're turned into the statement
+    date's terms with the splits and bonuses in between, then combined weighted by quantity. Returns the units filled."""
+    if not files:
+        return 0.0
+    units = cost = 0.0
+    for f in files:
+        q, avg, on = float(f.get("qty") or 0), f.get("avg_price"), str(f.get("as_of") or stmt)[:10]
+        if q <= 0 or not avg or float(avg) <= 0:
+            continue
+        g = market.growth(book.isin, on, stmt) if on <= stmt else 1 / market.growth(book.isin, stmt, on)
+        units += q * g
+        cost += q * float(avg)
+    if units <= EPS:
+        return 0.0
+    per_unit = cost / units
+    cover, filled = units, 0.0
+    out: list[Lot] = []
+    for lot in book.lots:
+        if lot.cost is not None or cover <= EPS:
+            out.append(lot)
+            continue
+        take = min(lot.units, cover)
+        out.append(Lot(lot.bought, take, take * per_unit, "broker", False))
+        if lot.units - take > UNIT_TOLERANCE:
+            out.append(Lot(lot.bought, lot.units - take, None, None))
+        cover -= take
+        filled += take
+    book.lots = out
+    return filled
 
 
 def today_terms(timeline: list[list] | None, isin: str, market: Market, today: str) -> list[list] | None:

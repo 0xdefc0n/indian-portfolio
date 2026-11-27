@@ -8,7 +8,7 @@
 //
 // Privacy (§0.1): logs carry the broker slug, counts and durations only. Trades, symbols and amounts never reach a log.
 import { blobKeys, deleteBlobs, isUuid, putJsonBlob } from './blob'
-import { hmacHex } from './crypto'
+import { hmacHex, type Vault } from './crypto'
 import { engineApi } from './engine-client'
 import { ApiError, notFound } from './errors'
 import { failQuota, LIMITS, uploadQuota } from './limits'
@@ -95,40 +95,67 @@ export async function uploadTradebook(t: Tenant, memberId: unknown, bytes: Uint8
     if (parsed.code === 'parse_timeout') throw new ApiError(504, 'parse_timeout')
     throw await fail(FAILURES[parsed.code] ?? 'parse_error')
   }
+  if (parsed.kind !== 'TRADEBOOK') throw await fail('parse_error')
+  const checked = tradebookFacts(parsed)
+  if (typeof checked === 'string') throw await fail(checked)
+  const filePan = parsed.pan ? normalizePan(parsed.pan) : null
+  if (filePan && pan && filePan !== pan) throw await fail('pan_mismatch')
+  const view = await storeTradebook(t, vault, { memberId: member.id, facts: checked, contentHash: hash, version: parsed.version, audit, now })
+  console.log('tradebook_ok', { broker: view.broker, trades: view.trades_count, slot: slot.name, ms: Date.now() - started })
+  return view
+}
+
+type TradebookFacts = { broker: string; trades: unknown[]; counts: Record<string, number>; period_from: string | null; period_to: string | null }
+
+/** A parsed tradebook's facts, or the refusal code (parse_error, no_trades). */
+export function tradebookFacts(parsed: { statement: unknown }): TradebookFacts | string {
   const st = parsed.statement as { broker?: string; period_from?: string | null; period_to?: string | null; trades?: unknown[]; counts?: Record<string, number> }
   const broker = typeof st.broker === 'string' && BROKERS[st.broker] ? st.broker : null
-  if (parsed.kind !== 'TRADEBOOK' || !broker || !Array.isArray(st.trades)) throw await fail('parse_error')
-  if (!st.trades.length) throw await fail('no_trades')
-  const filePan = parsed.pan ? normalizePan(parsed.pan) : null
-  if (filePan && filePan !== pan) throw await fail('pan_mismatch')
+  if (!broker || !Array.isArray(st.trades)) return 'parse_error'
+  if (!st.trades.length) return 'no_trades'
+  const day = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null)
+  return { broker, trades: st.trades, counts: st.counts ?? {}, period_from: day(st.period_from), period_to: day(st.period_to) }
+}
 
+/**
+ * Seal the trades and insert the row, with the upload quota and the audit row, in one batch (M21; shared with the
+ * broker-file upload, M34). `before`: statements that must run first in the batch (a new member's insert).
+ */
+export async function storeTradebook(
+  t: Tenant,
+  vault: Vault,
+  s: { memberId: string; facts: TradebookFacts; contentHash: string; version?: string; audit: D1PreparedStatement; now: number; before?: D1PreparedStatement[] },
+): Promise<TradebookView> {
+  const { env } = t
+  const db = env.DB
+  const { broker, trades } = s.facts
   const id = crypto.randomUUID()
   const key = blobKeys.tradebook(t.householdId, id)
-  const day = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null)
-  await putJsonBlob(env, vault, key, { broker, trades: st.trades, counts: st.counts ?? {} })
+  await putJsonBlob(env, vault, key, { broker, trades, counts: s.facts.counts })
   try {
     await db.batch([
-      ...uploadQuota(t.userId).map((q) => quotaStatement(db, q, now)),
+      ...(s.before ?? []),
+      ...uploadQuota(t.userId).map((q) => quotaStatement(db, q, s.now)),
       db
         .prepare(
           `INSERT INTO tradebook (id, household_id, member_id, broker, period_from, period_to, trades_count, blob_key, content_hash, parser_version, created_at)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
         )
-        .bind(id, t.householdId, member.id, broker, day(st.period_from), day(st.period_to), st.trades.length, key, hash, parsed.version ?? '', now),
-      audit,
+        .bind(id, t.householdId, s.memberId, broker, s.facts.period_from, s.facts.period_to, trades.length, key, s.contentHash, s.version ?? '', s.now),
+      s.audit,
     ])
   } catch (err) {
     await deleteBlobs(env, t.householdId, [key]).catch(() => undefined)
     if (isQuotaRefusal(err)) {
-      const r = await refusal(env, uploadQuota(t.userId), now)
+      const r = await refusal(env, uploadQuota(t.userId), s.now)
       throw new ApiError(429, 'upload_limit', { retry_after: r.retryAfter })
     }
     if (/UNIQUE constraint failed/.test((err as Error).message)) throw new ApiError(409, 'already_added')
+    if (/FOREIGN KEY constraint failed/.test((err as Error).message)) throw new ApiError(422, 'member_limit') // a new member over the cap
     throw err
   }
   await requestRebuild(env, t.householdId)
-  console.log('tradebook_ok', { broker, trades: st.trades.length, slot: slot.name, ms: Date.now() - started })
-  return { id, broker, broker_name: BROKERS[broker]!, period_from: day(st.period_from), period_to: day(st.period_to), trades_count: st.trades.length }
+  return { id, broker, broker_name: BROKERS[broker]!, period_from: s.facts.period_from, period_to: s.facts.period_to, trades_count: trades.length }
 }
 
 /** Every tradebook of the household, by member (newest first). */

@@ -37,6 +37,7 @@ import { waitDelay } from './jobs'
 import { cleanName, fieldKey } from './members'
 import { sipFieldKey } from './sip-overrides'
 import { stockCostKey } from './tradebooks'
+import { HOLDINGS_BROKERS } from './broker-files'
 import { soldSchemeCodes } from './statements'
 import { Tenant } from './tenant'
 
@@ -44,10 +45,10 @@ import { Tenant } from './tenant'
  * Bump to rebuild every snapshot (a change in what the Worker sends to /build, or in what the engine builds).
  * 2: stock data (M11). 3: units timelines, estimated SIPs and values at the latest NAV (M12). 4: the SIP mandate day
  * follows a date change (M12 fix). 5: shares and bonds at the latest exchange price (M20). 6: benchmark scores (M28).
- * 7: stock gains, corporate actions and dividends (M21). An older snapshot is stale,
- * so it rebuilds on its next read (snapshot.version).
+ * 7: stock gains, corporate actions and dividends (M21). 8: broker holdings statements, members without a statement,
+ * cost_source broker (M34). An older snapshot is stale, so it rebuilds on its next read (snapshot.version).
  */
-export const SNAPSHOT_VERSION = 7
+export const SNAPSHOT_VERSION = 8
 /** Debounce: every trigger's message arrives this much later (§10.2). */
 export const REBUILD_DELAY_S = 10
 /** A claim outlives the engine call (100 s) and matches the batch lease (120 s). */
@@ -153,6 +154,8 @@ export type MarketInputs = { marketDate: string; navKey: string; stocks?: number
 
 /** Broker tradebooks (M21): their parsed trades are sealed at `blob_key`. */
 export type TradebookRow = { id: string; member_id: string; broker: string; blob_key: string }
+/** Broker holdings statements (M34): their parsed rows are sealed at `blob_key`. */
+export type BrokerHoldingRow = { id: string; member_id: string; broker: string; account_key: string; as_of: string; blob_key: string }
 /** Manual average buy prices (M21): `cost_enc` is sealed {isin, avg_price, since}. */
 export type StockCostRow = { id: string; member_id: string; cost_enc: number[]; updated_at: number }
 
@@ -179,9 +182,11 @@ export async function inputsHash(
   overrides: { id: string }[] = [],
   tradebooks: { id: string }[] = [],
   costs: { id: string; updated_at: number }[] = [],
+  holdings: { id: string }[] = [],
 ): Promise<string> {
   const doc = JSON.stringify({
     v: SNAPSHOT_VERSION,
+    bh: holdings.map((b) => b.id).sort(),
     cp: market.corp ?? 0,
     tb: tradebooks.map((t) => t.id).sort(),
     cost: costs.map((c) => `${c.id}:${c.updated_at}`).sort(),
@@ -227,7 +232,7 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
   const started = Date.now()
 
   // 1. Inputs and their hash.
-  const [hRes, sRes, mRes, snapRes, oRes, tRes, cRes] = await db.batch([
+  const [hRes, sRes, mRes, snapRes, oRes, tRes, cRes, bRes] = await db.batch([
     db.prepare('SELECT dek_wrapped, kek_version, owner_user_id FROM household WHERE id = ?1').bind(hid),
     db.prepare('SELECT id, member_id, kind, as_of, created_at, blob_key FROM statement WHERE household_id = ?1').bind(hid),
     db.prepare('SELECT id, display_name_enc FROM member WHERE household_id = ?1').bind(hid),
@@ -235,6 +240,7 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
     db.prepare('SELECT id, member_id, kind, due, sip_enc FROM sip_override WHERE household_id = ?1').bind(hid),
     db.prepare('SELECT id, member_id, broker, blob_key FROM tradebook WHERE household_id = ?1').bind(hid),
     db.prepare('SELECT id, member_id, cost_enc, updated_at FROM stock_cost WHERE household_id = ?1').bind(hid),
+    db.prepare('SELECT id, member_id, broker, account_key, as_of, blob_key FROM broker_holding WHERE household_id = ?1').bind(hid),
   ])
   const household = hRes!.results[0] as { dek_wrapped: number[]; kek_version: number; owner_user_id: string } | undefined
   const snap = snapRes!.results[0] as SnapshotRow | undefined
@@ -255,9 +261,11 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
   const overrides = oRes!.results as OverrideRow[]
   const tradebooks = tRes!.results as TradebookRow[]
   const costs = cRes!.results as StockCostRow[]
-  const hash = await inputsHash(env, market, used, members, overrides, tradebooks, costs)
+  const brokerHoldings = bRes!.results as BrokerHoldingRow[]
+  const hash = await inputsHash(env, market, used, members, overrides, tradebooks, costs, brokerHoldings)
 
-  if (!used.length) return clearSnapshot(env, msg, snap, hash, market, loadedAt)
+  // Broker files alone are enough for a portfolio (M34): a household with none of the three has nothing to build.
+  if (!used.length && !tradebooks.length && !brokerHoldings.length) return clearSnapshot(env, msg, snap, hash, market, loadedAt)
 
   if (!msg.force && snap.inputs_hash === hash && snap.blob_key && snap.version === SNAPSHOT_VERSION) {
     await db.prepare('UPDATE snapshot SET checked_at = MAX(COALESCE(checked_at, 0), ?1) WHERE household_id = ?2 AND inputs_hash = ?3').bind(loadedAt, hid, hash).run()
@@ -290,7 +298,7 @@ export async function runRebuild(env: Env, msg: RebuildMessage, now = Date.now()
     // 4. Decrypt, build, seal.
     const t = new Tenant(env, hid, household.owner_user_id)
     const vault = await t.vaultFromRow(household)
-    const request = await buildRequest(env, vault, used, members, market, now, overrides, tradebooks, costs)
+    const request = await buildRequest(env, vault, used, members, market, now, overrides, tradebooks, costs, brokerHoldings)
     holding = false
     const built = await engineApi.build(env, slot, request.body)
     if (!built.ok) throw new BuildError(built.code)
@@ -430,6 +438,7 @@ async function buildRequest(
   overrideRows: OverrideRow[] = [],
   tradebookRows: TradebookRow[] = [],
   costRows: StockCostRow[] = [],
+  holdingRows: BrokerHoldingRow[] = [],
 ) {
   const names = new Map<string, string | null>()
   for (const m of members) names.set(m.id, m.display_name_enc ? await vault.openText(fieldKey.name(m.id), m.display_name_enc) : null)
@@ -454,6 +463,18 @@ async function buildRequest(
     const name = names.get(item.member_id) ?? null
     item.name = name && !holderNames.get(item.member_id)?.has(name) ? name : null
   }
+  // Broker holdings statements (M34): their ISINs are held like a statement's (prices, codes, stock data, scores).
+  const brokerHoldings: Array<Record<string, unknown>> = []
+  for (const b of holdingRows) {
+    const blob = await getJsonBlob<{ holdings?: Array<{ isin?: unknown }> }>(env, vault, b.blob_key)
+    if (!blob) throw new BuildError('holdings_missing')
+    const list = Array.isArray(blob.holdings) ? blob.holdings : []
+    for (const h of list) if (typeof h.isin === 'string') isins.add(h.isin.toUpperCase())
+    brokerHoldings.push({ member_id: b.member_id, broker: b.broker, broker_name: HOLDINGS_BROKERS[b.broker] ?? b.broker, account: b.account_key, as_of: b.as_of, holdings: list })
+  }
+  // Members with no statement used (only broker files or tradebooks): the engine needs their name.
+  const withStatement = new Set(used.map((s) => s.member_id))
+  const membersIn = members.filter((m) => !withStatement.has(m.id)).map((m) => ({ member_id: m.id, name: names.get(m.id) ?? null }))
 
   const res = await env.MARKET.withSession('first-unconstrained')
     .prepare(
@@ -506,8 +527,20 @@ async function buildRequest(
     stockCosts.push({ member_id: c.member_id, isin: v.isin, avg_price: v.avg_price, since: v.since ?? null })
   }
   const corp = await corpFor(env, [...isins, ...tradeIsins].filter((i) => /^IN[EF9]/.test(i)), [...symbols], [...tradeNames])
+  // A member known only from tradebooks holds what the trades leave (M34): those shares need prices too.
+  const filed = new Set([...withStatement, ...holdingRows.map((b) => b.member_id)])
+  const tradeOnly = trades.filter((tb) => !filed.has(tb.member_id)).flatMap((tb) => tb.trades)
+  const tradeShares = [...new Set(tradeOnly.map((tr) => (typeof tr.isin === 'string' ? tr.isin.toUpperCase() : '')))].filter((i) => EQUITY_ISIN.test(i) && !isins.has(i))
+  if (tradeShares.length) {
+    await trackEquities(env, tradeShares, now)
+      .then((ask) => sendPrices(env, ask))
+      .catch((e) => console.error('tracked_equity_failed', (e as Error).name))
+    pending.push(...(await pricesPending(env, tradeShares)))
+  }
   const body = JSON.stringify({
     trades,
+    broker_holdings: brokerHoldings,
+    members: membersIn,
     stock_costs: stockCosts,
     statements: items,
     market: {
@@ -552,7 +585,10 @@ export async function prebuild(env: Env, opts: { now?: number; finalDates?: stri
   for (;;) {
     const page = await env.DB.prepare(
       `SELECT h.id FROM household h JOIN snapshot s ON s.household_id = h.id
-       WHERE h.last_active_at > ?1 AND h.id > ?2 AND EXISTS (SELECT 1 FROM statement st WHERE st.household_id = h.id)
+       WHERE h.last_active_at > ?1 AND h.id > ?2
+         AND (EXISTS (SELECT 1 FROM statement st WHERE st.household_id = h.id)
+              OR EXISTS (SELECT 1 FROM broker_holding bh WHERE bh.household_id = h.id)
+              OR EXISTS (SELECT 1 FROM tradebook tb WHERE tb.household_id = h.id))
        ORDER BY h.id LIMIT ?3`,
     )
       .bind(now - PREBUILD_ACTIVE_MS, cursor, PREBUILD_PAGE)
@@ -588,11 +624,14 @@ export type SnapshotState = {
 
 type StateRow = SnapshotRow & { statements: number; dek_wrapped: number[]; kek_version: number }
 
-/** The snapshot row, the household key and the statement count: one D1 query. */
+/** The snapshot row, the household key and the count of sources (statements, broker files): one D1 query. */
 export async function readSnapshotRow(env: { DB: D1Database }, householdId: string): Promise<StateRow | null> {
   return env.DB.prepare(
     `SELECT s.${SNAPSHOT_COLUMNS.split(', ').join(', s.')}, h.dek_wrapped, h.kek_version,
-            (SELECT COUNT(*) FROM statement st WHERE st.household_id = ?1) AS statements
+            -- every source a build can use (M34: broker holdings statements and tradebooks work on their own)
+            (SELECT COUNT(*) FROM statement st WHERE st.household_id = ?1)
+            + (SELECT COUNT(*) FROM broker_holding bh WHERE bh.household_id = ?1)
+            + (SELECT COUNT(*) FROM tradebook tb WHERE tb.household_id = ?1) AS statements
      FROM snapshot s JOIN household h ON h.id = s.household_id WHERE s.household_id = ?1`,
   )
     .bind(householdId)

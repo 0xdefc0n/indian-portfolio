@@ -108,7 +108,8 @@ export function HoldingsTable({ holdings, total, members, showMember, highlight,
                       Invested {inr(h.invested)}, gain {signed(h.value - h.invested, inr)}
                       {(() => {
                         const r = h.cashflows ? xirr(holdingFlows([h])) : null
-                        return r == null ? null : <>, XIRR {signed(r * 100, (n) => pct(n, 2))}</>
+                        if (r == null) return h.cost_source?.includes("broker") ? <>, XIRR needs buy dates</> : null
+                        return <>, XIRR {signed(r * 100, (n) => pct(n, 2))}</>
                       })()}
                     </TooltipContent>
                   </Tooltip>

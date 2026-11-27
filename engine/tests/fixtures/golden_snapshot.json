@@ -1560,6 +1560,7 @@
     "replayed_funds": 2
    },
    "as_of": "2026-11-20",
+   "broker_notes": [],
    "dividend_income": [],
    "estimated": {
     "amount": 0,
@@ -1673,6 +1674,7 @@
     "replayed_funds": 0
    },
    "as_of": "2026-10-31",
+   "broker_notes": [],
    "dividend_income": [],
    "estimated": {
     "amount": 0,

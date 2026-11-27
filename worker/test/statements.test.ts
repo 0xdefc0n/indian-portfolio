@@ -139,11 +139,11 @@ describe('POST /api/statements: direct path', () => {
 })
 
 describe('Upload checks (§16 "Upload")', () => {
-  it('rejects a non-PDF and a file over 10 MB, storing nothing', async () => {
+  it('rejects a file that is neither a PDF nor a broker file (M34), and a file over 10 MB, storing nothing', async () => {
     const h = await newHousehold('u1')
     const spy = fakeEngine(parsed(FAKE_PAN))
-    const notPdf = await upload(h.jar, new TextEncoder().encode('just some text, not a pdf'))
-    expect([notPdf.res.status, notPdf.body.code]).toEqual([422, 'not_pdf'])
+    const notPdf = await upload(h.jar, new TextEncoder().encode('just some text and not a pdf')) // no delimiter: not a CSV either
+    expect([notPdf.res.status, notPdf.body.code]).toEqual([422, 'not_broker_file'])
     const big = await upload(h.jar, makePdf(cdslPages(), { padBytes: LIMITS.uploadBytes + 1024 }))
     expect([big.res.status, big.body.code]).toEqual([413, 'file_too_large'])
     expect(spy).toHaveLength(0)

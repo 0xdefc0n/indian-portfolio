@@ -74,25 +74,78 @@ export async function memberInsert(
   return { id, stmt }
 }
 
-export type StatementSummary = { id: string; kind: 'CDSL' | 'CAMS' | 'KFINTECH'; as_of: string; holdings_count: number }
-export type MemberView = { id: string; name: string | null; pan_masked: string; statements: StatementSummary[] }
+/**
+ * The INSERT for a member without a PAN (D29, M34): created from a broker file, named by the user. pan_hmac is
+ * 'nopan:{id}' (unique, never a PAN's HMAC), the sealed PAN is '' and the masked one ''. Race-safe within the cap like
+ * memberInsert's `maxMembers` form: over the cap nothing is inserted, and the caller's next insert that points at the
+ * member fails its foreign key.
+ */
+export async function memberInsertNoPan(
+  t: Tenant,
+  vault: Vault,
+  input: { name: string; id?: string; now?: number; maxMembers: number },
+): Promise<{ id: string; stmt: D1PreparedStatement }> {
+  const name = cleanName(input.name)
+  if (!name) throw new TypeError('not a name')
+  const id = input.id ?? crypto.randomUUID()
+  const stmt = t.env.DB.prepare(
+    `INSERT INTO member (id, household_id, pan_hmac, pan_enc, pan_masked, display_name_enc, created_at, no_pan)
+     SELECT ?1, ?2, ?3, ?4, '', ?5, ?6, 1 WHERE (SELECT COUNT(*) FROM member WHERE household_id = ?2) < ${Math.trunc(input.maxMembers)}`,
+  ).bind(id, t.householdId, `nopan:${id}`, await vault.sealText(fieldKey.pan(id), ''), await vault.sealText(fieldKey.name(id), name), input.now ?? Date.now())
+  return { id, stmt }
+}
 
-type MemberRow = { id: string; pan_masked: string; display_name_enc: number[] | null }
+const NAME_NOISE = new Set(['mr', 'mrs', 'ms', 'miss', 'dr', 'shri', 'smt', 'kumari', 'late'])
+
+/** A name's words for matching: lower case, letters only, no titles or initials. */
+export function nameTokens(name: string | null | undefined): Set<string> {
+  const words = (name ?? '').normalize('NFKD').toLowerCase().replace(/[^a-z\s]+/g, ' ').split(/\s+/)
+  return new Set(words.filter((w) => w.length > 1 && !NAME_NOISE.has(w)))
+}
+
+/**
+ * Do two names look like the same person (D29: "Is this the same person?")? The same words in any order, or one
+ * name's words all in the other's with at least two of them ("Asha Rao" and "Asha K Devi Rao"). Only a suggestion: the
+ * user answers.
+ */
+export function sameName(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = nameTokens(a)
+  const y = nameTokens(b)
+  if (!x.size || !y.size) return false
+  const [small, big] = x.size <= y.size ? [x, y] : [y, x]
+  for (const w of small) if (!big.has(w)) return false
+  return small.size === big.size || small.size >= 2
+}
+
+export type StatementSummary = { id: string; kind: 'CDSL' | 'CAMS' | 'KFINTECH'; as_of: string; holdings_count: number }
+export type MemberView = {
+  id: string
+  name: string | null
+  pan_masked: string
+  statements: StatementSummary[]
+  /** Created from a broker file, no PAN yet (D29). */
+  no_pan: boolean
+  /** Members without a PAN whose name matches this one's: "Is this the same person?" (M34). Only on PAN members. */
+  same_as: { id: string; name: string }[]
+}
+
+type MemberRow = { id: string; pan_masked: string; display_name_enc: number[] | null; no_pan: number }
 type StatementRow = StatementSummary & { member_id: string }
 type HouseholdKeyRow = { dek_wrapped: number[]; kek_version: number }
 
 /** Every member with their statements (newest first). One D1 round trip: the key, members and statements in a batch. */
 export async function listMembers(t: Tenant): Promise<MemberView[]> {
   const db = t.env.DB
-  const [keyRes, memberRes, statementRes] = await db.batch([
+  const [keyRes, memberRes, statementRes, distinctRes] = await db.batch([
     db.prepare('SELECT dek_wrapped, kek_version FROM household WHERE id = ?1').bind(t.householdId),
-    db.prepare('SELECT id, pan_masked, display_name_enc FROM member WHERE household_id = ?1 ORDER BY created_at, id').bind(t.householdId),
+    db.prepare('SELECT id, pan_masked, display_name_enc, no_pan FROM member WHERE household_id = ?1 ORDER BY created_at, id').bind(t.householdId),
     db
       .prepare(
         `SELECT id, member_id, kind, as_of, holdings_count FROM statement WHERE household_id = ?1
          ORDER BY as_of DESC, created_at DESC`,
       )
       .bind(t.householdId),
+    db.prepare('SELECT member_a, member_b FROM member_distinct WHERE household_id = ?1').bind(t.householdId),
   ])
   const members = (memberRes?.results ?? []) as MemberRow[]
   if (!members.length) return []
@@ -105,14 +158,23 @@ export async function listMembers(t: Tenant): Promise<MemberView[]> {
     list.push({ id: s.id, kind: s.kind, as_of: s.as_of, holdings_count: s.holdings_count })
     byMember.set(s.member_id, list)
   }
-  return Promise.all(
+  const views: MemberView[] = await Promise.all(
     members.map(async (m) => ({
       id: m.id,
       name: m.display_name_enc ? await vault.openText(fieldKey.name(m.id), m.display_name_enc) : null,
       pan_masked: m.pan_masked,
       statements: byMember.get(m.id) ?? [],
+      no_pan: m.no_pan === 1,
+      same_as: [],
     })),
   )
+  const declined = new Set(((distinctRes?.results ?? []) as { member_a: string; member_b: string }[]).map((d) => `${d.member_a}|${d.member_b}`))
+  const panLess = views.filter((v) => v.no_pan && v.name)
+  for (const v of views) {
+    if (v.no_pan || !v.statements.length) continue
+    v.same_as = panLess.filter((p) => sameName(p.name, v.name) && !declined.has(`${p.id}|${v.id}`)).map((p) => ({ id: p.id, name: p.name! }))
+  }
+  return views
 }
 
 /** Rename (the display name the dashboard shows). False if the member isn't this household's. */
@@ -129,22 +191,25 @@ export async function renameMember(t: Tenant, memberId: string, name: string, au
 }
 
 /**
- * Delete a member, their statements, tradebooks and any queued job for them (rows cascade), then their R2 blobs:
+ * Delete a member, their statements, tradebooks, broker holdings files and any queued job for them (rows cascade), then their R2 blobs:
  * statement and tradebook JSON under h/ and parked PDFs under tmp/. Rows go first, in one transaction, so nothing ever points at a missing
  * blob; a blob delete that fails leaves only an unreferenced object, which account deletion's prefix sweep removes.
  * False if the member isn't this household's.
  */
 export async function deleteMember(t: Tenant, memberId: string, audit: D1PreparedStatement): Promise<boolean> {
   const db = t.env.DB
-  const [statementKeys, jobKeys, tradebookKeys, del] = await db.batch<{ blob_key: string }>([
+  const [statementKeys, jobKeys, tradebookKeys, holdingKeys, del] = await db.batch<{ blob_key: string }>([
     db.prepare('SELECT blob_key FROM statement WHERE member_id = ?1 AND household_id = ?2').bind(memberId, t.householdId),
     db.prepare('SELECT blob_key FROM parse_job WHERE member_id = ?1 AND household_id = ?2 AND blob_key IS NOT NULL').bind(memberId, t.householdId),
     db.prepare('SELECT blob_key FROM tradebook WHERE member_id = ?1 AND household_id = ?2').bind(memberId, t.householdId), // M21
+    db.prepare('SELECT blob_key FROM broker_holding WHERE member_id = ?1 AND household_id = ?2').bind(memberId, t.householdId), // M34
     db.prepare('DELETE FROM member WHERE id = ?1 AND household_id = ?2').bind(memberId, t.householdId),
     audit, // written only if the DELETE removed the row (auditStatement onlyIfChanged)
   ])
   if (!(del?.meta.changes ?? 0)) return false
-  const keys = [...(statementKeys?.results ?? []), ...(jobKeys?.results ?? []), ...(tradebookKeys?.results ?? [])].map((r) => r.blob_key)
+  const keys = [...(statementKeys?.results ?? []), ...(jobKeys?.results ?? []), ...(tradebookKeys?.results ?? []), ...(holdingKeys?.results ?? [])].map(
+    (r) => r.blob_key,
+  )
   try {
     await deleteBlobs(t.env, t.householdId, keys)
   } catch (err) {

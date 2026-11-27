@@ -47,8 +47,10 @@ describe('GET /api/members', () => {
           { id: newer.id, kind: 'CDSL', as_of: '2026-10-31', holdings_count: 1 },
           { id: older.id, kind: 'CAMS', as_of: '2026-09-30', holdings_count: 1 },
         ],
+        no_pan: false,
+        same_as: [],
       },
-      { id: m2, name: null, pan_masked: 'YY••••••8Y', statements: [] },
+      { id: m2, name: null, pan_masked: 'YY••••••8Y', statements: [], no_pan: false, same_as: [] },
     ])
     expect(JSON.stringify(members)).not.toMatch(/ZZZPZ1234Z|YYYPY5678Y/)
   })
