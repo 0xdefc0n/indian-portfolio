@@ -1,5 +1,7 @@
 // What kind of asset a holding is, for the Assets page groups. The engine knows a fund (INF ISIN) from a listed share
-// or bond (INE/IN9); ETFs are exchange-traded funds (INF too), told apart by name.
+// or bond (INE/IN9). ETFs have INF ISINs too, so they're told apart by where they're held and by name:
+// - anything in a CAMS/KFintech statement, or held in a folio, is a mutual fund (ETFs live only in demat);
+// - a fund of funds that invests in an ETF ("Gold ETF FoF", "… ETF Fund of Fund") is a mutual fund, not an ETF.
 import type { Holding } from "@/lib/api"
 
 export type HoldingKind = "mf" | "etf" | "stock"
@@ -7,10 +9,14 @@ export type HoldingKind = "mf" | "etf" | "stock"
 export type AssetKind = HoldingKind | "fixed"
 
 const ETF_RE = /\bETF\b|exchange traded|\bBeES\b/i
+const FOF_RE = /\bFoF\b|fund of funds?|\bFOF\b/i
 
-export function holdingKind(h: Pick<Holding, "isin" | "name" | "sebi_category">): HoldingKind {
+export function holdingKind(h: Pick<Holding, "isin" | "name" | "sebi_category" | "sources" | "folio">): HoldingKind {
   if (!h.isin.startsWith("INF")) return "stock"
-  return ETF_RE.test(h.name) || ETF_RE.test(h.sebi_category ?? "") ? "etf" : "mf"
+  const rtaHeld = !!h.folio || (h.sources ?? []).some((s) => s !== "CDSL")
+  if (rtaHeld) return "mf"
+  const text = `${h.name} ${h.sebi_category ?? ""}`
+  return ETF_RE.test(text) && !FOF_RE.test(text) ? "etf" : "mf"
 }
 
 export const KIND_LABEL: Record<AssetKind, string> = {
