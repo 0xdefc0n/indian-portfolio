@@ -23,6 +23,7 @@ import { addDays, istToday, ymdToIso } from '../market/amfi'
 import { HOLIDAY_LOOKBACK_DAYS, holidayDates } from '../market/holidays'
 import { BENCHMARK_CODE } from '../market/store'
 import { requestAmc } from '../market/amc-scrape'
+import { mffKey } from '../market/mfforecast'
 import { apiKey, budgetLeft, recordWants, requestStocks, stockData, stocksEnabled, stocksVersion } from '../market/stocks'
 import { blobKeys, deleteBlobs, getJsonBlob, isUuid } from './blob'
 import { FLAG_GZIP, hmacHex, toBytes, type Vault } from './crypto'
@@ -336,9 +337,9 @@ async function afterBuildStocks(env: Env, want: [string, string][], waiting: boo
     if (!fresh && !waiting) return false
     // The AMC scrapers first (M18); BharatStock for what they don't cover, while today's budget lasts.
     const amc = await requestAmc(env, now)
-    const bharat = !!apiKey(env) && (await budgetLeft(env, now)) > 0
-    if (bharat) await requestStocks(env, now)
-    return amc || bharat
+    const fallback = (!!apiKey(env) && (await budgetLeft(env, now)) > 0) || !!mffKey(env)
+    if (fallback) await requestStocks(env, now)
+    return amc || fallback
   } catch (err) {
     console.error('stocks_request_failed', (err as Error).name)
     return false

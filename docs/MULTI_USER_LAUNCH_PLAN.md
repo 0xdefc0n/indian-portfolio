@@ -1236,6 +1236,17 @@ website (typically one Excel file per month, one sheet per scheme). We scrape **
   - **Done when, not met yet:** ≥ 80% of tracked equity schemes from AMCs by day 15. On staging today (8 wanted
     funds, one family) 2 are under active adapters, 2 under blocked ones (HDFC, Nippon, Kotak, Axis) and 4 under 2
     fund houses with no adapter: 25%. It depends on the owner's terms decision, the blocked AMCs and rollout step 3.
+- ✅ **mfforecast, the last fallback (M18 follow-up, owner request 2026-11-27)** — `worker/src/market/mfforecast.ts`,
+  migration `market/0006_mfforecast.sql` (`fund_portfolio.source` gains `'mfforecast'`, `stock_match.mff_at`).
+  Free holdings API on RapidAPI (`GET /funds/{amfi_code}/holdings`, 500+ equity and hybrid funds, a month behind the
+  AMCs). Researched alternatives: Punji (free: top 10 holdings, 20 funds a month), mfdata.in (down), the
+  fund-disclosures project (API offline), FinAPI and mfapi.in (NAVs only).
+  - ✅ VERIFY limits: RapidAPI's headers say 500,000 requests a month (hard limit); mfforecast's page says 1,000 an
+    hour. We budget 900 an hour and 450,000 a month in `quota`, stop below 100 left, and a 429 spends the hour.
+  - Runs at the end of the `stocks` job, for wanted funds the AMCs don't cover, with no data from the last two
+    months, that BharatStock can't serve (no key, today's budget spent, no match, or failing). Each fund at most once
+    a week. It never overwrites an AMC or BharatStock month; BharatStock replaces an mfforecast month.
+  - Key: optional secret `RAPIDAPI_KEY` (not in `secrets.required`).
 - ✅ **M11, as built (BharatStock only, rollout step 1)** — `worker/src/market/stocks.ts`, migration
   `market/0003_stocks.sql`:
   - **Which funds.** The Worker doesn't classify funds. Each `/build` returns the funds its stocks view needs in

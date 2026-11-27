@@ -31,6 +31,7 @@ export default defineConfig(async () => {
             EMAIL_SINK_KEY: 'test-only-email-sink-key-0123456789abcdef',
             BHARATSTOCK_API_KEY: 'test-only-bharatstock-key', // never the real key from .dev.vars; fetches are mocked
             AMC_SCRAPERS: '', // off by default; test/amc.test.ts turns them on per test
+            RAPIDAPI_KEY: '', // never the real key from .dev.vars; test/mfforecast.test.ts sets a fake one
             TEST_APP_MIGRATIONS: appMigrations,
             TEST_MARKET_MIGRATIONS: marketMigrations,
           },

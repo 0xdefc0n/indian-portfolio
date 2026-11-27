@@ -5,10 +5,12 @@ export type AppEnv = Env
 declare global {
   interface Env {
     BHARATSTOCK_API_KEY?: string
+    RAPIDAPI_KEY?: string // mfforecast on RapidAPI, the last stocks fallback (optional)
   }
   namespace Cloudflare {
     interface Env {
       BHARATSTOCK_API_KEY?: string
+      RAPIDAPI_KEY?: string // mfforecast on RapidAPI, the last stocks fallback (optional)
     }
   }
 }
