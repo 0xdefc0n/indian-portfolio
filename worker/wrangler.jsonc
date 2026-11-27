@@ -186,8 +186,8 @@
         "TMP_MAX_OBJECTS": "50000",
         "EMAIL_FROM": "login@pocketfolio.in",
         "BHARATSTOCK_DAILY_LIMIT": "50",
-        // Off until the owner decides on the AMCs' terms of use (several allow non-commercial use only; M18 notes).
-        "AMC_SCRAPERS": ""
+        // On: the owner accepted the AMCs' terms-of-use risk (several say non-commercial use only), 2026-11-27 (M18).
+        "AMC_SCRAPERS": "all"
       },
       "secrets": { "required": ["ENGINE_SHARED_SECRET", "BETTER_AUTH_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "TURNSTILE_SECRET", "DATA_KEK_V1", "PAN_PEPPER"] },
       "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["login@pocketfolio.in"] }],

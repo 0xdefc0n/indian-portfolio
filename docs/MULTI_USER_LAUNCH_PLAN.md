@@ -1201,8 +1201,8 @@ website (typically one Excel file per month, one sheet per scheme). We scrape **
 
   Every active adapter's October 2026 files parse with every scheme's weights at 95–105% (`engine.amc.cli`), and the
   AMFI names tested match the right scheme. **Terms: 6 of the 10 restrict commercial use or reuse without written
-  consent.** Whether PocketFolio may scrape them is the owner's call; until then production runs none
-  (`AMC_SCRAPERS: ""`), staging and dev run all (`"all"`). Checked from a laptop: Cloudflare egress may meet bot
+  consent.** ✅ Owner, 2026-11-27: scrape all of them anyway and accept the risk, so every environment runs
+  `AMC_SCRAPERS: "all"` (the blocked ones stay blocked: bot walls and robots.txt are still respected). Checked from a laptop: Cloudflare egress may meet bot
   walls this didn't (a run then records `blocked`).
 - **Snapshot.** The `stocks` section of the portfolio is built in the engine from these blobs (same shape as today's
   `stocks.snapshot`). `refreshing` becomes `true` when a tracked equity ISIN has no data yet.
