@@ -1247,6 +1247,11 @@ website (typically one Excel file per month, one sheet per scheme). We scrape **
     months, that BharatStock can't serve (no key, today's budget spent, no match, or failing). Each fund at most once
     a week. It never overwrites an AMC or BharatStock month; BharatStock replaces an mfforecast month.
   - Key: optional secret `RAPIDAPI_KEY` (not in `secrets.required`).
+  - **Order kept: AMC → BharatStock → mfforecast** (owner asked for the most complete, least refused source first;
+    checked 2026-11-27). mfforecast had 7 of staging's 8 wanted funds, all a month old (September on 27 November),
+    and 3 of the 7 summed to only 86–92%, so it's the least complete. AMC files are complete and current; BharatStock
+    is complete and current but limited to 50 calls a day, which only the gaps the AMCs leave spend. So mfforecast
+    stays last: it fills in when BharatStock's day is spent, finds no match or fails.
 - ✅ **M11, as built (BharatStock only, rollout step 1)** — `worker/src/market/stocks.ts`, migration
   `market/0003_stocks.sql`:
   - **Which funds.** The Worker doesn't classify funds. Each `/build` returns the funds its stocks view needs in
