@@ -15,6 +15,7 @@ import { AMC_CRON, requestAmc } from './market/amc-scrape'
 import { requestStocks, STOCKS_CRON } from './market/stocks'
 import { requireSession } from './middleware/session'
 import { accountRoutes } from './routes/account'
+import { assetRoutes } from './routes/assets'
 import { authRoutes } from './routes/auth'
 import { deviceRoutes } from './routes/devices'
 import { jobRoutes } from './routes/jobs'
@@ -101,6 +102,7 @@ app.route('/', statementRoutes)
 app.route('/', jobRoutes)
 app.route('/', portfolioRoutes)
 app.route('/', sipRoutes)
+app.route('/', assetRoutes)
 app.route('/', metricRoutes)
 
 app.notFound((c) => c.json({ ok: false, code: 'not_found' }, 404))

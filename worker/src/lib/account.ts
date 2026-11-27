@@ -16,6 +16,8 @@ import { blobKeys, deletePrefix, openJson } from './blob'
 import { type Bytes, hmacHex, Vault } from './crypto'
 import type { DeletedEmailJob } from './email'
 import { shredHousehold } from './household'
+import { assetFieldKey } from './assets'
+import { type Asset, assetName, todayIst, valueAsset } from './manual-assets'
 import { fieldKey } from './members'
 import { sipFieldKey } from './sip-overrides'
 
@@ -98,7 +100,7 @@ export async function exportAccount(
 ): Promise<ReadableStream<Uint8Array>> {
   const db = env.DB
   const { userId, householdId } = who
-  const [user, accounts, sessions, consents, household, members, statements, sips, jobs, pending, audit] = await db.batch<Row>([
+  const [user, accounts, sessions, consents, household, members, statements, sips, jobs, pending, audit, assets] = await db.batch<Row>([
     db.prepare('SELECT id, name, email, "emailVerified" AS email_verified, image, "createdAt" AS created_at FROM user WHERE id = ?1').bind(userId),
     db.prepare('SELECT "providerId" AS provider, "createdAt" AS created_at FROM account WHERE "userId" = ?1 ORDER BY "createdAt"').bind(userId),
     db
@@ -121,12 +123,14 @@ export async function exportAccount(
     db
       .prepare('SELECT event, ip_country, at FROM audit_event WHERE (user_id = ?1 OR household_id = ?2) AND at > ?3 ORDER BY at')
       .bind(userId, householdId, now - AUDIT_RETENTION_MS),
+    db.prepare('SELECT id, type, member_id, inputs_enc, created_at, updated_at FROM manual_asset WHERE household_id = ?1 ORDER BY created_at, id').bind(householdId),
   ])
   const h = household?.results[0] as { id: string; created_at: number; last_active_at: number; dek_wrapped: Bytes; kek_version: number } | undefined
   const u = user?.results[0]
   if (!h || !u) throw new ExportError('account gone')
   const vault = await Vault.fromRow(env, householdId, h)
   const open = (key: string, sealed: unknown) => (sealed ? vault.openText(key, sealed as Bytes) : Promise.resolve(null))
+  const today = todayIst(now)
 
   const head = {
     format: EXPORT_FORMAT,
@@ -173,6 +177,24 @@ export async function exportAccount(
       (sips?.results ?? []).map(async (s) => {
         const sip = JSON.parse((await open(sipFieldKey(s.id as string), s.sip_enc)) ?? '{}') as { isin?: string; folio?: string | null }
         return { member_id: s.member_id, kind: s.kind, date: s.due, isin: sip.isin ?? null, folio: sip.folio ?? null, created_at: iso(s.created_at as number) }
+      }),
+    ),
+    // FD, PPF and EPF entered by hand (M19): the inputs as typed, and today's approximate values worked out from them.
+    manual_assets: await Promise.all(
+      (assets?.results ?? []).map(async (a) => {
+        const inputs = JSON.parse((await open(assetFieldKey(a.id as string), a.inputs_enc)) ?? '{}')
+        const asset = { type: a.type, inputs } as Asset
+        const { flows: _flows, ...value } = valueAsset(asset, today)
+        return {
+          id: a.id,
+          type: a.type,
+          member_id: a.member_id ?? null,
+          name: assetName(asset),
+          inputs,
+          approximate_value: { as_of: today, ...value },
+          created_at: iso(a.created_at as number),
+          updated_at: iso(a.updated_at as number),
+        }
       }),
     ),
     uploads: (jobs?.results ?? []).map((j) => ({

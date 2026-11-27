@@ -58,9 +58,18 @@ function sumBy(hs: Holding[], key: (h: Holding) => string): Row[] {
   return [...m.entries()].map(([label, value]) => ({ label, value }))
 }
 
-/** Asset class and fund house splits, with plain-language concentration notes. */
-export function AllocationBreakdown({ holdings, total }: { holdings: Holding[]; total: number }) {
-  const assets = sumBy(holdings, (h) => h.asset_class).map((r) => ({ ...r, color: ASSET_COLOR[r.label] }))
+/**
+ * Asset class and fund house splits, with plain-language concentration notes. `fixedIncome`: FD, PPF and EPF entered
+ * by hand (M19), counted under Debt in the asset-class split only.
+ */
+export function AllocationBreakdown({ holdings, total, fixedIncome = 0 }: { holdings: Holding[]; total: number; fixedIncome?: number }) {
+  const classes = sumBy(holdings, (h) => h.asset_class)
+  if (fixedIncome > 0) {
+    const debt = classes.find((r) => r.label === "Debt")
+    if (debt) debt.value += fixedIncome
+    else classes.push({ label: "Debt", value: fixedIncome })
+  }
+  const assets = classes.sort((x, y) => y.value - x.value).map((r) => ({ ...r, color: ASSET_COLOR[r.label] }))
   const amcs = sumBy(holdings, (h) => h.amc || "Other")
   const top = [...amcs].sort((a, b) => b.value - a.value)[0]
   const biggest = [...holdings].sort((a, b) => b.value - a.value)[0]
@@ -74,7 +83,8 @@ export function AllocationBreakdown({ holdings, total }: { holdings: Holding[]; 
       <div className="grid gap-8 md:grid-cols-2">
         <section>
           <h3 className="mb-3 text-sm font-medium text-muted-foreground">Asset class</h3>
-          <BarList rows={assets} total={total} />
+          <BarList rows={assets} total={total + fixedIncome} />
+          {fixedIncome > 0 && <p className="mt-2 text-[13px] text-muted-foreground">Debt includes your FDs, PPF and EPF.</p>}
         </section>
         <section>
           <h3 className="mb-3 text-sm font-medium text-muted-foreground">Fund house</h3>

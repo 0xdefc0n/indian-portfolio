@@ -26,6 +26,9 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "@manual-assets": [
+        "../worker/src/lib/manual-assets.ts"
       ]
     }
   },

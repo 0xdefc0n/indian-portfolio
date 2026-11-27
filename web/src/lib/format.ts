@@ -49,6 +49,10 @@ export const CATEGORY_COLOR: Record<string, string> = {
   International: "var(--cat-intl)",
   "Stocks & bonds": "var(--cat-stocks)",
   "Other funds": "var(--cat-other)",
+  // FD, PPF and EPF entered by hand (M19), under Debt: existing tokens, no new colours (§13)
+  "Fixed deposit": "var(--cat-debt)",
+  PPF: "var(--cat-hybrid)",
+  EPF: "var(--cat-stocks)",
 }
 export const categoryColor = (c: string) => CATEGORY_COLOR[c] ?? "var(--cat-other)"
 

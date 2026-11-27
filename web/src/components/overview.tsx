@@ -13,7 +13,8 @@ import { cn } from "@/lib/utils"
 import { holdingFlows, xirr } from "@/lib/xirr"
 import type { Slice } from "@/components/allocation-strip"
 
-export type Returns = { invested: number; current: number; gain: number; xirr: number | null; funds: number; complete: boolean }
+/** `overall`: Overall XIRR (funds and stocks plus FD, PPF and EPF, M19); undefined when there are no manual assets. */
+export type Returns = { invested: number; current: number; gain: number; xirr: number | null; funds: number; complete: boolean; overall?: number | null }
 type Members = Map<string, Member>
 
 const firstName = (members: Members, id: string) => members.get(id)?.name.split(" ")[0]
@@ -121,11 +122,15 @@ function Box({ label, children, help }: { label: string; children: React.ReactNo
 }
 
 const XIRR_HELP = "Annualised return that accounts for when each rupee went in, the same measure Groww and Kuvera show. Includes stamp duty, redemptions and dividends."
+const OVERALL_HELP = "XIRR with your FDs, PPF and EPF included (approximate, before tax). Funds & stocks XIRR leaves them out."
 
 export function ReturnBoxes({ returns, showValue }: { returns: Returns; showValue?: boolean }) {
   const tone = returns.gain >= 0 ? "text-gain" : "text-loss"
+  const withOverall = returns.overall !== undefined
+  const overallTone = (returns.overall ?? 0) >= 0 ? "text-gain" : "text-loss"
   return (
-    <dl className={cn("grid grid-cols-2 gap-3", showValue ? "lg:grid-cols-4" : "sm:grid-cols-3")}>
+    // Four boxes (with Overall XIRR) sit 2×2: in one row the hero cell is too narrow for "Total returns".
+    <dl className={cn("grid grid-cols-2 gap-3", showValue ? "lg:grid-cols-4" : !withOverall && "sm:grid-cols-3")}>
       {showValue && <Box label="Value of these funds"><Money value={returns.current} /></Box>}
       <Box label="Invested"><Money value={returns.invested} /></Box>
       <Box label="Total returns">
@@ -134,9 +139,14 @@ export function ReturnBoxes({ returns, showValue }: { returns: Returns; showValu
           <Percent value={(returns.gain / returns.invested) * 100} signed />
         </span>
       </Box>
-      <Box label="XIRR" help={XIRR_HELP}>
+      <Box label={withOverall ? "Funds & stocks XIRR" : "XIRR"} help={XIRR_HELP}>
         {returns.xirr == null ? "—" : <span className={tone}><Percent value={returns.xirr * 100} digits={2} signed /></span>}
       </Box>
+      {withOverall && (
+        <Box label="Overall XIRR" help={OVERALL_HELP}>
+          {returns.overall == null ? "—" : <span className={overallTone}><Percent value={returns.overall * 100} digits={2} signed /></span>}
+        </Box>
+      )}
     </dl>
   )
 }
@@ -147,7 +157,8 @@ const R = 80
 const C = 2 * Math.PI * R
 
 /** Donut of categories; hovering a slice or legend row focuses it, clicking opens Holdings filtered to it. */
-export function AllocationDonut({ slices, total, funds, onSelect }: { slices: Slice[]; total: number; funds: number; onSelect: (c: string) => void }) {
+/** `others`: FD, PPF and EPF (M19) in the slices, besides the funds. */
+export function AllocationDonut({ slices, total, funds, others = 0, onSelect }: { slices: Slice[]; total: number; funds: number; others?: number; onSelect: (c: string) => void }) {
   const [focus, setFocus] = useState<string | null>(null)
   // One arc per known category, always mounted, so arcs animate between members instead of popping.
   const by = new Map(slices.map((s) => [s.category, s]))
@@ -190,7 +201,7 @@ export function AllocationDonut({ slices, total, funds, onSelect }: { slices: Sl
         </svg>
         <div className="pointer-events-none absolute inset-0 grid place-content-center text-center">
           <b className="text-[26px] font-semibold tracking-[-0.03em]">{f ? pct(f.share) : inrShort(total)}</b>
-          <span className="mx-auto max-w-32 text-[12.5px] text-muted-foreground">{f ? `${f.category} · ${inr(f.value)}` : `across ${funds} funds`}</span>
+          <span className="mx-auto max-w-32 text-[12.5px] text-muted-foreground">{f ? `${f.category} · ${inr(f.value)}` : others ? `across ${funds + others} holdings` : `across ${funds} funds`}</span>
         </div>
       </div>
       <ul className="grid grid-cols-1 gap-0.5">

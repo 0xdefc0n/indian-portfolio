@@ -1,10 +1,13 @@
 // /members (plan §13 item 6): everyone whose statements are in the household. Rename, delete a member or one
-// statement, and add statements here; members themselves are created from statements (D19).
+// statement, and add statements here; members themselves are created from statements (D19). Each member's FD, PPF
+// and EPF (M19) are listed below their statements, with Add.
 import { FileTextIcon, Loader2Icon, PencilIcon, Trash2Icon, UsersIcon } from "lucide-react"
-import { type FormEvent, useCallback, useEffect, useState } from "react"
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { AddStatementDialog } from "@/components/add-statement-dialog"
+import { type AssetDialogState, AssetDialogs } from "@/components/asset-dialogs"
+import { AddAssetButton, FixedIncomeList } from "@/components/fixed-income"
 import { ProcessingList } from "@/components/jobs"
 import { PageShell } from "@/components/app-header"
 import { PageTitle } from "@/components/panel"
@@ -16,6 +19,7 @@ import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, type Me, type MemberSummary, SignedOut, type StatementKind } from "@/lib/api"
 import { day } from "@/lib/format"
+import { type AssetRow, useAssets, valued } from "@/lib/assets"
 import { useJobs } from "@/lib/use-jobs"
 
 const KIND_LABEL: Record<StatementKind, string> = { CDSL: "CDSL eCAS", CAMS: "CAMS", KFINTECH: "KFintech" }
@@ -69,10 +73,11 @@ function RenameDialog({ member, onClose, onDone }: { member: MemberSummary | nul
   )
 }
 
-function DeleteDialog({ member, onClose, onDone }: { member: MemberSummary | null; onClose: () => void; onDone: () => void }) {
+function DeleteDialog({ member, assets, onClose, onDone }: { member: MemberSummary | null; assets: number; onClose: () => void; onDone: () => void }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const n = member?.statements.length ?? 0
+  const what = [n && `${n} statement${n === 1 ? "" : "s"}`, assets && `${assets} FD, PPF or EPF entr${assets === 1 ? "y" : "ies"}`].filter(Boolean).join(" and ")
 
   async function confirm() {
     if (!member) return
@@ -95,7 +100,7 @@ function DeleteDialog({ member, onClose, onDone }: { member: MemberSummary | nul
         <DialogHeader>
           <DialogTitle>Delete {member ? displayName(member) : "member"}?</DialogTitle>
           <DialogDescription>
-            {n ? `Their ${n} statement${n === 1 ? "" : "s"} will be deleted from PocketFolio too.` : "They have no statements."} This can't be undone.
+            {what ? `Their ${what} will be deleted from PocketFolio too.` : "They have no statements."} This can't be undone.
           </DialogDescription>
         </DialogHeader>
         {error && <p className="text-sm text-loss" role="alert">{error}</p>}
@@ -157,11 +162,24 @@ function DeleteStatementDialog({ target, onClose, onDone }: {
   )
 }
 
-function MemberCard({ member, onRename, onDelete, onDeleteStatement }: {
+function AssetSection({ rows, onAdd, onAction, onChanged }: { rows: AssetRow[]; onAdd: () => void; onAction: (s: AssetDialogState) => void; onChanged: () => void }) {
+  return (
+    <div className="mt-4 border-t pt-3">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-medium text-muted-foreground">FD, PPF and EPF</h3>
+        <AddAssetButton onClick={onAdd} />
+      </div>
+      {rows.length ? <FixedIncomeList rows={rows} onAction={onAction} onChanged={onChanged} compact /> : <p className="mt-1 text-sm text-muted-foreground">None yet.</p>}
+    </div>
+  )
+}
+
+function MemberCard({ member, onRename, onDelete, onDeleteStatement, assets }: {
   member: MemberSummary
   onRename: () => void
   onDelete: () => void
   onDeleteStatement: (s: Statement) => void
+  assets: React.ReactNode
 }) {
   const name = displayName(member)
   return (
@@ -198,6 +216,7 @@ function MemberCard({ member, onRename, onDelete, onDeleteStatement }: {
       ) : (
         <p className="text-sm text-muted-foreground">No statements yet.</p>
       )}
+      {assets}
     </section>
   )
 }
@@ -242,6 +261,16 @@ export function MembersPage({ me }: { me: Me }) {
     if (adding && window.location.search) window.history.replaceState(null, "", window.location.pathname)
   }, [adding])
 
+  // FD, PPF and EPF (M19), valued in the browser with the shared calculator.
+  const assets = useAssets()
+  const rows = useMemo(() => valued(assets.assets ?? [], assets.rates), [assets.assets, assets.rates])
+  const [assetDlg, setAssetDlg] = useState<AssetDialogState>(null)
+  const pick = useMemo(() => (members ?? []).map((m) => ({ id: m.id, name: displayName(m) })), [members])
+  const unassigned = rows.filter((r) => !r.member_id || !members?.some((m) => m.id === r.member_id))
+  const section = (memberId: string | null, list: AssetRow[]) => (
+    <AssetSection rows={list} onAdd={() => setAssetDlg({ kind: "add", member: memberId })} onAction={setAssetDlg} onChanged={assets.reload} />
+  )
+
   const n = members?.length ?? 0
   return (
     <PageShell me={me}>
@@ -266,13 +295,23 @@ export function MembersPage({ me }: { me: Me }) {
         <div className="grid gap-4 md:grid-cols-2">
           {members.map((m) => (
             <MemberCard key={m.id} member={m} onRename={() => setRenaming(m)} onDelete={() => setDeleting(m)}
-              onDeleteStatement={(statement) => setDeletingStatement({ member: m, statement })} />
+              onDeleteStatement={(statement) => setDeletingStatement({ member: m, statement })}
+              assets={section(m.id, rows.filter((r) => r.member_id === m.id))} />
           ))}
         </div>
       )}
+      {members && unassigned.length > 0 && (
+        <section className="rounded-[22px] bg-surface p-5 ring-1 ring-border sm:p-6" aria-label="Not filed under a member">
+          <h2 className="text-[15px] font-semibold tracking-tight">Not filed under a member</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Added before any statement. Edit one to pick whose it is.</p>
+          <FixedIncomeList rows={unassigned} onAction={setAssetDlg} onChanged={assets.reload} />
+        </section>
+      )}
+      <AssetDialogs state={assetDlg} members={pick} rates={assets.rates} onClose={() => setAssetDlg(null)} onSaved={assets.reload} />
       <AddStatementDialog trigger={null} open={adding} onOpenChange={setAdding} onAdded={reload} />
       <RenameDialog key={`r-${renaming?.id}`} member={renaming} onClose={() => setRenaming(null)} onDone={() => { setRenaming(null); load() }} />
-      <DeleteDialog key={`d-${deleting?.id}`} member={deleting} onClose={() => setDeleting(null)} onDone={() => { setDeleting(null); load() }} />
+      <DeleteDialog key={`d-${deleting?.id}`} member={deleting} assets={rows.filter((r) => r.member_id === deleting?.id).length} onClose={() => setDeleting(null)}
+        onDone={() => { setDeleting(null); load(); assets.reload() }} />
       <DeleteStatementDialog key={`s-${deletingStatement?.statement.id}`} target={deletingStatement} onClose={() => setDeletingStatement(null)}
         onDone={() => { setDeletingStatement(null); load() }} />
     </PageShell>

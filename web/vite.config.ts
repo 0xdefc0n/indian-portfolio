@@ -25,9 +25,19 @@ export default defineConfig({
       },
     }),
   ],
-  resolve: { alias: { '@': path.resolve(__dirname, './src') } },
+  // @manual-assets: the FD/PPF/EPF calculator shared with the Worker (plan §21.12), so values are computed live here
+  // with the same code the Worker uses. Only that module (and the rate table it imports) is reachable.
+  resolve: {
+    alias: {
+      '@manual-assets': path.resolve(__dirname, '../worker/src/lib/manual-assets.ts'),
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
   // /api goes to the Worker (`cd worker && npm run dev`). Until M10 the old local app can still be used with
   // API_TARGET=http://localhost:8000 npm run dev.
-  server: { proxy: { '/api': process.env.API_TARGET ?? 'http://localhost:8787' } },
+  server: {
+    proxy: { '/api': process.env.API_TARGET ?? 'http://localhost:8787' },
+    fs: { allow: [__dirname, path.resolve(__dirname, '../worker/src/lib')] },
+  },
   test: { include: ['src/**/*.test.ts'], environment: 'node' },
 })

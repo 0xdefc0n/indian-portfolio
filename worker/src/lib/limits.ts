@@ -1,4 +1,5 @@
 // Fair-use limits (plan §11, D7). One place, so Settings can show them later.
+import { MAX_ASSETS } from './manual-assets'
 import type { QuotaSpec } from './quota'
 
 export const LIMITS = {
@@ -11,6 +12,8 @@ export const LIMITS = {
   openJobsPerHousehold: 10,
   exportsPerDay: 3, // plan §9.2: GET /api/account/export
   metricEventsPerDay: 30, // plan §13A.6: POST /api/metrics (a normal day sends a handful)
+  assetsPerHousehold: MAX_ASSETS, // plan §21.12: FD, PPF, EPF entered by hand (M19)
+  assetWritesPerDay: 30, // adds and edits; deleting is never limited
 } as const
 
 /** Product counters: caps what one account can add to the shared daily totals. */
@@ -31,4 +34,12 @@ export const failQuota = (userId: string): QuotaSpec => ({
   metric: 'parse_fail',
   period: 'hour',
   limit: LIMITS.failedParsesPerHour,
+})
+
+/** Manual asset adds and edits (M19), per household: a normal day needs a handful. */
+export const assetWriteQuota = (householdId: string): QuotaSpec => ({
+  subject: `household:${householdId}`,
+  metric: 'asset_write',
+  period: 'day',
+  limit: LIMITS.assetWritesPerDay,
 })
