@@ -69,6 +69,7 @@ be verified during implementation are marked ⚠️ VERIFY, with what to check a
 | D25 | Corporate actions 🔒 (owner, 2026-11-27) | **Hybrid:** splits and bonuses after the statement date are applied automatically; mergers, demergers and MF scheme mergers ask for a newer statement (§21.6, M21). | Splits and bonuses are mechanical and common. Mergers have many edge cases, and a new statement has the right answer. |
 | D26 | AI portfolio analysis 🔒 (owner, 2026-11-27) | **The model is decided after the cost study (M31).** It ships after launch (M32), with identities never sent to the model (§21.8). | Owner: decide from the cost per user. |
 | D27 | Admin panel 🔒 (owner, 2026-11-27) | **Email allowlist only** (`ADMIN_EMAILS`). Health, aggregate usage, support actions with counts only, limits and feature flags. **No financial data, ever.** Built last, after launch (§21.9, M33). | Owner choice. |
+| D28 | Manual assets 🔒 (owner, 2026-11-27) | **FD, PPF and EPF entered by hand with the fewest fields the maths needs** (no bank name, label or PAN), owned by the household with an existing member picked. Only the inputs are stored, sealed; the value is computed live by one shared calculator. A separate `GET /api/assets`; two XIRRs: Funds & stocks (default) and Overall (§21.12, M19). | Owner: easy to manage, no breaking change to members, and it never feels like we're collecting private data. |
 
 ---
 
@@ -882,6 +883,7 @@ export async function assertMember(c, memberId: string) {
 | `GET /api/portfolio/daily?days=30&member=all` | ✅ | daily returns (§10.5): `{ as_of, coverage, today, series }` | `days` ≤ 366; `member` is `all` or a member ID, checked with `assertMember` |
 | `POST /api/sips/skip` · `DELETE /api/sips/skip` | ✅ | skip the next instalment of one SIP, or undo it (§10.5.1, M12): `{ member_id, isin, folio, due }` | `member_id` checked with `assertMember`; `due` today to +100 days; one skip per SIP |
 | `POST /api/sips/cancel` | ✅ | cancel one SIP in PocketFolio for good (§10.5.1, M12): `{ member_id, isin, folio, confirm: true }` | `assertMember`; no undo; ≤ 200 changes per household |
+| `GET /api/assets` · `POST /api/assets` · `PATCH/DELETE /api/assets/:id` | ✅ | FD, PPF and EPF (§21.12, M19), gold, silver and SGBs (§21.5, M29) entered by hand: inputs only, the SPA computes values. `rates.metals` carries the gold and silver ₹/g series (edge-cached 1 h) | ✅ M19: `member_id` optional, checked with `assertMember`; another household's id → 404; `400 bad_input {field}`; `409 asset_limit` (50); `429 asset_write_limit` (30 adds/edits a day; deletes are never limited) |
 | `GET /api/market/status` | – | `{ latest_nav_date, coverage_pct, final }` for the "NAVs updating" hint | public, cacheable for 5 min |
 | `POST /api/kfintech/guide` | ✅ | `{ member_id or pan, password? }` → stores a pending password, returns `{ password, form_url }` | the manual path only (D9); same validation as `kfintech.password_problem`. **The one place a PAN may be typed:** KFintech's own form needs it, and a new person isn't a member yet. Picking an existing member needs no PAN |
 | `GET /api/account/export` | ✅ | JSON download of all parsed statements and members (decrypted) | DPDP access right; 3 per day. ✅ M14: fresh session (D1), `429 export_limit`. Streams: account, sign-in methods, sessions (IP, UA), consents, household, members (name, PAN), SIP changes, uploads, pending passwords, the user's security log, then each statement's parsed JSON. Leaves out internal keys and lookup values (DEK, HMACs, R2 keys, hashes, tokens) and snapshots (derived) |
@@ -1150,7 +1152,7 @@ Engine `/parse` timeout: 60 s. On timeout return `parse_timeout`, and count it i
 |---|---|---|
 | `nav-ingest`, `nav-backfill`, `nav-repair` | see §10.4 | Official AMFI NAVs for every scheme into D1, several times a night. This replaces the old per-scheme mfapi refresh. |
 | `snapshot-prebuild` | triggered when a market day becomes final (§10.4), at the latest `0 5 * * *` | Enqueue a rebuild for households with `last_active_at` in the last 7 days, with `sendBatch` (100 per call). The `rebuild` queue's `max_concurrency` and the `EngineBatch` cap set the drain rate, so this is the nightly burst handled at a steady pace. The per-message delay is spread over 0–30 min to smooth the wake-ups. |
-| `stocks-monthly` | `0 5 10-20 * *` | §10.3.1. ✅ M11: until the AMC scrapers ship (M18) this cron is replaced by a daily BharatStock run, `stocks` at `0 4 * * *` (09:30 IST: after BharatStock's UTC day resets, before the 10:00 IST final NAV run and prebuild). M18 adds the monthly scrape cron back. |
+| `stocks-monthly` | `0 5 10-20 * *` | §10.3.1. ✅ M11: until the AMC scrapers ship (M18) this cron is replaced by a daily BharatStock run, `stocks` at `0 4 * * *` (09:30 IST: after BharatStock's UTC day resets, before the 10:00 IST final NAV run and prebuild). ✅ M18: `amc` at `0 2 * * *` (07:30 IST, daily: each AMC is scraped once a month, retried daily until its month is out), then the 09:30 BharatStock run fills the gaps. |
 | `cleanup` | `0 21 * * *` | Expire pending passwords and old quota windows. Drop `tracked_scheme` rows unseen for 90 days. Delete finished `parse_job` rows older than 7 days and expired Better Auth `session` / `verification` rows. Send DPDP inactivity notices and do erasures (§12). ✅ M14 (`src/lib/cleanup.ts`): also expired `rate_limit` rows, `audit_event` older than 400 days, SIP skips older than the member's newest statement, `nav_run` older than 90 days, and `stock_match` rows unwanted for 90 days with every `fund_portfolio` row (and R2 blob) no wanted row reads. Inactivity: 500 notices and 50 erasures per run. Each step fails alone (logged by class) |
 | `tmp-sweep` | `15 * * * *` (hourly) | Parked PDFs past `expires_at`: delete the R2 object, set `expired`. Re-enqueue `queued` jobs whose message was lost (no change for 15 min). Counts only in logs. ✅ M8: also deletes leftover PDFs of finished jobs and recounts the parked PDFs for `EnginePool` (§10.1 D, as built). |
 
@@ -1184,14 +1186,74 @@ website (typically one Excel file per month, one sheet per scheme). We scrape **
      expected to include SBI, ICICI Prudential, HDFC, Nippon India, Kotak, Axis, UTI, Aditya Birla Sun Life, Mirae
      Asset and PPFAS.
   3. Add more AMCs over time.
-- **⚠️ VERIFY per AMC:**
-  - the disclosure page URL and file naming;
-  - whether it is behind bot protection, which blocks container egress (if so, mark the AMC `blocked` and rely on the fallback);
-  - its terms of use.
+- **VERIFY per AMC** (✅ M18, checked live 2026-11-27 for October 2026; each adapter file's header has the details):
 
-  Write each AMC's findings in a comment at the top of its adapter file.
+  | AMC | Page and files | Bot protection / robots.txt | Terms of use | Status |
+  |---|---|---|---|---|
+  | SBI | ✅ the page's own POST `/ajaxcall/CMS/GetSchemePortfolioSheets`; one combined xlsx (119 schemes) | ✅ none; `?query` disallowed, so the version tag is dropped | ✅ general disclaimer, nothing on reuse | active |
+  | ICICI Prudential | ✅ the page's own API (`apimf…/nms/v1/downloads/files`); one zip, 151 workbooks, 26 MB | ✅ none | ⚠️ voice-assistant terms forbid systematic extraction without consent; no site-wide clause | active |
+  | HDFC | ✅ one xlsx per scheme on `files.hdfcfund.com` | ⚠️ www.hdfcfund.com: Akamai 403 to a plain client, robots.txt included | ⚠️ non-commercial / personal use only | **blocked** (fallback). The adapter can probe 68 known file names on the open files host, a way around the wall: off unless the owner decides otherwise |
+  | Nippon India | ✅ one combined xls linked from the page | ⚠️ robots.txt `Disallow: /InvestorServices/Factsheets` covers the files folder | ✅ general disclaimer | **blocked** (fallback) |
+  | Kotak | ✅ one xlsx per scheme through `java17vlbapi.kotakmf.com` | ⚠️ www.kotakmf.com: Radware bot manager challenge; the API host is open, but using it goes around the wall | ⚠️ unreadable (behind the wall); Kotak group sites say non-commercial only | **blocked** (fallback) |
+  | Axis | ⚠️ files only listed by the page's `/cms/` API (upload ids and hashes in the URLs) | ⚠️ robots.txt `Disallow: /cms/` | ⚠️ personal, non-commercial use only; no storing a significant portion | **blocked** (fallback) |
+  | UTI | ✅ the page's own API `/api/get-consolidate-portfolio-disclosure`; one zip (85 schemes in one 9,375-row sheet) | ✅ none | ✅ informational disclaimer only | active |
+  | Aditya Birla Sun Life | ✅ the page's own JSON list; one zip per month (106 schemes) | ✅ none | ⚠️ no downloading or copying without written consent | active |
+  | Mirae Asset | ✅ the page's own POST `/AjaxService/GetDownloadsData`; one xlsx per scheme (101) | ✅ none | ⚠️ personal, non-commercial use only | active (only wanted schemes' files are fetched) |
+  | PPFAS | ✅ links on the page; one combined workbook (7 schemes) | ✅ none | ⚠️ non-commercial / personal use only | active |
+
+  Every active adapter's October 2026 files parse with every scheme's weights at 95–105% (`engine.amc.cli`), and the
+  AMFI names tested match the right scheme. **Terms: 6 of the 10 restrict commercial use or reuse without written
+  consent.** ✅ Owner, 2026-11-27: scrape all of them anyway and accept the risk, so every environment runs
+  `AMC_SCRAPERS: "all"` (the blocked ones stay blocked: bot walls and robots.txt are still respected). Checked from a laptop: Cloudflare egress may meet bot
+  walls this didn't (a run then records `blocked`).
 - **Snapshot.** The `stocks` section of the portfolio is built in the engine from these blobs (same shape as today's
   `stocks.snapshot`). `refreshing` becomes `true` when a tracked equity ISIN has no data yet.
+- ✅ **M18, as built (rollout step 2)** — `worker/src/market/amc-scrape.ts`, `worker/src/market/amc/*`,
+  `engine/engine/amc/*`, migration `market/0005_amc.sql`. Changes from the design above:
+  - **The engine still never calls out.** Each adapter is split: `discover` is TypeScript in the Worker
+    (`worker/src/market/amc/<slug>.ts`), parsing is Python in the engine (`engine/engine/amc`, with optional per-AMC
+    hooks in `adapters/<slug>.py`). The Worker downloads the files through `AmcFetcher` (robots.txt, ≥ 1 s per host,
+    the adapter's hosts only, redirects off them refused, 48 MB cap, bot walls → `blocked`) and posts each one to
+    `POST /stocks/parse` on an EngineBatch slot with the AMC's wanted funds. So EngineBatch keeps no route to the
+    internet, as decided in M10, and there is no `/stocks/scrape`.
+  - **Which funds:** `stock_match` (the funds builds report, as in M11), not all of `tracked_scheme`. Each gets its
+    fund house from AMFI's `scheme` list (`stock_match.amc`). The top 10 were taken from the expected list: staging
+    holds one family's funds, too few to rank AMCs by.
+  - **Matching** is in the engine (`engine.amc.match`): the stocks.py token matcher over the fund's display name and
+    AMFI's name, with option and plan words ignored, best ≥ 0.6, a tie is no match, plus `OVERRIDES` per adapter.
+  - **Rows** are the stocks view's existing shape (`{isin, symbol, name, sector, type, pct}`, type EQUITY /
+    FOREIGN_EQUITY / MUTUAL_FUND_UNIT / DEBT / CASH / OTHER), so the engine's snapshot code is unchanged: builds key
+    an AMC fund as `amc:{isin}` in `market.stocks`. The section decides the type (an `INE…` ISIN is a bond in the debt
+    section), fractions are scaled to percent, negative cash (net payables) is kept so weights add to 100.
+  - **The job:** one `amc` message on pf-market (single-flight, `job_lock` 'amc'), from the daily cron `0 2 * * *`
+    (07:30 IST) and from builds that find new or waiting funds. The target month is the previous month (IST). An AMC
+    is due while a wanted fund isn't covered for it and wasn't tried in the last 20 h, so each AMC is scraped once a
+    month and retried daily until published. Not published yet and a fund has no data at all: the month before is
+    fetched too. Every run writes `scrape_run` (ok / not_published / failed / blocked). One-file-per-scheme AMCs
+    (Mirae) fetch only the files whose scheme could be a wanted fund.
+  - **Fallback** (`amc/coverage.ts` `amcCovers`): BharatStock skips a fund when its AMC has an active adapter and it
+    has AMC data for the target month, or it's before day 15 and the scraper hasn't tried it yet or has older data to
+    show. A fund the scraper tried and found nothing for goes to BharatStock straight away. An AMC row replaces a
+    BharatStock row for the same month; BharatStock never overwrites an AMC row.
+  - **Done when, not met yet:** ≥ 80% of tracked equity schemes from AMCs by day 15. On staging today (8 wanted
+    funds, one family) 2 are under active adapters, 2 under blocked ones (HDFC, Nippon, Kotak, Axis) and 4 under 2
+    fund houses with no adapter: 25%. It depends on the owner's terms decision, the blocked AMCs and rollout step 3.
+- ✅ **mfforecast, the last fallback (M18 follow-up, owner request 2026-11-27)** — `worker/src/market/mfforecast.ts`,
+  migration `market/0006_mfforecast.sql` (`fund_portfolio.source` gains `'mfforecast'`, `stock_match.mff_at`).
+  Free holdings API on RapidAPI (`GET /funds/{amfi_code}/holdings`, 500+ equity and hybrid funds, a month behind the
+  AMCs). Researched alternatives: Punji (free: top 10 holdings, 20 funds a month), mfdata.in (down), the
+  fund-disclosures project (API offline), FinAPI and mfapi.in (NAVs only).
+  - ✅ VERIFY limits: RapidAPI's headers say 500,000 requests a month (hard limit); mfforecast's page says 1,000 an
+    hour. We budget 900 an hour and 450,000 a month in `quota`, stop below 100 left, and a 429 spends the hour.
+  - Runs at the end of the `stocks` job, for wanted funds the AMCs don't cover, with no data from the last two
+    months, that BharatStock can't serve (no key, today's budget spent, no match, or failing). Each fund at most once
+    a week. It never overwrites an AMC or BharatStock month; BharatStock replaces an mfforecast month.
+  - Key: optional secret `RAPIDAPI_KEY` (not in `secrets.required`).
+  - **Order kept: AMC → BharatStock → mfforecast** (owner asked for the most complete, least refused source first;
+    checked 2026-11-27). mfforecast had 7 of staging's 8 wanted funds, all a month old (September on 27 November),
+    and 3 of the 7 summed to only 86–92%, so it's the least complete. AMC files are complete and current; BharatStock
+    is complete and current but limited to 50 calls a day, which only the gaps the AMCs leave spend. So mfforecast
+    stays last: it fills in when BharatStock's day is spent, finds no match or fails.
 - ✅ **M11, as built (BharatStock only, rollout step 1)** — `worker/src/market/stocks.ts`, migration
   `market/0003_stocks.sql`:
   - **Which funds.** The Worker doesn't classify funds. Each `/build` returns the funds its stocks view needs in
@@ -2272,7 +2334,7 @@ get a nightly rebuild; parse ~1.5 vCPU-s on average; build ~0.5 vCPU-s.
 - Manually entered FD, PPF and EPF with approximate returns (M19), and stock gains from broker tradebooks or manual buy
   prices (M21). Owner request, 2026-11-26; see `docs/MILESTONES.md` Phase 8. Design to be written before each starts.
 - AI portfolio analysis (M32) and the admin panel (M33) are scheduled after launch (§21.8, §21.9).
-- Digital gold (app-bought grams) isn't tracked (D24). Mergers and demergers aren't computed (D25).
+- Digital gold (app-bought grams) isn't tracked (D24). The IBJA paid API as the gold/silver rate source (§21.5). Mergers and demergers aren't computed (D25).
 - A Python Worker for the engine, if Pyodide memory limits and the `pillow`/`rapidfuzz` gaps change (re-run the §3.1 test).
 - **A per-household Durable Object** for live status over WebSocket (hibernating), instead of polling. It would also
   serialise that household's rebuilds natively. Worth it only if polling shows up in D1 load after launch.
@@ -2329,12 +2391,111 @@ encryption, and demo data only in every screenshot, image and post.
 - **Market data, not user data:** computed nightly once per scheme in the market DB. Labelled "not investment advice".
 
 ### 21.5 Gold and silver (D24, M29)
-- **Physical:** grams and purity (gold 24K/22K/18K, silver 999), optional buy price and date.
-- **SGB:** series, units (grams), issue price and date; 2.5% a year interest paid every six months; 8-year maturity;
-  valued at the gold rate (the redemption basis).
-- **Rate:** a daily public per-gram rate in the market DB (⚠️ VERIFY the source, e.g. IBJA). Fallback: the per-gram
-  price implied by gold/silver ETF NAVs in the NAV store.
-- Stored like M19's manual assets: sealed inputs, same member model, a "Gold & silver" allocation class.
+Drafted in M29's first session; the owner's decisions of 2026-11-27 are in bold. Built on M19 (§21.12): same table,
+sealed inputs, member model, limits, API, live shared calculator and dialogs. Values are labelled "approximate".
+
+**Owner's decisions (2026-11-27):**
+- **Rate source: gold and silver ETF NAVs from AMFI, anchored to IBJA through public RBI SGB prices** (not IBJA itself).
+  ⚠️ VERIFY result: ✅ IBJA (ibjarates.com) publishes 999/995/916/750/585 gold (₹/10 g) and silver 999 (₹/kg), AM and
+  PM, no weekends or holidays, but **its API is paid** (price on request, nagaraj.iyer@ibja.in) and its site asks anyone
+  using the rate "for valuation and pricing activities" to subscribe through the official API. Scraping it is ruled out.
+  RBI's SGB issue and redemption notices are public and quote IBJA 999 averages, so they serve as anchors. The IBJA API
+  can replace the ETF route later without changing the calculator (the served series is the same shape).
+- **SGBs in a CDSL statement are detected and valued at the gold rate** (by ISIN from the series table, falling back to
+  the name), and move from "Stocks & bonds" to Gold & silver. Typing in an SGB is only for bonds held outside demat
+  (RBI Retail Direct, bank or post office certificates), so nothing is counted twice.
+- **SGB: pick the series from a list** (all tranches 2015-16 Series I to 2023-24 Series IV, in code), then grams.
+- **Gold ETFs and gold funds stay under ETFs and Mutual funds.** The Assets tab's new Gold & silver kind holds physical
+  gold, physical silver and SGBs (statement and manual). The asset-class split already counts gold funds as
+  "Gold & silver".
+
+**What the forms ask** (an "Add gold or silver" dialog, `Segmented` Gold / Silver / SGB; same copy line as M19):
+| Type | Fields | Defaults and notes |
+|---|---|---|
+| Gold | weight (grams, up to 3 decimals); purity chips **24K (999), 22K (916), 18K (750)** | More options: what you paid (₹, total) and when, **either one enough** (owner, 2026-11-27): price only → gain, no yearly return; date only → cost estimated from that day's rate; both → gain and XIRR. Neither: the value shows but no gain, and it stays out of invested, gain and Overall XIRR |
+| Silver | weight (grams) | Purity 999. More options as for gold |
+| SGB | series (a list, newest first, with its issue date and price); units (1 unit = 1 g) | More options: "Bought later on the exchange": date and price per gram (default: the issue date and price). **Redeemed early?** is an action on a saved SGB (allowed from year 5) |
+- Names are generated: "Gold · 22K · 20 g", "Silver · 1 kg", "SGB 2018-19 Series IV · 10 g".
+
+**Calculations** (in the shared `lib/manual-assets.ts`, with the series and rate lookups in `lib/metals.ts`):
+- **Rate lookup:** the rate on a date is the latest one on or before it (weekends, holidays and a missed night fall back
+  to the last day). A rate more than 7 days old today shows "Rate from {date}". No rate at all (a new install before the
+  first ingest, or silver before 2022): the value is what was paid, or nothing, with "Rate unavailable".
+- **Physical:** `grams × rate999 × purity` with purity 1 (999), 0.916 or 0.75, which is how IBJA's 916/750 rates relate
+  to its 999 rate (checked on its table: 916 = 999 × 0.916). Bullion value, before GST and making charges: about what a
+  sale would fetch, not a jeweller's buying price.
+- **SGB:** `units × rate999` today, or frozen at the maturity (8 years) or early-redemption date with a "Matured" or
+  "Redeemed" badge. Interest is `units × issue price × coupon / 2` every six months from the issue date (coupon 2.75 %
+  for the 2015-16 tranches that carried it, else 2.5 %), counted for the dates after the buy date and up to the end, as
+  "interest received" in the gain. Invested = units × (price paid or issue price). XIRR flows: the purchase, each
+  interest payment, and the value on the end date (today, maturity or redemption).
+- **Statement SGBs:** units × today's rate replaces the statement's exchange price; the coupon is shown from the series
+  table. Invested stays unknown (CDSL has no cost), as for other demat holdings until M21.
+
+**Rate ingest** (`worker/src/market/metals.ts`, table `metal_rate` in `pocketfolio-market`, migration
+`migrations/market/0007_metal_rate.sql`):
+- Reference ETFs: a few large, long-lived gold ETFs and silver ETFs (AMFI codes in code). Their daily NAVs already
+  arrive with every nav-ingest run (all of NAVAll is stored); their history is backfilled once like any tracked scheme.
+- Anchors in code: RBI SGB redemption prices (₹/g, the simple average of three IBJA 999 closes, with the dates) for gold;
+  dated IBJA silver 999 closes for silver. For each ETF, `k = anchor price ÷ mean NAV on the anchor dates` (grams of
+  metal per unit, inverted). Between anchors `k` is interpolated (log-linear: the expense ratio slowly shrinks the
+  grams per unit); outside them the nearest segment's slope is extended, clamped to 0–2 % a year.
+- Rate on a date = median over the reference ETFs with a NAV that day of `NAV × k`. Stored as `(metal, date, rate,
+  etfs)`, upserted only when it changes, so a re-run writes 0 rows. Runs after each nav-ingest and after a reference
+  ETF's backfill. A new anchor is a code change; the next run recomputes the history.
+- Served to the SPA inside `GET /api/assets` → `rates.metals` (month-end points since 2015 plus the last 31 days, ~350
+  points), read through the edge cache (1 h) so household requests don't hit the market DB.
+
+**Storage:** `migrations/app/0012_gold.sql` widens `manual_asset.type` to `fd, ppf, epf, gold, silver, sgb` (SQLite
+can't alter a CHECK, so the table is rebuilt and the rows copied). Same sealing, limits (50 assets in all), export
+(`manual_assets` with today's values) and deletion.
+
+**Screens:** a **Gold & silver** panel on the dashboard (like Fixed income) and a kind on the Assets tab; allocation
+categories "Gold", "Silver" and "SGB" (existing tokens) inside the "Gold & silver" asset class; Members lists them with
+the other manual assets. The details dialog shows value today, put in, gain, interest received (SGB), and a value
+history chart from the buy date (or the last 5 years) to today at month-end rates, with the money put in.
+
+**Golden tests:** purity factors; a missing rate day falling back; no rate; SGB interest schedule (2.5 % and 2.75 %,
+bought on the exchange mid-life, matured, redeemed early); XIRR flows; the derivation (anchors, interpolation, median,
+an ETF missing a day). Ingest: saved AMFI NAV fixtures for the reference ETFs, re-runs write 0 rows. API isolation
+and the D1 plaintext scan cover the new types.
+
+**As built (M29, 2026-11-27).** The spec above holds; choices where it left room:
+- ✅ Code: `worker/src/lib/metals.ts` (rate lookup, purity, SGB helpers) and `lib/sgb-series.ts` (67 tranches), both
+  shared with the SPA through `@manual-assets`; gold/silver/SGB valuation and validation in `lib/manual-assets.ts`;
+  `worker/src/market/metals.ts` (derivation, job, serving) and `market/metal-anchors.ts` (reference ETFs, anchors);
+  migrations `app/0012_manual_asset_gold.sql` and `market/0007_metal_rate.sql`. Web: `lib/assets.ts` (groups, totals,
+  statement SGBs), `components/asset-dialogs.tsx`, `asset-details.tsx`, `fixed-income.tsx` (`GoldSilver`),
+  `assets-view.tsx`. Tests: `worker/test/metals.test.ts`, `metal-ingest.test.ts`, `assets.test.ts`;
+  `web/src/lib/assets.test.ts`.
+- ✅ **Series table:** RBI's tranche table, every issue price against its RBI release, ISINs from NSE bhavcopies (all
+  67 have one). RBI names the first three tranches "2015-I", "2016-I", "2016-II"; ids are the names with "Series"
+  dropped ("2017-18-IV"). Coupon 2.75 % for the first five tranches, 2.5 % from 2016-17 Series III. Maturity is
+  issue + 8 years (NSE shows 2018-19 Series IV maturing in December 2026, not 1 January 2027: unconfirmed, left as is).
+- ✅ **Reference ETFs:** gold: Nippon India ETF Gold BeES, HDFC, SBI, ICICI Prudential, Kotak; silver: Nippon India,
+  ICICI Prudential, Aditya Birla Sun Life, HDFC, Axis (since 2022). **Anchors:** 61 RBI redemption prices, one a month
+  from February 2021 to November 2026 (early tranches average the Monday–Friday week); 12 IBJA silver 999 PM closes
+  from May 2025 to November 2026. Splits in an ETF's history (a day-on-day move beyond ±30 %) are undone first.
+- ✅ **Accuracy, measured** against 291 days of IBJA's published 999 PM closes (May 2025 – November 2026): gold median
+  0.10 % off (90 % of days within 0.32 %), silver 0.18 % (within 0.68 %). The one large miss is Sunday 1 February 2026
+  (a Budget-day session with a 10 % fall that IBJA priced and the ETFs hadn't). Before the first anchor (2015–2020,
+  history charts only) `k` is extended at the clamped slope, so those years are rougher.
+- **Missing days:** the served series has month-end points plus the last 31 days; a lookup takes the latest point on or
+  before the day. "Older rate" shows when today's rate is over 7 days old.
+- **Statement SGBs** are detected in the SPA (`revalueSgbs`), not the engine: units × gold rate, category "SGB",
+  asset class "Gold & silver", Assets kind Gold & silver ("SGBs in demat"). Daily returns don't revalue them yet.
+- **Cost of gold and silver** (owner, 2026-11-27: either detail is enough): price and date → gain and XIRR flows;
+  price only → gain, no flows (out of Overall XIRR); date only → `cost: 'estimated'` = grams × purity × the rate on or
+  before that day (at most 35 days older; the served history is month-ends), labelled "Put in (estimated)", with a note
+  that jewellery's making charges and GST made the real cost higher; neither, or a date before the rate history →
+  `cost_unknown`: the value counts in totals, but not invested, gain or Overall XIRR. The dashboard's "current" for
+  returns adds only the assets with a cost, so current − invested = gain.
+- **Ops:** the anchors are updated by hand with the PPF/EPF table each quarter (M16 checklist): add the latest RBI
+  redemption price and an IBJA silver close. First deploy: nav-ingest queues the 10 reference ETFs' backfills; each one
+  finishing recomputes the history.
+- Colours (§13, existing tokens): Gold `--cat-gold`, SGB `--cat-sector`, Silver `--cat-other`.
+
+**Later:** the IBJA paid API as the source; statement SGBs in daily returns; SGB interest in the activity list.
 
 ### 21.6 Corporate actions (D25, M21)
 - **Today:** not handled. CDSL holdings are as of the statement date, and nothing adjusts them afterwards.
@@ -2384,3 +2545,136 @@ encryption, and demo data only in every screenshot, image and post.
 - `docs/marketing/SOCIAL_PLAYBOOK.md`: Reddit (subreddits, each one's self-promotion rules with links, comment-first,
   cadence), LinkedIn and X (profiles, content pillars, cadence), and ready drafts. **The owner creates the accounts
   and posts; Claude never does.** Images use demo data only.
+
+### 21.12 Manual assets: FD, PPF, EPF (D28, M19)
+Drafted in M19's first session and OK'd by the owner on 2026-11-27, with the choices below. Values are always labelled
+"approximate": we model the rules, not the bank's or EPFO's ledger.
+
+**Owner's decisions (2026-11-27):**
+- **Assets belong to the household, with a member picked from the existing ones** (option B). No change to `member`,
+  no PAN and no new kind of member. The form shows a member picker, preselected when there is only one member. If the
+  household has no members yet (no statement uploaded), the asset is saved without one.
+- **A separate `GET /api/assets`.** `GET /api/portfolio` keeps streaming the sealed snapshot unparsed (§10.2). The SPA
+  fetches both in parallel and merges them.
+- **Two XIRRs, like Groww's "active" and "overall".** The default is **Funds & stocks XIRR** (from M20, stocks join
+  it). Next to it is **Overall XIRR**, which also includes FD, PPF and EPF (and gold from M29).
+- **Ask only what the maths needs.** No bank name, account number, PAN, label or any other identifying detail. The
+  flow should never feel like we're collecting private data.
+- **Calculate live.** Only the inputs are stored. The current value is computed from them every time, so an edit
+  shows straight away.
+
+**What the forms ask** (everything else has a default; amounts in whole rupees, ≤ ₹100 crore; rates 0–20 %):
+| Type | Fields | Defaults and notes |
+|---|---|---|
+| FD | amount; interest rate % p.a.; tenure as chips, the way banks offer it: **7 days, 1 month, 3 months, 6 months, 1 year, 2 years, 3 years, 5 years, Custom** (Custom: years + months + days); start date (default today) | Cumulative with quarterly compounding (the usual Indian FD). The maturity date and amount are shown live under the form. A collapsed **More options** has one switch: "Interest is paid out to me" (monthly or quarterly). **Closed early?** is an action on a saved FD, not a form field (date, default today; penalty 1 %, editable) |
+| PPF | current balance; balance as on (default today); year the account was opened (for the 15-year maturity); yearly deposit | Each future yearly deposit is assumed to be made by 5 April (it then earns for the whole year). **Adjust a year** changes or skips one financial year's deposit (a list of `{fy, amount}` overrides) |
+| EPF | current balance; balance as on (default today); monthly PF contribution (yours + employer's, hint: "On your payslip or EPFO passbook") | A saved EPF can be marked **Contributions stopped** on a date (changed job, retired) |
+- Assets are shown with a generated name, e.g. "FD · 1 year · 7.25 %" or "PPF · opened 2018", never a typed label.
+- Rates can be changed per asset (PPF and EPF default to the government rate table below; an edited rate wins).
+
+**Calculations** (one pure TypeScript module, `worker/src/lib/manual-assets.ts`, golden-tested, **also imported by
+the SPA** through a path alias, so the browser computes values live as you type and on every load. The Worker uses
+the same code for export and for checks; the logic exists in one place only):
+- **FD, cumulative:** `P·(1 + r/4)^k` for the `k` whole quarters held, then simple interest for the days left
+  (Actual/365), which is how Indian bank calculators value a broken period. A tenure under 6 months uses simple
+  interest. **Payout:** the value stays at the principal, and the interest paid so far shows as "interest received"
+  (in the gain). After maturity the value freezes at the maturity amount, with a "Matured" badge (we don't guess a
+  renewal). **Closed early:** valued at `rate − penalty` for the time actually held. Banks use the card rate for that
+  shorter tenure, which we don't know, so this is approximate by design.
+- **PPF:** from the balance date, interest for each month on the lowest balance between the 5th and the month end, at
+  that quarter's government rate / 12, credited on 31 March. Yearly deposits start from the next 5 April after the
+  balance date, unless a "this year" override is added. The current value includes this year's accrued interest
+  (shown as "includes ₹x interest not yet credited"). A year over ₹1.5 lakh shows a warning, not an error. After the
+  15 years it keeps earning (the extension rules).
+- **EPF:** from the balance date, interest each month on the closing balance at that financial year's EPFO rate / 12,
+  credited on 31 March. A contribution counts from the month after it's made. The current value includes interest
+  accrued but not yet credited (labelled). Invested = the balance on that date plus contributions; the gain is the
+  interest since then.
+- **Rates** (`worker/src/lib/rates.ts`, a small table in code, `checked: '2026-11-27'`):
+  PPF 7.1 % for every quarter from April 2020 to December 2026 ✅ (Finance Ministry notification of 30 Sep 2026; also
+  Business Standard, Upstox). EPF 8.50 % FY 2019-20 and 2020-21, 8.10 % 2021-22, 8.15 % 2022-23, 8.25 % 2023-24,
+  2024-25 and 2025-26 ✅ (FY 2025-26 notified by EPFO in July 2026). After the table ends, the last rate is used and
+  marked **provisional** (e.g. EPF for FY 2026-27, declared next year). The table is updated by hand each quarter (an
+  M16 ops checklist item). Rates fetched automatically are "Later".
+- **XIRR cashflows** for Overall XIRR: an FD's principal on its start date (and payouts as inflows); PPF and EPF use
+  the balance on the balance date as one outflow, then each deposit or contribution; every asset's current value is
+  the terminal inflow today.
+- Pre-tax everywhere (no TDS, no 80C), said in a footnote.
+
+**Storage** (`migrations/app/0011_manual_asset.sql`, the `DB` database):
+```sql
+CREATE TABLE manual_asset (
+  id           TEXT PRIMARY KEY,               -- uuid
+  household_id TEXT NOT NULL REFERENCES household(id) ON DELETE CASCADE,
+  member_id    TEXT REFERENCES member(id) ON DELETE CASCADE,   -- optional (D28); checked with assertMember
+  type         TEXT NOT NULL CHECK (type IN ('fd','ppf','epf')),
+  inputs_enc   BLOB NOT NULL,                  -- sealed JSON of the inputs above (§8)
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX manual_asset_household ON manual_asset(household_id, created_at);
+CREATE INDEX manual_asset_member ON manual_asset(member_id);          -- member delete cascades through this
+```
+- Inputs are sealed with the household DEK under the field key `asset/{id}/inputs` (the §8 format). Only the type is
+  in the clear, so D1 holds no amounts, rates or dates. A test scans every D1 column for the plaintext.
+- Limits (§11): 50 assets per household, 60 yearly overrides per PPF, 30 writes a day per household.
+- Deleting a member deletes their assets (cascade; the confirm dialog says how many). Account deletion needs nothing
+  new: the rows cascade with the household and the DEK is shredded first (§8). Export (M14) adds `manual_assets`
+  with the decrypted inputs and today's computed values.
+
+**API** (all behind `requireSession()` and the tenant guard, §9.1; another household's asset id or member id is a 404):
+| Method & path | Purpose |
+|---|---|
+| `GET /api/assets` | `{ assets: [{ id, type, member_id, inputs, created_at, updated_at }], rates }`: inputs only; the SPA computes values. One D1 read |
+| `POST /api/assets` | create `{ type, member_id?, inputs }` → `201 { asset }`. `400 bad_input` names the field, never the value |
+| `PATCH /api/assets/:id` | replace `inputs` and/or `member_id` (also used for closed early, adjust a year, contributions stopped) |
+| `DELETE /api/assets/:id` | delete |
+
+**Screens** (plan §13: the existing tokens, `Panel`, `Dialog`, `Segmented`, `Input`, `Label`, `Badge`; 360 px and
+desktop; dark and light):
+- **Dashboard:** total value, invested and gain include manual assets. Allocation puts them under **Debt**, with the
+  categories "Fixed deposit", "PPF" and "EPF". The XIRR tile shows Funds & stocks XIRR, with Overall XIRR beside or
+  under it once manual assets exist. Daily returns (§10.5) leave them out, since they don't move day to day.
+- A **"Fixed income"** panel lists each asset: generated name, member, value, gain, the rate used, an "Approximate"
+  badge, and "Matured" or "Provisional rate" where they apply. The empty state is a single line with **Add FD, PPF or
+  EPF**.
+- **Members:** each member's assets below their statements, with **Add**.
+- **Add/edit dialog:** pick FD / PPF / EPF (`Segmented`), then only the fields above, with the computed value and
+  maturity updating live under the form. One line of copy: "Only amounts and dates, no account details needed."
+
+**Golden tests** (values worked out by hand in the test file, cross-checked with a bank or EPFO-style calculator): FD
+cumulative with a broken period; FD under 6 months; FD payout; FD after maturity; a premature FD with a penalty; each
+tenure chip's maturity date (including month-end starts, e.g. 31 Jan + 1 month); PPF with irregular deposits (an
+override, a skipped year, a year over ₹1.5 lakh); PPF across a rate change (a synthetic rate table, since the real rate
+hasn't changed since 2020); EPF across a financial year whose rate differs from the year before (the "rate change
+mid-year" case: the change applies from 1 April); EPF past the end of the rate table (provisional); EPF with
+contributions stopped; Overall XIRR with funds plus manual assets.
+
+**As built (M19, 2026-11-27).** The spec above holds; these are the choices made where it left room:
+- ✅ Code: `worker/src/lib/manual-assets.ts` (calculator and input validation, shared with the SPA through the
+  `@manual-assets` alias in `web/vite.config.ts` and `web/tsconfig*.json`), `lib/rates.ts`, `lib/assets.ts`,
+  `routes/assets.ts`, migration `0011_manual_asset.sql`; web `lib/assets.ts`, `components/asset-dialogs.tsx`,
+  `components/fixed-income.tsx`. Golden tests in `worker/test/manual-assets.test.ts`, the API, isolation and D1 scan in
+  `worker/test/assets.test.ts`, Overall XIRR in `web/src/lib/assets.test.ts`.
+- **PPF months:** a month earns once it's over, and only if the balance date is on or before its 5th (we don't know
+  the balance before that date). So a balance entered mid-month starts earning the next month: a little low, never
+  high. A "this year" override is a deposit on the balance date, on top of the balance.
+- **EPF months:** contributions are made at the end of each month after the balance date's month and earn from the next
+  month; interest starts the month after the balance date. "Contributions stopped" stops them from that date's month.
+- **"Year opened"** is read as the financial year's start (2018 → FY 2018-19; maturity 1 April 2034).
+- **XIRR flows:** a matured or closed FD's terminal inflow is on its maturity or closing date, not today (otherwise its
+  XIRR would fall every day after maturity). Live assets end today, as specified.
+- **FD payout:** each whole period pays `P·r·months/12` (banks discount monthly payouts slightly; not modelled); at
+  maturity the days after the last payout are paid as simple interest. A payout FD closed early settles simple
+  interest at `rate − penalty` against what was already paid out.
+- **Dates:** "today" is the Indian date (UTC+05:30) on both sides; inputs may be dated up to tomorrow, so clocks a few
+  hours apart still pass.
+- **Limits:** deletes don't count toward the 30 writes a day (removing data is always allowed).
+- **Allocation colours** reuse existing tokens (§13: no new colours): Fixed deposit `--cat-debt`, PPF `--cat-hybrid`,
+  EPF `--cat-stocks`. They are close in tone (the Debt family); M24's palette can separate them.
+- **Overall XIRR** shows only where Funds & stocks XIRR shows (every fund has its full history); invested and total
+  returns on the dashboard then include the manual assets. With partial fund history the hero keeps today's notice.
+- **Onboarding:** a household with no statement yet can add FD/PPF/EPF from the welcome screen (saved without a
+  member); Members lists those under "Not filed under a member" until one is picked in Edit.
+
+**Later:** RD, NSC, SCSS, NPS, bonds; rates fetched automatically; tax views (TDS, 80C).

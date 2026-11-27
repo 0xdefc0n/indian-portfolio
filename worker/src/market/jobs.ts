@@ -3,7 +3,9 @@
 // and a date, nothing else. Logs carry counts, dates and error class names, never scheme codes: a backfill logged
 // right after an upload would tie that household to a fund it holds (§0.1).
 import { prebuild } from '../lib/snapshot'
+import { EngineBusy, runAmc } from './amc-scrape'
 import { runStocks } from './stocks'
+import { metalRates, REF_CODES } from './metals'
 import { amcId } from './amc-ids'
 import { addDays, AmfiFormatError, anomalies, istToday, type NavRow, parseAmfiNav, parseMfapi, type Ymd, ymdToAmfi, ymdToIso } from './amfi'
 import {
@@ -48,6 +50,7 @@ export type MarketMessage =
   | { type: 'series'; codes: number[] }
   | { type: 'repair'; date: Ymd }
   | { type: 'stocks' } // the BharatStock job (src/market/stocks.ts, M11)
+  | { type: 'amc' } // the AMC disclosure scrapers (src/market/amc-scrape.ts, M18)
 
 /** pf-market sends, through one object so tests can capture them instead of the real queue. */
 export const marketQueue = {
@@ -61,6 +64,10 @@ export const marketHooks = {
   async onFinal(env: Env, dates: Ymd[]): Promise<void> {
     console.log('market_day_final', { dates })
     await prebuild(env, { finalDates: dates.map(ymdToIso) }).catch((e) => console.error('prebuild_failed', (e as Error).name))
+  },
+  /** After every nav-ingest run: the gold and silver rates from the NAVs just stored (M29). */
+  async afterIngest(env: Env, now: number): Promise<void> {
+    await refreshMetals(env, now)
   },
 }
 
@@ -175,7 +182,17 @@ export async function navIngest(env: Env, opts: { cron?: string; now?: number } 
   }
   await recordRun(env, 'nav-ingest', now, result)
   console.log('nav_ingest', { ...result, dropped: parsed.dropped, latest, ms: Date.now() - started })
+  await marketHooks.afterIngest(env, now)
   return result
+}
+
+/**
+ * Gold and silver rates (M29) from the reference ETFs' NAVs just stored. First run: their history is queued for
+ * backfill, and each finished backfill runs this again. Never fails the caller.
+ */
+export async function refreshMetals(env: Env, now = Date.now()): Promise<void> {
+  const run = await metalRates(env, now)
+  if (run.backfills.length) await marketQueue.sendBatch(env, run.backfills.map((code): MarketMessage => ({ type: 'backfill', code }))).catch(() => undefined)
 }
 
 const chunk = <T>(rows: T[], size: number): T[][] => Array.from({ length: Math.ceil(rows.length / size) }, (_, i) => rows.slice(i * size, (i + 1) * size))
@@ -343,11 +360,22 @@ export async function handleMarketBatch(batch: MessageBatch<MarketMessage>, env:
     const body = msg.body
     try {
       if (body?.type === 'backfill' && Number.isSafeInteger(body.code) && body.code > 0) {
-        await runBackfill(env, body.code, validYmd(body.from))
+        const out = await runBackfill(env, body.code, validYmd(body.from))
+        if (out.status === 'done' && REF_CODES.includes(body.code)) await refreshMetals(env)
       } else if (body?.type === 'series' && Array.isArray(body.codes)) {
         await writeSeries(env, body.codes.filter((c) => Number.isSafeInteger(c) && c > 0).slice(0, SERIES_CODES_PER_MESSAGE))
       } else if (body?.type === 'repair' && validYmd(body.date)) {
         await runRepair(env, body.date)
+      } else if (body?.type === 'amc') {
+        // Busy: another run is going (it re-sends for what it didn't reach). EngineBusy: no batch slot, try later.
+        const res = await runAmc(env).catch((err) => {
+          if (err instanceof EngineBusy) return { status: 'busy' as const }
+          throw err
+        })
+        if (res.status === 'busy' && msg.attempts < MARKET_MAX_ATTEMPTS) {
+          msg.retry({ delaySeconds: 120 })
+          continue
+        }
       } else if (body?.type === 'stocks') {
         // Another run holds the lock: it runs one more pass if this was asked after it started. Try again in a
         // minute anyway, in case it was just finishing.

@@ -23,7 +23,7 @@ import {
   runRepair,
 } from '../src/market/jobs'
 import { BENCHMARK_CODE, type NavSeries, seriesKey } from '../src/market/store'
-import { firstTransactionDates, trackSchemes } from '../src/lib/statements'
+import { backfillCodes, firstTransactionDates, soldSchemeCodes, trackSchemes } from '../src/lib/statements'
 import { marketStatus } from '../src/routes/market'
 import historyUti from './fixtures/amfi/history-uti-excerpt.txt?raw'
 import mfapiJson from './fixtures/amfi/mfapi-120716-excerpt.json?raw'
@@ -97,6 +97,10 @@ beforeEach(async () => {
   await env.MARKET.batch(['scheme', 'nav', 'market_day', 'nav_backfill', 'nav_anomaly', 'nav_run', 'tracked_scheme'].map((t) => env.MARKET.prepare(`DELETE FROM ${t}`)))
   const keys = (await env.BUCKET.list({ prefix: 'market/' })).objects.map((o) => o.key)
   if (keys.length) await env.BUCKET.delete(keys)
+})
+// The gold and silver step after each run (M29) has its own tests (metal-ingest.test.ts).
+beforeEach(() => {
+  vi.spyOn(marketHooks, 'afterIngest').mockResolvedValue()
 })
 afterEach(() => vi.restoreAllMocks())
 
@@ -317,6 +321,27 @@ describe('the upload path (tracked_scheme)', () => {
     ])
     sent.length = 0
     await trackSchemes(env, holdings, now + 2 * 86_400_000, first)
+    expect(sent).toEqual([])
+  })
+
+  it('backfills fully redeemed funds once, from their first transaction, without tracking them', async () => {
+    const sent = captureMarket()
+    const holdings = [{ isin: isinOf(900011), amfi: '900011' }]
+    const schemes = [
+      { isin: isinOf(900011), amfi: '900011', close: 3 }, // held: trackSchemes' job
+      { isin: isinOf(900012), amfi: '900012', close: 0 }, // sold
+      { isin: isinOf(900013), amfi: null, close: 0 }, // sold, no code: the chart uses the statement's NAVs
+      { isin: 'INE000X01011', amfi: '900014', close: 0 }, // not a fund
+    ]
+    const first = firstTransactionDates([{ isin: isinOf(900012), date: '2021-06-01' }])
+    const sold = soldSchemeCodes(schemes, holdings, first)
+    expect([...sold]).toEqual([[900012, 20210601]])
+    expect(await backfillCodes(env, sold)).toBe(1)
+    expect(sent).toEqual([{ type: 'backfill', code: 900012, from: 20210601 }])
+    expect(await env.MARKET.prepare('SELECT status FROM nav_backfill WHERE amfi_code = 900012').first('status')).toBe('pending')
+    expect(await env.MARKET.prepare('SELECT COUNT(*) AS n FROM tracked_scheme WHERE isin = ?1').bind(isinOf(900012)).first('n')).toBe(0)
+    sent.length = 0
+    expect(await backfillCodes(env, sold)).toBe(0) // once ever
     expect(sent).toEqual([])
   })
 })

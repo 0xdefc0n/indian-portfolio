@@ -1,3 +1,5 @@
+import type { Asset as CalcAsset, RateTable } from "@manual-assets"
+
 export type Account = { depository: string; broker: string; funds: number | null; value: number | null }
 
 export type Member = {
@@ -10,6 +12,9 @@ export type Member = {
   history: { month: string; value: number; flow?: number }[] // flow: net money in that month (transaction rebuild only)
   history_covers_all: boolean
   history_source: "transactions" | "cdsl"
+  /** "waiting": some months use the statement's own NAVs while a sold fund's daily NAVs download (rebuilt soon);
+   *  "estimated": some months stay on statement NAVs (no daily NAVs exist for that fund). */
+  history_note?: "waiting" | "estimated" | null
   sources: string[]
   sips_known: boolean // false when the member has no CAMS/KFintech statement
   accounts: Account[]
@@ -269,6 +274,9 @@ const MESSAGES: Record<string, string> = {
   adult_required: "Confirm that you're 18 or older to continue.",
   notice_changed: "The privacy notice has just changed. Reload to read the new one.",
   export_limit: "You've downloaded your data 3 times today. Try again tomorrow.",
+  asset_limit: "You can add up to 50 FDs, PPF and EPF accounts.",
+  asset_write_limit: "You've made a lot of changes today. Try again tomorrow.",
+  bad_input: "Check the amounts and dates and try again.",
   reauth_required: "For your safety, sign in again to delete your account.",
   consent_required: "Accept the privacy notice to continue.",
   // QR device login (M13)
@@ -391,6 +399,10 @@ export type MemberSummary = {
   pan_masked: string
   statements: { id: string; kind: StatementKind; as_of: string; holdings_count: number }[]
 }
+
+/** GET /api/assets (plan §21.12, M19): inputs only; values are computed here with the shared calculator. */
+export type ManualAsset = { id: string; member_id: string | null; created_at: number; updated_at: number } & CalcAsset
+export type AssetBody = CalcAsset & { member_id: string | null }
 
 export type AppConfig = {
   features: { cdsl_fetch: boolean; kfintech_auto: boolean; stocks: boolean }
@@ -547,4 +559,10 @@ export const api = {
   skipSip: (sip: SipRef, due: string) => call<{ ok: true; skipped: string }>("/api/sips/skip", json({ ...sip, due })),
   undoSkipSip: (sip: SipRef) => call<{ ok: true; removed: number }>("/api/sips/skip", { ...json(sip), method: "DELETE" }),
   cancelSip: (sip: SipRef) => call<{ ok: true; cancelled_on: string }>("/api/sips/cancel", json({ ...sip, confirm: true })),
+  /** FD, PPF and EPF entered by hand (M19). Nothing to rebuild: the values are computed in the browser. */
+  assets: () => call<{ assets: ManualAsset[]; rates: RateTable }>("/api/assets"),
+  addAsset: (body: AssetBody) => call<{ asset: ManualAsset }>("/api/assets", json(body)),
+  updateAsset: (id: string, body: Partial<Pick<AssetBody, "inputs" | "member_id">>) =>
+    call<{ asset: ManualAsset }>(`/api/assets/${encodeURIComponent(id)}`, { ...json(body), method: "PATCH" }),
+  deleteAsset: (id: string) => call<{ ok: true }>(`/api/assets/${encodeURIComponent(id)}`, { method: "DELETE" }),
 }

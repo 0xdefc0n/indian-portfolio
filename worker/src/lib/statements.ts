@@ -271,7 +271,51 @@ export function statementFacts(parsed: Extract<EngineParse, { ok: true }>) {
   const holdings = Array.isArray(st.holdings) ? st.holdings : []
   const warnings = Array.isArray(st.warnings) ? st.warnings.length : 0
   const name = cleanName(st.holder_name)
-  return { kind, asOf, periodFrom, holdings, warnings, name, firstTxn: firstTransactionDates(st.transactions) }
+  const firstTxn = firstTransactionDates(st.transactions)
+  return { kind, asOf, periodFrom, holdings, warnings, name, firstTxn, soldCodes: soldSchemeCodes(st.schemes, holdings, firstTxn) }
+}
+
+/** A statement can list this many fully redeemed funds for NAV backfill (one mfapi fetch each, once ever). */
+export const MAX_SOLD_BACKFILLS = 100
+
+/**
+ * Funds a CAMS/KFintech statement lists but no longer holds (fully redeemed), as AMFI code → earliest transaction date.
+ * Their NAV history is still needed: the value chart is rebuilt month by month from every fund held at the time. They
+ * get a one-time backfill but are not tracked (no nightly NAVs, stock or AMC fetches for funds nobody holds).
+ */
+export function soldSchemeCodes(schemes: unknown, holdings: Array<Record<string, unknown>>, firstTxn: Map<string, number>): Map<number, number> {
+  const out = new Map<number, number>()
+  if (!Array.isArray(schemes)) return out
+  const held = new Set(holdings.map((h) => (typeof h.isin === 'string' ? h.isin.toUpperCase() : '')))
+  for (const sc of schemes as Array<Record<string, unknown>>) {
+    const isin = typeof sc?.isin === 'string' ? sc.isin.toUpperCase() : ''
+    const code = Number.parseInt(String(sc?.amfi ?? ''), 10)
+    if (!FUND_ISIN.test(isin) || held.has(isin) || !Number.isSafeInteger(code) || code <= 0) continue
+    const from = firstTxn.get(isin)
+    const prev = out.get(code)
+    if (prev === undefined || (from !== undefined && from < prev)) out.set(code, from ?? prev ?? 0)
+    if (out.size >= MAX_SOLD_BACKFILLS) break
+  }
+  return out
+}
+
+/** Queue a one-time NAV backfill for codes never backfilled (sold funds). Returns the number queued. */
+export async function backfillCodes(env: { MARKET: D1Database; Q_MARKET: Queue }, codes: Map<number, number>, now = Date.now()): Promise<number> {
+  if (!codes.size) return 0
+  const res = await env.MARKET.prepare(
+    `INSERT INTO nav_backfill (amfi_code, status, at) SELECT value, 'pending', ?2 FROM json_each(?1) WHERE true
+     ON CONFLICT DO NOTHING RETURNING amfi_code`,
+  )
+    .bind(JSON.stringify([...codes.keys()]), now)
+    .all<{ amfi_code: number }>()
+  const queued = res.results.map((r) => r.amfi_code)
+  if (queued.length) {
+    await marketQueue.sendBatch(env, queued.map((code): MarketMessage => {
+      const from = codes.get(code)
+      return { type: 'backfill', code, ...(from ? { from } : {}) }
+    }))
+  }
+  return queued.length
 }
 
 /** The earliest transaction date per ISIN (YYYYMMDD): how far back a scheme's NAV backfill must reach. */
@@ -372,6 +416,7 @@ export async function storeStatement(t: Tenant, vault: Vault, s: StoreInput): Pr
   if (trimmed.length) await deleteBlobs(env, t.householdId, trimmed).catch((e) => console.error('blob_delete_failed', (e as Error).name, trimmed.length))
 
   await trackSchemes(env, facts.holdings, now, facts.firstTxn).catch((e) => console.error('tracked_scheme_failed', (e as Error).name))
+  await backfillCodes(env, facts.soldCodes, now).catch((e) => console.error('sold_backfill_failed', (e as Error).name))
 
   const created = newMember?.id === memberId
   let name: string | null

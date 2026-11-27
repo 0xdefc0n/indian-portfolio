@@ -4,9 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { AppHeader } from "@/components/app-header"
 import { LegalFooter } from "@/components/legal-footer"
 import { AddStatementDialog } from "@/components/add-statement-dialog"
-import { AllocationStrip, type Slice } from "@/components/allocation-strip"
-import { HoldingsTable } from "@/components/holdings-table"
-import { SipTable, sipSummary } from "@/components/sip-table"
+import { type AssetDialogState, AssetDialogs } from "@/components/asset-dialogs"
+import { AddAssetButton, FixedIncome, GoldSilver } from "@/components/fixed-income"
+import type { Slice } from "@/components/allocation-strip"
+import { AssetsView } from "@/components/assets-view"
+import { type AssetKind, holdingKind } from "@/lib/asset-kind"
 import { BottomNav, type TabId, TabNav, useTab } from "@/components/tab-nav"
 import { TransactionsView } from "@/components/transactions-view"
 import { AllocationBreakdown, BenchmarkComparison, FundPerformance, FundReturns, MoneyFlow, UpsAndDowns } from "@/components/insights"
@@ -16,7 +18,6 @@ import { useAutoInstallPrompt, useReloadWhenOnline } from "@/lib/pwa"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { ValueChart } from "@/components/value-chart"
 import { FundDialog } from "@/components/fund-dialog"
 import { StockExposure } from "@/components/stock-exposure"
@@ -31,31 +32,13 @@ import {
 } from "@/lib/api"
 import { DailyReturns, TodayTile } from "@/components/daily-returns"
 import { byFund } from "@/lib/daily"
-import { day, inr, monthly } from "@/lib/format"
+import { day, inr } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { nextRun, upcomingSips } from "@/lib/sips"
+import { upcomingSips } from "@/lib/sips"
 import { holdingFlows, xirr } from "@/lib/xirr"
+import { assetFlows, assetTotals, fixedOnly, forMember, metalsOnly, revalueSgbs, useAssets, valued } from "@/lib/assets"
 
 const EVERYONE = "all"
-
-function Stat({ label, children, help }: { label: string; children: React.ReactNode; help?: string }) {
-  return (
-    <div className="min-w-0">
-      <dt className="flex items-center gap-1.5 text-sm text-muted-foreground">
-        {label}
-        {help && (
-          <Tooltip>
-            <TooltipTrigger aria-label={`About ${label}`} className="-m-2 p-2">
-              <InfoIcon className="size-3.5" />
-            </TooltipTrigger>
-            <TooltipContent className="max-w-64">{help}</TooltipContent>
-          </Tooltip>
-        )}
-      </dt>
-      <dd className="mt-1 text-lg font-semibold tracking-tight sm:text-xl">{children}</dd>
-    </div>
-  )
-}
 
 function RequestLink({ onAdded, label }: { onAdded: () => void; label: string }) {
   return (
@@ -76,7 +59,7 @@ function MemberSwitch({ members, value, onChange }: { members: Member[]; value: 
 }
 
 /** Onboarding for an empty household (plan §13 item 4): what to upload, and how to get it. */
-function Onboarding({ onAdded }: { onAdded: () => void }) {
+function Onboarding({ onAdded, fixedIncome }: { onAdded: () => void; fixedIncome: React.ReactNode }) {
   return (
     <div className="grid grid-cols-1 gap-4 pt-3 sm:pt-4 md:grid-cols-6 lg:grid-cols-12">
       <Cell className="dot-texture flex flex-col sm:p-7 md:col-span-6 lg:col-span-12" lift={false} label="Welcome">
@@ -100,6 +83,7 @@ function Onboarding({ onAdded }: { onAdded: () => void }) {
           <Badge variant="secondary">Coming soon</Badge>
         </div>
       </Cell>
+      {fixedIncome}
       <Cell className="md:col-span-3 lg:col-span-6" delay={80} label="CDSL eCAS">
         <div className="mb-4 grid size-10 place-items-center rounded-xl bg-background ring-1 ring-border">
           <BuildingIcon className="size-5 text-primary" />
@@ -175,9 +159,16 @@ export default function App({ me }: { me: Me }) {
   const [who, setWho] = useState(EVERYONE)
   const [hovered, setHovered] = useState<string | null>(null)
   const [category, setCategory] = useState<string | null>(null)
+  // An old #sips link opens Assets scrolled to the SIPs (read before useTab settles on "assets").
+  const [sipsLink] = useState(() => window.location.hash === "#sips")
   const [tab, setTab] = useTab()
+  const [assetKind, setAssetKind] = useState<AssetKind | null>(() => (window.location.hash === "#sips" ? "mf" : null))
   const [fund, setFund] = useState<Holding | null>(null)
   const [offline, setOffline] = useState(false)
+  // FD, PPF and EPF (M19): loaded beside the snapshot, valued here on every render with the shared calculator.
+  const assets = useAssets()
+  const assetRows = useMemo(() => valued(assets.assets ?? [], assets.rates), [assets.assets, assets.rates])
+  const [assetDlg, setAssetDlg] = useState<AssetDialogState>(null)
 
   const load = useCallback(() => {
     api.portfolio().then(
@@ -226,6 +217,18 @@ export default function App({ me }: { me: Me }) {
 
   // While a rebuild is due, wait for it (status polling with backoff and Retry-After), then reload once.
   const updating = !!data && (data.stale || data.building)
+  // A sold fund's NAV history is still downloading: the Worker rebuilds by itself once it lands (a few minutes), so
+  // check back a few times and swap in the better chart without a reload.
+  const enriching = !!data?.members.some((m) => m.history_note === "waiting")
+  useEffect(() => {
+    if (!enriching || updating) return
+    let tries = 0
+    const timer = setInterval(() => {
+      if (++tries > 6) return clearInterval(timer)
+      load()
+    }, 2.5 * 60_000)
+    return () => clearInterval(timer)
+  }, [enriching, updating, load])
   useEffect(() => {
     if (!updating) return
     const ctl = new AbortController()
@@ -240,7 +243,8 @@ export default function App({ me }: { me: Me }) {
     if (!data) return null
     const members = who === EVERYONE ? data.members : data.members.filter((m) => m.id === who)
     const ids = new Set(members.map((m) => m.id))
-    const holdings = data.holdings.filter((h) => ids.has(h.member_id))
+    // SGBs in demat are valued at today's gold rate and filed under Gold & silver (M29)
+    const holdings = revalueSgbs(data.holdings.filter((h) => ids.has(h.member_id)), assets.rates)
     const total = holdings.reduce((s, h) => s + h.value, 0)
 
     const byCat = new Map<string, Slice>()
@@ -251,6 +255,24 @@ export default function App({ me }: { me: Me }) {
       byCat.set(h.category, s)
     }
     const slices = [...byCat.values()].map((s) => ({ ...s, share: total ? (s.value / total) * 100 : 0 })).sort((a, b) => b.value - a.value)
+
+    // Manual assets (M19, M29): a member's own, or everyone's (those filed under no member show only for Everyone).
+    const manual = forMember(assetRows, who === EVERYONE ? null : who)
+    const fixed = fixedOnly(manual)
+    const metals = metalsOnly(manual)
+    const fixedTotals = assetTotals(manual)
+    const grandTotal = total + fixedTotals.value
+    // Same category from both sides (SGB: demat and by hand) is one slice
+    const byAll = new Map([...byCat].map(([k, v]) => [k, { ...v }]))
+    for (const r of manual) {
+      const s = byAll.get(r.category) ?? { category: r.category, value: 0, share: 0, funds: 0 }
+      s.value += r.v.value
+      s.funds += 1
+      byAll.set(r.category, s)
+    }
+    const allSlices = [...byAll.values()]
+      .map((s) => ({ ...s, share: grandTotal ? (s.value / grandTotal) * 100 : 0 }))
+      .sort((a, b) => b.value - a.value)
 
     // Family total only for months every member's statements cover, so older months don't drop people silently.
     const withHistory = members.filter((m) => m.history.length)
@@ -271,6 +293,8 @@ export default function App({ me }: { me: Me }) {
     const prev = history.length >= 2 ? history[history.length - 2] : null
     const change = prev ? history[history.length - 1].value - prev.value : null
     const historyPartial = members.some((m) => !m.history_covers_all)
+    // Months valued at the statement's own NAVs (a sold fund's daily NAVs are downloading, or don't exist)
+    const historyNote = members.some((m) => m.history_note === "waiting") ? "waiting" : members.some((m) => m.history_note === "estimated") ? "estimated" : null
     // Invested / returns / XIRR only over funds with complete purchase history (CAMS/KFintech from inception)
     const withCost = holdings.filter((h) => h.invested != null && h.cashflows?.length)
     const invested = withCost.reduce((s, h) => s + (h.invested ?? 0), 0)
@@ -285,6 +309,18 @@ export default function App({ me }: { me: Me }) {
           complete: withCost.length === holdings.length,
         }
       : null
+    // The dashboard's invested and gain include the manual assets; Funds & stocks XIRR stays as it is, and Overall
+    // XIRR adds them (plan §21.12: two XIRRs).
+    const dashReturns: Returns | null =
+      returns && manual.length
+        ? {
+            ...returns,
+            invested: returns.invested + fixedTotals.invested,
+            current: returns.current + fixedTotals.costValue,
+            gain: returns.gain + fixedTotals.gain,
+            overall: xirr([...holdingFlows(withCost), ...assetFlows(manual)]),
+          }
+        : returns
     const asOf = members.map((m) => m.as_of).filter(Boolean).sort().at(-1) ?? null
     // M12: values are at the latest NAV; the statement date stays for the notes
     const valueDate = members.map((m) => m.value_date ?? m.as_of).filter(Boolean).sort().at(-1) ?? null
@@ -298,17 +334,21 @@ export default function App({ me }: { me: Me }) {
     )
 
     return {
-      members, total, slices, history, flowsKnown, prev, change, asOf, valueDate, est, historyPartial,
-      returns,
-      holdings: category ? holdings.filter((h) => h.category === category) : holdings,
+      members, total, slices, history, flowsKnown, prev, change, asOf, valueDate, est, historyPartial, historyNote,
+      returns, dashReturns, fixed, metals, manual, grandTotal, allSlices,
+      fixedTotal: fixed.reduce((t, r) => t + r.v.value, 0),
+      metalTotal: metals.reduce((t, r) => t + r.v.value, 0),
       allHoldings: holdings,
       activity: data.activity.filter((a) => ids.has(a.member_id)),
       sips: data.sips.filter((x) => ids.has(x.member_id)),
       sipsMissing: members.filter((m) => !m.sips_known),
     }
-  }, [data, who, category])
+  }, [data, who, assetRows, assets.rates])
 
   const memberMap = useMemo(() => new Map(data?.members.map((m) => [m.id, m])), [data])
+  const pickMembers = useMemo(() => (data?.members ?? []).map((m) => ({ id: m.id, name: m.name })), [data])
+  const assetMemberName = (id: string | null) => (id ? memberMap.get(id)?.name.split(" ")[0] : undefined)
+  const openFixedIncome = (id = "fixed-income") => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })
   const switchMember = (v: string) => { setWho(v); setCategory(null) }
   const multi = (data?.members.length ?? 0) > 1
   const showMember = multi && who === EVERYONE
@@ -330,8 +370,20 @@ export default function App({ me }: { me: Me }) {
 
   useAutoInstallPrompt({ ready: !!ready, busy: updating || adding })
 
-  const viewAll = (to: TabId, label: string) => (
-    <button className="-my-2 py-2 text-primary underline-offset-4 hover:underline" onClick={() => setTab(to)}>
+  /** Open a tab, then scroll to a section in it once it has rendered. */
+  const goTo = useCallback((to: TabId, anchor?: string) => {
+    setTab(to)
+    if (anchor) requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" })))
+  }, [setTab])
+  const sipsLinkDone = useRef(false)
+  useEffect(() => {
+    if (!sipsLink || sipsLinkDone.current || !ready) return
+    sipsLinkDone.current = true
+    goTo("assets", "sips")
+  }, [sipsLink, ready, goTo])
+
+  const viewAll = (to: TabId, label: string, anchor?: string) => (
+    <button className="-my-2 py-2 text-primary underline-offset-4 hover:underline" onClick={() => goTo(to, anchor)}>
       {label}
     </button>
   )
@@ -342,7 +394,7 @@ export default function App({ me }: { me: Me }) {
       <AppHeader
         me={me}
         onHome={() => setTab("overview")}
-        nav={ready ? <TabNav tab={tab} onChange={setTab} counts={{ holdings: view.allHoldings.length, sips: activeSips.length || undefined }} /> : undefined}
+        nav={ready ? <TabNav tab={tab} onChange={setTab} counts={{ assets: view.allHoldings.length + view.manual.length }} /> : undefined}
         actions={data && data.members.length > 0 ? <AddStatementDialog onAdded={load} /> : undefined}
       />
 
@@ -354,7 +406,23 @@ export default function App({ me }: { me: Me }) {
           </p>
         )}
         {!data && !error && !offline && <div className="pt-8"><LoadingState /></div>}
-        {data && data.members.length === 0 && (data.building ? <BuildingState /> : <Onboarding onAdded={load} />)}
+        {data && data.members.length === 0 && (data.building ? <BuildingState /> : (
+          <Onboarding
+            onAdded={load}
+            fixedIncome={
+              <>
+                <Cell className="md:col-span-6 lg:col-span-12" delay={200} lift={false} label="Fixed income">
+                  <CellHead title="Fixed income" aside={fixedOnly(assetRows).length ? <AddAssetButton onClick={() => setAssetDlg({ kind: "add", group: "fixed" })} /> : undefined} />
+                  <FixedIncome rows={fixedOnly(assetRows)} failed={assets.failed} onAction={setAssetDlg} onChanged={assets.reload} />
+                </Cell>
+                <Cell className="md:col-span-6 lg:col-span-12" delay={240} lift={false} label="Gold and silver">
+                  <CellHead title="Gold & silver" aside={metalsOnly(assetRows).length ? <AddAssetButton onClick={() => setAssetDlg({ kind: "add", group: "metal" })} /> : undefined} />
+                  <GoldSilver rows={metalsOnly(assetRows)} failed={assets.failed} onAction={setAssetDlg} onChanged={assets.reload} />
+                </Cell>
+              </>
+            }
+          />
+        ))}
 
         {ready && (
           <div className="space-y-8 pt-3 sm:pt-4">
@@ -375,7 +443,7 @@ export default function App({ me }: { me: Me }) {
                       {view.valueDate && <>{who === EVERYONE && !multi ? "" : " · "}{day(view.valueDate)}</>}
                     </span>
                   </div>
-                  <HeroFigures total={view.total} change={view.change} prev={view.prev} />
+                  <HeroFigures total={view.grandTotal} change={view.change} prev={view.prev} />
                   {view.est.n > 0 && (
                     <p className="mt-3 max-w-xl text-[13px] text-muted-foreground">
                       At the latest NAV, with {view.est.n} SIP instalment{view.est.n === 1 ? "" : "s"} ({inr(view.est.amount)}) estimated since
@@ -384,8 +452,8 @@ export default function App({ me }: { me: Me }) {
                     </p>
                   )}
                   <div className="mt-6">
-                    {view.returns?.complete ? (
-                      <ReturnBoxes returns={view.returns} />
+                    {view.dashReturns?.complete ? (
+                      <ReturnBoxes returns={view.dashReturns} />
                     ) : (
                       <p className="max-w-xl text-sm text-muted-foreground">
                         Invested amount, returns and XIRR show here once every fund has its full purchase history
@@ -405,16 +473,30 @@ export default function App({ me }: { me: Me }) {
                         </span>
                       }
                     />
+                    {view.historyNote && (
+                      <p className="mt-3 flex items-start gap-2 text-[13px] text-muted-foreground" role="status">
+                        {view.historyNote === "waiting" ? <Loader2Icon className="mt-0.5 size-3.5 shrink-0 animate-spin" /> : <InfoIcon className="mt-0.5 size-3.5 shrink-0" />}
+                        {view.historyNote === "waiting"
+                          ? "Enriching your chart: we're fetching daily NAVs for funds you've sold. Until then those months use the NAVs printed in your statement. It updates by itself."
+                          : "Some months use the NAVs printed in your statement: daily NAVs aren't available for a fund you've sold."}
+                      </p>
+                    )}
                   </div>
                 </Cell>
 
                 <Cell className="md:col-span-6 lg:col-span-4" delay={80} label="Allocation">
-                  <CellHead title="Allocation" aside={<span className="eyebrow">{view.slices.length} categories</span>} />
+                  <CellHead title="Allocation" aside={<span className="eyebrow">{view.allSlices.length} categories</span>} />
                   <AllocationDonut
-                    slices={view.slices}
-                    total={view.total}
+                    slices={view.allSlices}
+                    total={view.grandTotal}
                     funds={view.allHoldings.length}
-                    onSelect={(c) => { setCategory(c); setHovered(null); setTab("holdings") }}
+                    others={view.manual.length}
+                    onSelect={(c) => {
+                      if (!view.slices.some((s) => s.category === c)) return openFixedIncome(view.metals.some((r) => r.category === c) ? "gold-silver" : "fixed-income") // added by hand
+                      const h = view.allHoldings.find((x) => x.category === c)
+                      setAssetKind(h ? holdingKind(h) : null)
+                      setCategory(c); setHovered(null); setTab("assets")
+                    }}
                   />
                 </Cell>
 
@@ -442,7 +524,7 @@ export default function App({ me }: { me: Me }) {
                 )}
 
                 <Cell className="md:col-span-6 lg:col-span-7" delay={340} label="Top holdings">
-                  <CellHead title="Top holdings" aside={viewAll("holdings", `View all ${view.allHoldings.length}`)} />
+                  <CellHead title="Top holdings" aside={viewAll("assets", `View all ${view.allHoldings.length + view.manual.length}`)} />
                   <HoldingBars holdings={view.allHoldings} total={view.total} members={memberMap} showMember={showMember} />
                 </Cell>
                 <Cell className="md:col-span-6 lg:col-span-5" delay={390} label="Upcoming SIPs">
@@ -451,8 +533,28 @@ export default function App({ me }: { me: Me }) {
                     aside={upcoming.list.length ? <span className="eyebrow">Next {upcoming.days} day{upcoming.days === 1 ? "" : "s"}</span> : undefined}
                   />
                   <SipTimeline upcoming={upcoming} members={memberMap} showMember={showMember} />
-                  {activeSips.length > 0 && <div className="mt-2 text-[13px]">{viewAll("sips", "View all SIPs")}</div>}
+                  {activeSips.length > 0 && <div className="mt-2 text-[13px]"><button className="-my-2 py-2 text-primary underline-offset-4 hover:underline" onClick={() => { setAssetKind("mf"); setCategory(null); goTo("assets", "sips") }}>View all SIPs</button></div>}
                 </Cell>
+
+                <div id="fixed-income" className="scroll-mt-24 md:col-span-6 lg:col-span-12">
+                  <Cell className="h-full" delay={420} lift={false} label="Fixed income">
+                    <CellHead
+                      title="Fixed income"
+                      aside={view.fixed.length ? <span className="flex items-center gap-3"><span className="eyebrow">{inr(view.fixedTotal)}</span><AddAssetButton onClick={() => setAssetDlg({ kind: "add", group: "fixed", member: who === EVERYONE ? undefined : who })} /></span> : undefined}
+                    />
+                    <FixedIncome rows={view.fixed} memberName={showMember ? assetMemberName : undefined} failed={assets.failed} onAction={setAssetDlg} onChanged={assets.reload} />
+                  </Cell>
+                </div>
+
+                <div id="gold-silver" className="scroll-mt-24 md:col-span-6 lg:col-span-12">
+                  <Cell className="h-full" delay={430} lift={false} label="Gold and silver">
+                    <CellHead
+                      title="Gold & silver"
+                      aside={view.metals.length ? <span className="flex items-center gap-3"><span className="eyebrow">{inr(view.metalTotal)}</span><AddAssetButton onClick={() => setAssetDlg({ kind: "add", group: "metal", member: who === EVERYONE ? undefined : who })} /></span> : undefined}
+                    />
+                    <GoldSilver rows={view.metals} memberName={showMember ? assetMemberName : undefined} failed={assets.failed} onAction={setAssetDlg} onChanged={assets.reload} />
+                  </Cell>
+                </div>
 
                 <Cell className="md:col-span-6 lg:col-span-12" delay={440} lift={false} label="Latest transactions">
                   <CellHead title="Latest transactions" aside={view.activity.length ? viewAll("transactions", "View all") : undefined} />
@@ -461,36 +563,29 @@ export default function App({ me }: { me: Me }) {
               </div>
             )}
 
-            {tab === "holdings" && (
-              <>
-                <PageTitle title="Holdings" detail={`${view.allHoldings.length} funds worth ${inr(view.total)}`} />
-                <AllocationStrip slices={view.slices} active={hovered} onHover={setHovered} selected={category} onSelect={setCategory} holdings={view.allHoldings} />
-                <Panel
-                  title={category ?? "All funds"}
-                  aside={category ? <button className="-my-2 py-2 text-primary hover:underline" onClick={() => setCategory(null)}>Show all funds</button> : undefined}
-                >
-                  <HoldingsTable holdings={view.holdings} total={view.total} members={memberMap} showMember={showMember} highlight={category ? null : hovered} oneDay={oneDay} />
-                </Panel>
-              </>
-            )}
-
-            {tab === "sips" && (
-              <>
-                <PageTitle title="SIPs" detail={sipSummary(view.sips, (x) => monthly(x.amount, x.frequency)) ?? "No active SIPs"} />
-                {activeSips.length > 0 && (
-                  <dl className="grid grid-cols-2 gap-x-8 gap-y-4 sm:grid-cols-4">
-                    <Stat label="Monthly amount">{inr(activeSips.reduce((s, x) => s + monthly(x.amount, x.frequency), 0))}</Stat>
-                    <Stat label="Active SIPs">{activeSips.length}</Stat>
-                    <Stat label="Invested via these SIPs">{inr(activeSips.reduce((s, x) => s + x.invested, 0))}</Stat>
-                    <Stat label="Next instalment">
-                      {day(activeSips.map((x) => nextRun(x)?.date).filter(Boolean).sort()[0] ?? null)}
-                    </Stat>
-                  </dl>
-                )}
-                <Panel title="All SIPs">
-                  <SipTable sips={view.sips} members={memberMap} showMember={showMember} missing={view.sipsMissing} onChanged={load} />
-                </Panel>
-              </>
+            {tab === "assets" && (
+              <AssetsView
+                holdings={view.allHoldings}
+                fixed={view.fixed}
+                metals={view.metals}
+                total={view.grandTotal}
+                kind={assetKind}
+                onKind={setAssetKind}
+                category={category}
+                onCategory={setCategory}
+                hovered={hovered}
+                onHover={setHovered}
+                members={memberMap}
+                showMember={showMember}
+                oneDay={oneDay}
+                sips={view.sips}
+                sipsMissing={view.sipsMissing}
+                onSipsChanged={load}
+                assetMemberName={showMember ? assetMemberName : undefined}
+                assetsFailed={assets.failed}
+                onAssetAction={setAssetDlg}
+                onAssetsChanged={assets.reload}
+              />
             )}
 
             {tab === "insights" && (
@@ -504,7 +599,7 @@ export default function App({ me }: { me: Me }) {
                 </div>
 
                 <Panel title="Allocation">
-                  <AllocationBreakdown holdings={view.allHoldings} total={view.total} />
+                  <AllocationBreakdown holdings={view.allHoldings} total={view.total} fixedIncome={view.fixedTotal} gold={view.metalTotal} />
                 </Panel>
 
                 {data?.stocks?.enabled && (
@@ -555,6 +650,7 @@ export default function App({ me }: { me: Me }) {
       <LegalFooter className={ready ? "pb-28 md:pb-8" : undefined} />
       {/* the "Add statement" shortcut; the header and onboarding have their own buttons */}
       <AddStatementDialog onAdded={load} trigger={null} open={adding} onOpenChange={setAdding} />
+      <AssetDialogs state={assetDlg} members={pickMembers} rates={assets.rates} onClose={() => setAssetDlg(null)} onSaved={assets.reload} onState={setAssetDlg} />
       {ready && <BottomNav tab={tab} onChange={setTab} />}
       <FundDialog
         holding={fund}

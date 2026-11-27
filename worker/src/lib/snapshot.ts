@@ -22,7 +22,9 @@ import { marketStatus, type MarketStatus } from '../routes/market'
 import { addDays, istToday, ymdToIso } from '../market/amfi'
 import { HOLIDAY_LOOKBACK_DAYS, holidayDates } from '../market/holidays'
 import { BENCHMARK_CODE } from '../market/store'
-import { apiKey, budgetLeft, recordWants, requestStocks, stockData, stocksVersion } from '../market/stocks'
+import { requestAmc } from '../market/amc-scrape'
+import { mffKey } from '../market/mfforecast'
+import { apiKey, budgetLeft, recordWants, requestStocks, stockData, stocksEnabled, stocksVersion } from '../market/stocks'
 import { blobKeys, deleteBlobs, getJsonBlob, isUuid } from './blob'
 import { FLAG_GZIP, hmacHex, toBytes, type Vault } from './crypto'
 import { deleteDailyCache } from './daily-cache'
@@ -30,6 +32,7 @@ import { engineApi } from './engine-client'
 import { waitDelay } from './jobs'
 import { cleanName, fieldKey } from './members'
 import { sipFieldKey } from './sip-overrides'
+import { soldSchemeCodes } from './statements'
 import { Tenant } from './tenant'
 
 /**
@@ -329,13 +332,15 @@ async function done(env: Env, msg: RebuildMessage, outcome: string): Promise<Reb
  * pick up what it stores. Never throws: the snapshot itself is already stored.
  */
 async function afterBuildStocks(env: Env, want: [string, string][], waiting: boolean, now: number): Promise<boolean> {
-  if (!apiKey(env)) return false
+  if (!stocksEnabled(env)) return false
   try {
     const fresh = await recordWants(env, want, now)
     if (!fresh && !waiting) return false
-    if ((await budgetLeft(env, now)) <= 0) return false
-    await requestStocks(env, now)
-    return true
+    // The AMC scrapers first (M18); BharatStock for what they don't cover, while today's budget lasts.
+    const amc = await requestAmc(env, now)
+    const fallback = (!!apiKey(env) && (await budgetLeft(env, now)) > 0) || !!mffKey(env)
+    if (fallback) await requestStocks(env, now)
+    return amc || fallback
   } catch (err) {
     console.error('stocks_request_failed', (err as Error).name)
     return false
@@ -380,6 +385,7 @@ async function buildRequest(env: Env, vault: Vault, used: StatementRow[], member
   for (const m of members) names.set(m.id, m.display_name_enc ? await vault.openText(fieldKey.name(m.id), m.display_name_enc) : null)
   const items: BuildItem[] = []
   const isins = new Set<string>()
+  const soldCodes = new Set<number>() // funds a CAMS/KFintech statement lists but no longer holds (their backfill matters too)
   const holderNames = new Map<string, Set<string>>()
   for (const s of used) {
     const blob = await getJsonBlob<{ statement: Record<string, unknown> }>(env, vault, s.blob_key)
@@ -388,6 +394,7 @@ async function buildRequest(env: Env, vault: Vault, used: StatementRow[], member
     for (const h of Array.isArray(st.holdings) ? (st.holdings as Array<{ isin?: unknown }>) : []) {
       if (typeof h.isin === 'string') isins.add(h.isin.toUpperCase())
     }
+    for (const code of soldSchemeCodes(st.schemes, Array.isArray(st.holdings) ? st.holdings : [], new Map()).keys()) soldCodes.add(code)
     const holder = cleanName(st.holder_name)
     if (holder) holderNames.set(s.member_id, (holderNames.get(s.member_id) ?? new Set()).add(holder))
     items.push({ member_id: s.member_id, name: null, data: st })
@@ -402,9 +409,10 @@ async function buildRequest(env: Env, vault: Vault, used: StatementRow[], member
     .prepare(
       `SELECT t.isin, t.amfi_code, b.status FROM tracked_scheme t LEFT JOIN nav_backfill b ON b.amfi_code = t.amfi_code
        WHERE t.isin IN (SELECT value FROM json_each(?1))
-       UNION ALL SELECT NULL, amfi_code, status FROM nav_backfill WHERE amfi_code = ?2`,
+       UNION ALL SELECT NULL, amfi_code, status FROM nav_backfill WHERE amfi_code = ?2
+       UNION ALL SELECT NULL, amfi_code, status FROM nav_backfill WHERE amfi_code IN (SELECT value FROM json_each(?3))`,
     )
-    .bind(JSON.stringify([...isins]), Number(BENCHMARK_CODE))
+    .bind(JSON.stringify([...isins]), Number(BENCHMARK_CODE), JSON.stringify([...soldCodes]))
     .all<{ isin: string | null; amfi_code: number | null; status: string | null }>()
   const isinToCode: Record<string, string> = {}
   const refresh = new Set<string>()

@@ -51,7 +51,12 @@ export function ValueChart({ data: points, scrub = false, label }: { data: Point
 
   const known = data.filter((d): d is Point => d.value != null)
   if (known.length < 2) {
-    return <p className="py-16 text-center text-sm text-muted-foreground">Value history appears after the first statement is added.</p>
+    return (
+      <p className="mx-auto max-w-sm py-16 text-center text-sm text-muted-foreground">
+        The value chart needs at least two months of history. A detailed CAMS or KFintech statement from your first
+        investment gives the full chart.
+      </p>
+    )
   }
   const first = known[0], last = known[known.length - 1]
   const hasGaps = known.length < data.length

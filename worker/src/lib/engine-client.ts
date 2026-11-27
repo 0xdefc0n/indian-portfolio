@@ -12,7 +12,7 @@ export function enginePool(env: Env) {
   return env.ENGINE_POOL.getByName('pool')
 }
 
-function engineNamespace(env: Env, cls: EngineClass) {
+export function engineNamespace(env: Env, cls: EngineClass) {
   return cls === 'fast' ? env.ENGINE_FAST : env.ENGINE_BATCH
 }
 

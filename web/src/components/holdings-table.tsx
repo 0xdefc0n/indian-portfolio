@@ -17,6 +17,9 @@ type Props = {
   highlight: string | null
   /** Today's change per `${member_id}|${isin}` (plan §10.5.4 "1D"), from /api/portfolio/daily. */
   oneDay?: Map<string, DayChange & { nav_date: string }>
+  /** Column headings for the group: "Fund"/"NAV" for funds, "Stock"/"Price" for shares. */
+  itemLabel?: string
+  priceLabel?: string
 }
 
 function OneDay({ d, className }: { d: (DayChange & { nav_date: string }) | undefined; className?: string }) {
@@ -29,7 +32,7 @@ function OneDay({ d, className }: { d: (DayChange & { nav_date: string }) | unde
   )
 }
 
-export function HoldingsTable({ holdings, total, members, showMember, highlight, oneDay }: Props) {
+export function HoldingsTable({ holdings, total, members, showMember, highlight, oneDay, itemLabel = "Fund", priceLabel = "NAV" }: Props) {
   const openFund = useOpenFund()
   const [by1d, setBy1d] = useState(false)
   const key = (h: Holding) => `${h.member_id}|${h.isin}`
@@ -38,9 +41,9 @@ export function HoldingsTable({ holdings, total, members, showMember, highlight,
     <Table>
       <TableHeader>
         <TableRow className="hover:bg-transparent">
-          <TableHead className="w-full pl-0">Fund</TableHead>
+          <TableHead className="w-full pl-0">{itemLabel}</TableHead>
           <TableHead className="hidden px-4 text-right md:table-cell">Units</TableHead>
-          <TableHead className="hidden px-4 text-right md:table-cell">NAV</TableHead>
+          <TableHead className="hidden px-4 text-right md:table-cell">{priceLabel}</TableHead>
           <TableHead className="px-4 text-right">Value</TableHead>
           {oneDay && (
             <TableHead className="hidden px-4 text-right lg:table-cell" aria-sort={by1d ? "descending" : "none"}>

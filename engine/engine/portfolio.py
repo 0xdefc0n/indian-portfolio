@@ -3,6 +3,7 @@ come in the request, the snapshot goes out. No disk, no network, no clock (plan 
 
 from __future__ import annotations
 
+import bisect
 import calendar
 import re
 from datetime import date, datetime, timedelta
@@ -135,11 +136,36 @@ def _month_end(y: int, m: int) -> str:
     return date(y, m, calendar.monthrange(y, m)[1]).isoformat()
 
 
-def _rta_history(rta: dict | None, navs: dict[str, NavSeries], today: date) -> list[dict]:
-    """Month-end values rebuilt from a CAMS/KFintech statement: exact units (opening balance +
-    every transaction) x that day's NAV. Empty unless every fund's units reconcile and has NAVs."""
+def _statement_prices(rta: dict, s: dict) -> list[tuple[str, float]]:
+    """(date, NAV) points the statement itself carries for one fund: each transaction's NAV and the closing valuation."""
+    pts = [(t["date"], t["nav"]) for t in rta.get("transactions", [])
+           if t["isin"] == s["isin"] and t.get("folio") == s["folio"] and t.get("nav") and t.get("date")]
+    for h in rta.get("holdings", []):
+        if h.get("isin") == s["isin"] and h.get("folio") == s["folio"] and h.get("price") and h.get("valuation_date"):
+            pts.append((h["valuation_date"], h["price"]))
+    return sorted(pts)
+
+
+def _price_from_statement(pts: list[tuple[str, float]], day: str) -> float | None:
+    """The statement's last NAV on or before `day` (else its first one): a step-wise stand-in for the daily series."""
+    if not pts:
+        return None
+    i = bisect.bisect_right(pts, (day, float("inf"))) - 1
+    return pts[i][1] if i >= 0 else pts[0][1]
+
+
+def _rta_history(rta: dict | None, navs: dict[str, NavSeries], today: date,
+                 waiting: set[str] | None = None) -> tuple[list[dict], str | None]:
+    """Month-end values rebuilt from a CAMS/KFintech statement: exact units (opening balance + every transaction) x that
+    day's NAV. Empty unless every fund's units reconcile.
+
+    A fund without NAV history (a fully redeemed fund whose backfill hasn't run yet, or one AMFI no longer lists) is
+    valued at the NAVs the statement itself prints (its transactions and closing valuation) instead of dropping the
+    chart. The second value says so: "waiting" while a backfill for such a fund is still running (the chart improves by
+    itself on the next build), "estimated" when some months stay on statement prices, else None."""
+    waiting = waiting or set()
     if not rta or not rta.get("period_from") or not rta.get("period_to"):
-        return []
+        return [], None
     funds = []
     for s in rta.get("schemes", []):
         txns = sorted((t for t in rta.get("transactions", [])
@@ -147,9 +173,9 @@ def _rta_history(rta: dict | None, navs: dict[str, NavSeries], today: date) -> l
                       key=lambda t: t["date"])
         if abs((s["open"] or 0) + sum(t["units"] for t in txns) - (s["close"] or 0)) > 0.01:
             return []  # units don't add up; a rebuilt chart would be wrong
-        funds.append((s, txns))
+        funds.append((s, txns, _statement_prices(rta, s)))
     if not funds:
-        return []
+        return [], None
 
     flows: dict[str, float] = {}
     for t in rta.get("transactions", []):
@@ -162,27 +188,32 @@ def _rta_history(rta: dict | None, navs: dict[str, NavSeries], today: date) -> l
     end = min(rta["period_to"], today.isoformat())
     y, m = int(rta["period_from"][:4]), int(rta["period_from"][5:7])
     out: list[dict] = []
+    fallback: set[str] = set()  # funds valued from statement prices in some month
     while True:
         day = min(_month_end(y, m), end)
         total, known = 0.0, True
-        for s, txns in funds:
+        for s, txns, pts in funds:
             units = (s["open"] or 0) + sum(t["units"] for t in txns if t["date"] <= day)
             if units < 1e-6:
                 continue
-            series = navs.get(str(s.get("amfi") or ""))
+            code = str(s.get("amfi") or "")
+            series = navs.get(code)
             price = series.on(day) if series else None
             if price is None:
-                if series is None:
-                    return []  # no NAV history at all for a fund that was held
-                known = False
-                break
+                price = _price_from_statement(pts, day)
+                if price is None:
+                    known = False
+                    break
+                fallback.add(code)
             total += units * price
         if known and (total > 0 or out):
             out.append({"month": f"{y}-{m:02d}", "value": round(total, 2), "flow": round(flows.get(f"{y}-{m:02d}", 0.0), 2)})
         if day >= end:
             break
         y, m = (y + 1, 1) if m == 12 else (y, m + 1)
-    return out
+    if not fallback or not out:
+        return out, None
+    return out, ("waiting" if fallback & waiting else "estimated")
 
 
 def _merge_holdings(cdsl: dict | None, rta: dict | None) -> list[dict]:
@@ -330,6 +361,7 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
     bench = navs.get(market.BENCHMARK_CODE)
     hols = holidays.calendar(market_data.get("holidays"))
     user_overrides = _overrides_by_member(overrides)
+    waiting = {str(c) for c in market_data.get("refresh") or []}  # codes whose NAV backfill is still running
 
     for mid, cdsl, rta, merged, total, full_hist in sorted(staged, key=lambda s: -s[4]):
         pan = by_member[mid]["pan"]
@@ -339,7 +371,8 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
         rta_isins = {s["isin"] for s in (rta or {}).get("schemes", [])}
         # Prefer the transaction rebuild when the CAMS/KFintech statement covers every fund held:
         # it goes back to the statement start. Otherwise the CDSL month-end values.
-        rebuilt = _rta_history(rta, navs, today) if merged and all(h["isin"] in rta_isins for h in merged) else []
+        rebuilt, rebuilt_note = (_rta_history(rta, navs, today, waiting)
+                                 if merged and all(h["isin"] in rta_isins for h in merged) else ([], None))
         use_rta = len(rebuilt) > len(full_hist)
         members.append({
             "id": mid, "name": name, "pan": _mask_pan(pan),
@@ -350,6 +383,9 @@ def build_portfolio(statements: list[dict], market_data: dict | None = None, tod
             "history": rebuilt if use_rta else full_hist,
             "history_covers_all": use_rta or all(h["isin"] in cdsl_isins for h in merged),
             "history_source": "transactions" if use_rta else "cdsl",
+            # "waiting": some months use the statement's own NAVs while a fund's NAV history downloads (the next build
+            # fixes them); "estimated": some stay that way (no NAV history exists). None: every month at daily NAVs.
+            "history_note": rebuilt_note if use_rta else None,
             "sources": sorted({k if k == "CDSL" else (st.get("file_type") or "RTA")
                                for k, st in (("CDSL", cdsl), ("RTA", rta)) if st}),
             "accounts": [

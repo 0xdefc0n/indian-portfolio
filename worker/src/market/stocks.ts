@@ -1,5 +1,6 @@
-// Stocks inside funds: the BharatStock fallback job (plan §10.3.1, D10, M11). Until the AMC scrapers exist (M18),
-// BharatStock is the only source (rollout step 1).
+// Stocks inside funds: the BharatStock fallback job (plan §10.3.1, D10, M11). Since M18 the AMCs' own disclosures
+// (amc-scrape.ts) come first; BharatStock takes only the funds they don't cover (amc/coverage.ts amcCovers: no active
+// adapter for the fund house, or no AMC data for the target month from day 15 on).
 //
 // Which funds: every snapshot build reports, from the engine, the funds its stocks view needs (equity funds and funds
 // inside fund-of-funds, with a display name). recordWants() keeps them in MARKET.stock_match, public scheme ids only.
@@ -15,6 +16,8 @@
 //
 // Only scheme names and portfolio names are sent. Logs carry counts and error class names, never ISINs or names.
 import { quotaCounts, type QuotaSpec, quotaWindow, takeQuota } from '../lib/quota'
+import { amcCovers, enabledAdapters, targetMonth } from './amc/coverage'
+import { mffKey, mffPass } from './mfforecast'
 import { TRACKED_UNSEEN_MS } from './store'
 
 export const BHARATSTOCK_URL = 'https://bharatstockapi.com'
@@ -41,7 +44,13 @@ const MAX_WANTS = 100
 const ISIN = /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/
 const FUND_UNIT = 'MUTUAL_FUND_UNIT'
 
-type StocksEnv = { DB: D1Database; MARKET: D1Database; BUCKET: R2Bucket; BHARATSTOCK_API_KEY?: string; BHARATSTOCK_DAILY_LIMIT?: string }
+type StocksEnv = { DB: D1Database; MARKET: D1Database; BUCKET: R2Bucket; BHARATSTOCK_API_KEY?: string; BHARATSTOCK_DAILY_LIMIT?: string; AMC_SCRAPERS?: string; RAPIDAPI_KEY?: string }
+
+/** The stocks view has a source: BharatStock or mfforecast (a key), or at least one AMC scraper. */
+export const stocksEnabled = (env: { BHARATSTOCK_API_KEY?: string; AMC_SCRAPERS?: string; RAPIDAPI_KEY?: string }) =>
+  !!apiKey(env) || !!mffKey(env) || enabledAdapters(env).length > 0
+/** The stocks job has something to call: BharatStock or mfforecast. */
+const fallbackKey = (env: { BHARATSTOCK_API_KEY?: string; RAPIDAPI_KEY?: string }) => !!apiKey(env) || !!mffKey(env)
 
 export function apiKey(env: { BHARATSTOCK_API_KEY?: string }): string {
   return (env.BHARATSTOCK_API_KEY ?? '').trim().replace(/^["']|["']$/g, '')
@@ -292,7 +301,7 @@ export const stocksQueue = {
  * `force` (the daily cron) always sends.
  */
 export async function requestStocks(env: StocksEnv & { Q_MARKET: Queue }, now = Date.now(), force = false): Promise<boolean> {
-  if (!apiKey(env)) return false
+  if (!fallbackKey(env)) return false
   const res = await env.MARKET.prepare(
     `UPDATE job_lock SET requested_at = ?1 WHERE name = 'stocks' AND (?2 OR requested_at <= started_at OR requested_at < ?3)`,
   )
@@ -313,7 +322,16 @@ type MatchRow = {
   checked_at: number | null
   month: string | null
   failed_at: number | null
+  amc: string | null
+  amc_at: number | null
+  amc_current: number
+  has_data: number
 }
+
+/** stock_match columns plus what amcCovers() needs. ?2 = the target month. */
+const MATCH_COLUMNS = `m.isin, m.name, m.provider_name, m.fund_house, m.checked_at, m.month, m.failed_at, m.amc, m.amc_at,
+  EXISTS (SELECT 1 FROM fund_portfolio f WHERE f.scheme_isin = m.isin AND f.source = 'amc' AND f.month >= ?2) AS amc_current,
+  EXISTS (SELECT 1 FROM fund_portfolio f WHERE f.scheme_isin = m.isin) AS has_data`
 
 export type StocksStats = { matched: number; unmatched: number; fetched: number; failed: number; calls: number; budget: boolean }
 export type StocksResult = ({ status: 'done' } & StocksStats & { passes: number }) | { status: 'disabled' | 'busy' }
@@ -321,8 +339,8 @@ export type StocksResult = ({ status: 'done' } & StocksStats & { passes: number 
 export const holdingsKey = (isin: string, month: string) => `market/holdings/${isin}/${month}.json`
 
 /** pf-market `stocks` message: up to MAX_PASSES passes while new requests keep arriving. One run at a time. */
-export async function runStocks(env: StocksEnv, opts: { now?: () => number } = {}): Promise<StocksResult> {
-  if (!apiKey(env)) return { status: 'disabled' }
+export async function runStocks(env: StocksEnv, opts: { now?: () => number; fetch?: typeof fetch } = {}): Promise<StocksResult> {
+  if (!fallbackKey(env)) return { status: 'disabled' }
   const clock = opts.now ?? Date.now
   const db = env.MARKET
   const start = clock()
@@ -333,7 +351,7 @@ export async function runStocks(env: StocksEnv, opts: { now?: () => number } = {
   let passes = 0
   try {
     let passStart = start
-    for (;;) {
+    while (apiKey(env)) {
       passes++
       const s = await stocksPass(env, passStart)
       for (const k of ['matched', 'unmatched', 'fetched', 'failed', 'calls'] as const) total[k] += s[k]
@@ -344,6 +362,11 @@ export async function runStocks(env: StocksEnv, opts: { now?: () => number } = {
       passStart = Math.max(clock(), lock.requested_at)
       await db.prepare(`UPDATE job_lock SET started_at = ?1 WHERE name = 'stocks' AND until = ?2`).bind(passStart, until).run()
     }
+    // The last fallback (M18 follow-up): what BharatStock can't serve today (no key, budget spent, no match, failing).
+    const bharatOut = !apiKey(env) || total.budget || (await budgetLeft(env, clock())) <= 0
+    const m = await mffPass(env, clock(), { bharatOut, fetch: opts.fetch })
+    total.fetched += m.fetched
+    total.calls += m.calls
   } finally {
     await db.prepare(`UPDATE job_lock SET until = 0 WHERE name = 'stocks' AND until = ?1`).bind(until).run()
   }
@@ -355,12 +378,13 @@ export async function runStocks(env: StocksEnv, opts: { now?: () => number } = {
 export async function stocksPass(env: StocksEnv, now: number): Promise<StocksStats> {
   const db = env.MARKET
   const stats: StocksStats = { matched: 0, unmatched: 0, fetched: 0, failed: 0, calls: 0, budget: false }
+  // The funds the AMC scrapers cover are left alone (M18): BharatStock fills the gaps only.
   const rows = (
     await db
-      .prepare('SELECT isin, name, provider_name, fund_house, checked_at, month, failed_at FROM stock_match WHERE wanted_at >= ?1 ORDER BY isin')
-      .bind(now - TRACKED_UNSEEN_MS)
+      .prepare(`SELECT ${MATCH_COLUMNS} FROM stock_match m WHERE m.wanted_at >= ?1 ORDER BY m.isin`)
+      .bind(now - TRACKED_UNSEEN_MS, targetMonth(now))
       .all<MatchRow>()
-  ).results
+  ).results.filter((r) => !amcCovers(env, r, now))
   const client = new StocksClient(env, now)
   try {
     // 1. Search: never-searched funds first, then unmatched ones due for another try.
@@ -441,7 +465,7 @@ async function storeHoldings(env: StocksEnv, isins: string[], got: { month: stri
           .prepare(
             `INSERT INTO fund_portfolio (scheme_isin, month, source, blob_key, fetched_at) VALUES (?1, ?2, 'bharatstock', ?3, ?4)
              ON CONFLICT (scheme_isin, month) DO UPDATE SET blob_key = excluded.blob_key, fetched_at = excluded.fetched_at
-             WHERE fund_portfolio.source = 'bharatstock'`,
+             WHERE fund_portfolio.source <> 'amc'`,
           )
           .bind(isin, got.dataMonth, key, now),
       )
@@ -469,14 +493,17 @@ export async function stocksVersion(env: { MARKET: D1Database }): Promise<number
   return row?.version ?? 0
 }
 
-type LoadRow = MatchRow & { data_month: string | null; blob_key: string | null }
+type LoadRow = MatchRow & { data_month: string | null; blob_key: string | null; source: string | null; amc_scheme: string | null; mff_at: number | null }
 
 /**
  * Stock data for the funds a household holds (and the funds inside them), from stock_match, fund_portfolio and the R2
  * blobs. `waiting` is true when one of them still needs the job (never searched, or matched and never fetched).
  */
 export async function stockData(env: StocksEnv, held: string[], now = Date.now()): Promise<{ data: StockData; waiting: boolean }> {
-  const data: StockData = { enabled: !!apiKey(env), matches: {}, holdings: {} }
+  const data: StockData = { enabled: stocksEnabled(env), matches: {}, holdings: {} }
+  const bharat = !!apiKey(env)
+  const mff = !!mffKey(env)
+  const target = targetMonth(now)
   if (!data.enabled || !held.length) return { data, waiting: false }
   const read = env.MARKET.withSession('first-unconstrained')
   let waiting = false
@@ -487,12 +514,12 @@ export async function stockData(env: StocksEnv, held: string[], now = Date.now()
     const rows = (
       await read
         .prepare(
-          `SELECT m.isin, m.name, m.provider_name, m.fund_house, m.checked_at, m.month, m.failed_at, f.month AS data_month, f.blob_key
+          `SELECT ${MATCH_COLUMNS}, m.amc_scheme, m.mff_at, f.month AS data_month, f.blob_key, f.source
            FROM stock_match m LEFT JOIN fund_portfolio f ON f.scheme_isin = m.isin
              AND f.month = (SELECT MAX(month) FROM fund_portfolio WHERE scheme_isin = m.isin)
            WHERE m.isin IN (SELECT value FROM json_each(?1))`,
         )
-        .bind(JSON.stringify(isins))
+        .bind(JSON.stringify(isins), target)
         .all<LoadRow>()
     ).results
     const blobs = await Promise.all(
@@ -504,6 +531,31 @@ export async function stockData(env: StocksEnv, held: string[], now = Date.now()
     )
     const next = new Set<string>()
     for (const [i, r] of rows.entries()) {
+      const covered = amcCovers(env, r, now)
+      if ((r.source === 'amc' || r.source === 'mfforecast') && r.blob_key) {
+        // The AMC's own disclosure (M18) or mfforecast, keyed per fund: the engine finds holdings by
+        // matches[isin].scheme_name.
+        const key = `${r.source}:${r.isin}`
+        const stockRows = blobs[i]?.rows ?? []
+        data.matches[r.isin] = { scheme_name: key, checked_at: (r.source === 'amc' ? r.amc_at : r.mff_at) ?? 0 }
+        data.holdings[key] = { month: r.data_month!, data_month: r.data_month, rows: stockRows }
+        for (const s of stockRows) if (s.type === FUND_UNIT && s.isin.startsWith('INF') && !seen.has(s.isin)) next.add(s.isin)
+        continue
+      }
+      if (covered) {
+        // The scraper is still on it (not tried yet, or older data shown): its run will store something or hand over.
+        if (r.amc_at === null) waiting = true
+        if (!r.blob_key) continue
+      } else if (!bharat) {
+        // No BharatStock key and the AMC didn't cover it: mfforecast's turn, then it counts as unmatched.
+        if (mff && r.mff_at === null) {
+          waiting = true
+          continue
+        }
+        const looked = Math.max(r.amc_at ?? -1, r.mff_at ?? -1)
+        if (looked >= 0) data.matches[r.isin] = { scheme_name: null, checked_at: looked }
+        continue
+      }
       if (r.checked_at === null) {
         if (!failedRecently(r, now)) waiting = true
         continue
