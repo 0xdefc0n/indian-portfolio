@@ -482,7 +482,7 @@ how do you make money?" (D7 says free with fair-use limits; pricing waits for M3
 points (§4).
 **Build:**
 - **SEO tooling:** read the third-party code of github.com/AgricIDaniel/claude-seo (and what claudeseoskill.com
-  describes) in full. Check that it sends nothing anywhere and runs nothing unexpected. Write the review into
+  describes) in full and also https://github.com/seo-skills/geo-audit-skill. Check that it sends nothing anywhere and runs nothing unexpected. Write the review into
   `docs/research/SEO.md`. Install it as a project skill only with the owner's OK. Then use it for an audit.
 - **Public pages are prerendered** at build time (real HTML, not only the SPA shell): `/` for signed-out visitors,
   `/privacy`, `/terms`, `/security`, and the routes M26/M27 add. A signed-in visitor on `/` goes straight to the
@@ -733,6 +733,21 @@ FAQ 6, "how do you make money?".
   terms require it), or a licensed index feed to replace it.
 - Corporate actions and symbols (M21, plan §21.6): NSE's OK for automated use of its corporate-action API and
   `EQUITY_L.csv` (terms not checked yet), or a licensed feed to replace them.
+- Broker files (M34 and M21, plan §21.13 and §21.6): no parser has read a real broker file yet; each was built from a
+  known layout and tested on synthetic files. Upload one real file per broker on staging (or put it in git-ignored
+  `engine/tests/private/`); Claude reports ok/fail and row counts only. For a broker not supported yet, its header row
+  (column names, no values) is enough to add it. In this order:
+  1. **Confirm**: Groww holdings statement (layout from the owner's file) and Zerodha holdings statement and tradebook
+     (researched, high confidence).
+  2. **Add**: Angel One and Upstox holdings statements (not supported: the columns couldn't be found). Angel One is
+     the biggest gap (70 lakh clients).
+  3. **Confirm**: tradebooks from Groww and Paytm Money (high confidence); Angel One and Upstox (medium-high: column
+     order unsure); ICICI Direct (medium: column order unconfirmed, its own stock codes matched by name); Dhan
+     (daily totals, not single trades).
+  4. **Add when a header row comes in**: holdings statements from ICICI Direct (its export found has no buy price),
+     HDFC Sky, Kotak Neo, 5paisa, SBI Securities and Motilal Oswal; tradebooks from Kotak, HDFC Securities, SBI
+     Securities and Motilal Oswal.
+  Dhan's holdings statement has no buy price: its shares show "Add buy price" whatever is done.
 
 **Build:**
 - Create production resources (like M4), set the secrets, run the production migrations.
