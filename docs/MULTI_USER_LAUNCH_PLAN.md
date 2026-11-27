@@ -883,6 +883,7 @@ export async function assertMember(c, memberId: string) {
 | `GET /api/portfolio/daily?days=30&member=all` | ✅ | daily returns (§10.5): `{ as_of, coverage, today, series }` | `days` ≤ 366; `member` is `all` or a member ID, checked with `assertMember` |
 | `POST /api/sips/skip` · `DELETE /api/sips/skip` | ✅ | skip the next instalment of one SIP, or undo it (§10.5.1, M12): `{ member_id, isin, folio, due }` | `member_id` checked with `assertMember`; `due` today to +100 days; one skip per SIP |
 | `POST /api/sips/cancel` | ✅ | cancel one SIP in PocketFolio for good (§10.5.1, M12): `{ member_id, isin, folio, confirm: true }` | `assertMember`; no undo; ≤ 200 changes per household |
+| `GET /api/assets` · `POST /api/assets` · `PATCH/DELETE /api/assets/:id` | ✅ | FD, PPF and EPF entered by hand (§21.12, M19): inputs only, the SPA computes values | ✅ M19: `member_id` optional, checked with `assertMember`; another household's id → 404; `400 bad_input {field}`; `409 asset_limit` (50); `429 asset_write_limit` (30 adds/edits a day; deletes are never limited) |
 | `GET /api/market/status` | – | `{ latest_nav_date, coverage_pct, final }` for the "NAVs updating" hint | public, cacheable for 5 min |
 | `POST /api/kfintech/guide` | ✅ | `{ member_id or pan, password? }` → stores a pending password, returns `{ password, form_url }` | the manual path only (D9); same validation as `kfintech.password_problem`. **The one place a PAN may be typed:** KFintech's own form needs it, and a new person isn't a member yet. Picking an existing member needs no PAN |
 | `GET /api/account/export` | ✅ | JSON download of all parsed statements and members (decrypted) | DPDP access right; 3 per day. ✅ M14: fresh session (D1), `429 export_limit`. Streams: account, sign-in methods, sessions (IP, UA), consents, household, members (name, PAN), SIP changes, uploads, pending passwords, the user's security log, then each statement's parsed JSON. Leaves out internal keys and lookup values (DEK, HMACs, R2 keys, hashes, tokens) and snapshots (derived) |
@@ -2549,5 +2550,32 @@ override, a skipped year, a year over ₹1.5 lakh); PPF across a rate change (a 
 hasn't changed since 2020); EPF across a financial year whose rate differs from the year before (the "rate change
 mid-year" case: the change applies from 1 April); EPF past the end of the rate table (provisional); EPF with
 contributions stopped; Overall XIRR with funds plus manual assets.
+
+**As built (M19, 2026-11-27).** The spec above holds; these are the choices made where it left room:
+- ✅ Code: `worker/src/lib/manual-assets.ts` (calculator and input validation, shared with the SPA through the
+  `@manual-assets` alias in `web/vite.config.ts` and `web/tsconfig*.json`), `lib/rates.ts`, `lib/assets.ts`,
+  `routes/assets.ts`, migration `0011_manual_asset.sql`; web `lib/assets.ts`, `components/asset-dialogs.tsx`,
+  `components/fixed-income.tsx`. Golden tests in `worker/test/manual-assets.test.ts`, the API, isolation and D1 scan in
+  `worker/test/assets.test.ts`, Overall XIRR in `web/src/lib/assets.test.ts`.
+- **PPF months:** a month earns once it's over, and only if the balance date is on or before its 5th (we don't know
+  the balance before that date). So a balance entered mid-month starts earning the next month: a little low, never
+  high. A "this year" override is a deposit on the balance date, on top of the balance.
+- **EPF months:** contributions are made at the end of each month after the balance date's month and earn from the next
+  month; interest starts the month after the balance date. "Contributions stopped" stops them from that date's month.
+- **"Year opened"** is read as the financial year's start (2018 → FY 2018-19; maturity 1 April 2034).
+- **XIRR flows:** a matured or closed FD's terminal inflow is on its maturity or closing date, not today (otherwise its
+  XIRR would fall every day after maturity). Live assets end today, as specified.
+- **FD payout:** each whole period pays `P·r·months/12` (banks discount monthly payouts slightly; not modelled); at
+  maturity the days after the last payout are paid as simple interest. A payout FD closed early settles simple
+  interest at `rate − penalty` against what was already paid out.
+- **Dates:** "today" is the Indian date (UTC+05:30) on both sides; inputs may be dated up to tomorrow, so clocks a few
+  hours apart still pass.
+- **Limits:** deletes don't count toward the 30 writes a day (removing data is always allowed).
+- **Allocation colours** reuse existing tokens (§13: no new colours): Fixed deposit `--cat-debt`, PPF `--cat-hybrid`,
+  EPF `--cat-stocks`. They are close in tone (the Debt family); M24's palette can separate them.
+- **Overall XIRR** shows only where Funds & stocks XIRR shows (every fund has its full history); invested and total
+  returns on the dashboard then include the manual assets. With partial fund history the hero keeps today's notice.
+- **Onboarding:** a household with no statement yet can add FD/PPF/EPF from the welcome screen (saved without a
+  member); Members lists those under "Not filed under a member" until one is picked in Edit.
 
 **Later:** RD, NSC, SCSS, NPS, bonds; rates fetched automatically; tax views (TDS, 80C).
