@@ -6,9 +6,8 @@ import { LegalFooter } from "@/components/legal-footer"
 import { AddStatementDialog } from "@/components/add-statement-dialog"
 import { type AssetDialogState, AssetDialogs } from "@/components/asset-dialogs"
 import { AddAssetButton, FixedIncome } from "@/components/fixed-income"
-import { AllocationStrip, type Slice } from "@/components/allocation-strip"
-import { HoldingsTable } from "@/components/holdings-table"
-import { SipTable, sipSummary } from "@/components/sip-table"
+import type { Slice } from "@/components/allocation-strip"
+import { AssetsView } from "@/components/assets-view"
 import { BottomNav, type TabId, TabNav, useTab } from "@/components/tab-nav"
 import { TransactionsView } from "@/components/transactions-view"
 import { AllocationBreakdown, BenchmarkComparison, FundPerformance, FundReturns, MoneyFlow, UpsAndDowns } from "@/components/insights"
@@ -18,7 +17,6 @@ import { useAutoInstallPrompt, useReloadWhenOnline } from "@/lib/pwa"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { ValueChart } from "@/components/value-chart"
 import { FundDialog } from "@/components/fund-dialog"
 import { StockExposure } from "@/components/stock-exposure"
@@ -33,32 +31,13 @@ import {
 } from "@/lib/api"
 import { DailyReturns, TodayTile } from "@/components/daily-returns"
 import { byFund } from "@/lib/daily"
-import { day, inr, monthly } from "@/lib/format"
+import { day, inr } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { nextRun, upcomingSips } from "@/lib/sips"
+import { upcomingSips } from "@/lib/sips"
 import { holdingFlows, xirr } from "@/lib/xirr"
 import { assetFlows, assetTotals, forMember, useAssets, valued } from "@/lib/assets"
 
 const EVERYONE = "all"
-
-function Stat({ label, children, help }: { label: string; children: React.ReactNode; help?: string }) {
-  return (
-    <div className="min-w-0">
-      <dt className="flex items-center gap-1.5 text-sm text-muted-foreground">
-        {label}
-        {help && (
-          <Tooltip>
-            <TooltipTrigger aria-label={`About ${label}`} className="-m-2 p-2">
-              <InfoIcon className="size-3.5" />
-            </TooltipTrigger>
-            <TooltipContent className="max-w-64">{help}</TooltipContent>
-          </Tooltip>
-        )}
-      </dt>
-      <dd className="mt-1 text-lg font-semibold tracking-tight sm:text-xl">{children}</dd>
-    </div>
-  )
-}
 
 function RequestLink({ onAdded, label }: { onAdded: () => void; label: string }) {
   return (
@@ -179,6 +158,8 @@ export default function App({ me }: { me: Me }) {
   const [who, setWho] = useState(EVERYONE)
   const [hovered, setHovered] = useState<string | null>(null)
   const [category, setCategory] = useState<string | null>(null)
+  // An old #sips link opens Assets scrolled to the SIPs (read before useTab settles on "assets").
+  const [sipsLink] = useState(() => window.location.hash === "#sips")
   const [tab, setTab] = useTab()
   const [fund, setFund] = useState<Holding | null>(null)
   const [offline, setOffline] = useState(false)
@@ -349,13 +330,12 @@ export default function App({ me }: { me: Me }) {
     return {
       members, total, slices, history, flowsKnown, prev, change, asOf, valueDate, est, historyPartial, historyNote,
       returns, dashReturns, fixed, fixedTotal: fixedTotals.value, grandTotal, allSlices,
-      holdings: category ? holdings.filter((h) => h.category === category) : holdings,
       allHoldings: holdings,
       activity: data.activity.filter((a) => ids.has(a.member_id)),
       sips: data.sips.filter((x) => ids.has(x.member_id)),
       sipsMissing: members.filter((m) => !m.sips_known),
     }
-  }, [data, who, category, assetRows])
+  }, [data, who, assetRows])
 
   const memberMap = useMemo(() => new Map(data?.members.map((m) => [m.id, m])), [data])
   const pickMembers = useMemo(() => (data?.members ?? []).map((m) => ({ id: m.id, name: m.name })), [data])
@@ -382,8 +362,20 @@ export default function App({ me }: { me: Me }) {
 
   useAutoInstallPrompt({ ready: !!ready, busy: updating || adding })
 
-  const viewAll = (to: TabId, label: string) => (
-    <button className="-my-2 py-2 text-primary underline-offset-4 hover:underline" onClick={() => setTab(to)}>
+  /** Open a tab, then scroll to a section in it once it has rendered. */
+  const goTo = useCallback((to: TabId, anchor?: string) => {
+    setTab(to)
+    if (anchor) requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" })))
+  }, [setTab])
+  const sipsLinkDone = useRef(false)
+  useEffect(() => {
+    if (!sipsLink || sipsLinkDone.current || !ready) return
+    sipsLinkDone.current = true
+    goTo("assets", "sips")
+  }, [sipsLink, ready, goTo])
+
+  const viewAll = (to: TabId, label: string, anchor?: string) => (
+    <button className="-my-2 py-2 text-primary underline-offset-4 hover:underline" onClick={() => goTo(to, anchor)}>
       {label}
     </button>
   )
@@ -394,7 +386,7 @@ export default function App({ me }: { me: Me }) {
       <AppHeader
         me={me}
         onHome={() => setTab("overview")}
-        nav={ready ? <TabNav tab={tab} onChange={setTab} counts={{ holdings: view.allHoldings.length, sips: activeSips.length || undefined }} /> : undefined}
+        nav={ready ? <TabNav tab={tab} onChange={setTab} counts={{ assets: view.allHoldings.length + view.fixed.length }} /> : undefined}
         actions={data && data.members.length > 0 ? <AddStatementDialog onAdded={load} /> : undefined}
       />
 
@@ -487,7 +479,7 @@ export default function App({ me }: { me: Me }) {
                     others={view.fixed.length}
                     onSelect={(c) => {
                       if (!view.slices.some((s) => s.category === c)) return openFixedIncome() // FD, PPF, EPF
-                      setCategory(c); setHovered(null); setTab("holdings")
+                      setCategory(c); setHovered(null); setTab("assets")
                     }}
                   />
                 </Cell>
@@ -516,7 +508,7 @@ export default function App({ me }: { me: Me }) {
                 )}
 
                 <Cell className="md:col-span-6 lg:col-span-7" delay={340} label="Top holdings">
-                  <CellHead title="Top holdings" aside={viewAll("holdings", `View all ${view.allHoldings.length}`)} />
+                  <CellHead title="Top holdings" aside={viewAll("assets", `View all ${view.allHoldings.length + view.fixed.length}`)} />
                   <HoldingBars holdings={view.allHoldings} total={view.total} members={memberMap} showMember={showMember} />
                 </Cell>
                 <Cell className="md:col-span-6 lg:col-span-5" delay={390} label="Upcoming SIPs">
@@ -525,7 +517,7 @@ export default function App({ me }: { me: Me }) {
                     aside={upcoming.list.length ? <span className="eyebrow">Next {upcoming.days} day{upcoming.days === 1 ? "" : "s"}</span> : undefined}
                   />
                   <SipTimeline upcoming={upcoming} members={memberMap} showMember={showMember} />
-                  {activeSips.length > 0 && <div className="mt-2 text-[13px]">{viewAll("sips", "View all SIPs")}</div>}
+                  {activeSips.length > 0 && <div className="mt-2 text-[13px]">{viewAll("assets", "View all SIPs", "sips")}</div>}
                 </Cell>
 
                 <div id="fixed-income" className="scroll-mt-24 md:col-span-6 lg:col-span-12">
@@ -545,36 +537,27 @@ export default function App({ me }: { me: Me }) {
               </div>
             )}
 
-            {tab === "holdings" && (
-              <>
-                <PageTitle title="Holdings" detail={`${view.allHoldings.length} funds worth ${inr(view.total)}`} />
-                <AllocationStrip slices={view.slices} active={hovered} onHover={setHovered} selected={category} onSelect={setCategory} holdings={view.allHoldings} />
-                <Panel
-                  title={category ?? "All funds"}
-                  aside={category ? <button className="-my-2 py-2 text-primary hover:underline" onClick={() => setCategory(null)}>Show all funds</button> : undefined}
-                >
-                  <HoldingsTable holdings={view.holdings} total={view.total} members={memberMap} showMember={showMember} highlight={category ? null : hovered} oneDay={oneDay} />
-                </Panel>
-              </>
-            )}
-
-            {tab === "sips" && (
-              <>
-                <PageTitle title="SIPs" detail={sipSummary(view.sips, (x) => monthly(x.amount, x.frequency)) ?? "No active SIPs"} />
-                {activeSips.length > 0 && (
-                  <dl className="grid grid-cols-2 gap-x-8 gap-y-4 sm:grid-cols-4">
-                    <Stat label="Monthly amount">{inr(activeSips.reduce((s, x) => s + monthly(x.amount, x.frequency), 0))}</Stat>
-                    <Stat label="Active SIPs">{activeSips.length}</Stat>
-                    <Stat label="Invested via these SIPs">{inr(activeSips.reduce((s, x) => s + x.invested, 0))}</Stat>
-                    <Stat label="Next instalment">
-                      {day(activeSips.map((x) => nextRun(x)?.date).filter(Boolean).sort()[0] ?? null)}
-                    </Stat>
-                  </dl>
-                )}
-                <Panel title="All SIPs">
-                  <SipTable sips={view.sips} members={memberMap} showMember={showMember} missing={view.sipsMissing} onChanged={load} />
-                </Panel>
-              </>
+            {tab === "assets" && (
+              <AssetsView
+                holdings={view.allHoldings}
+                fixed={view.fixed}
+                total={view.grandTotal}
+                slices={view.allSlices}
+                category={category}
+                onCategory={setCategory}
+                hovered={hovered}
+                onHover={setHovered}
+                members={memberMap}
+                showMember={showMember}
+                oneDay={oneDay}
+                sips={view.sips}
+                sipsMissing={view.sipsMissing}
+                onSipsChanged={load}
+                assetMemberName={showMember ? assetMemberName : undefined}
+                assetsFailed={assets.failed}
+                onAssetAction={setAssetDlg}
+                onAssetsChanged={assets.reload}
+              />
             )}
 
             {tab === "insights" && (

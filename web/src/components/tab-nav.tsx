@@ -1,21 +1,25 @@
-import { ArrowLeftRightIcon, LayoutGridIcon, LightbulbIcon, PieChartIcon, RepeatIcon } from "lucide-react"
+import { ArrowLeftRightIcon, LayoutGridIcon, LightbulbIcon, WalletIcon } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import { Segmented } from "@/components/ui/segmented"
 import { cn } from "@/lib/utils"
 
+// Assets holds every kind of holding (mutual funds, ETFs, stocks, FD/PPF/EPF), with SIPs under the mutual funds:
+// SIPs are a mutual-fund thing, not a top-level section of a multi-asset app.
 export const TABS = [
   { id: "overview", label: "Overview", short: "Overview", Icon: LayoutGridIcon },
-  { id: "holdings", label: "Holdings", short: "Holdings", Icon: PieChartIcon },
-  { id: "sips", label: "SIPs", short: "SIPs", Icon: RepeatIcon },
+  { id: "assets", label: "Assets", short: "Assets", Icon: WalletIcon },
   { id: "transactions", label: "Transactions", short: "Activity", Icon: ArrowLeftRightIcon },
   { id: "insights", label: "Insights", short: "Insights", Icon: LightbulbIcon },
 ] as const
 export type TabId = (typeof TABS)[number]["id"]
 
+/** Old links (#holdings, #sips) open Assets; #sips also scrolls to the SIPs there (see App). */
+const LEGACY: Record<string, TabId> = { holdings: "assets", sips: "assets" }
+
 const fromHash = (): TabId => {
   const h = window.location.hash.slice(1)
-  return (TABS.find((t) => t.id === h)?.id ?? "overview") as TabId
+  return (TABS.find((t) => t.id === h)?.id ?? LEGACY[h] ?? "overview") as TabId
 }
 
 /** Current tab, kept in the URL hash so refresh and back/forward work. */
@@ -64,7 +68,7 @@ export function BottomNav({ tab, onChange }: { tab: TabId; onChange: (t: TabId) 
       aria-label="Sections"
       className="fixed inset-x-0 bottom-0 z-30 border-t bg-background/90 pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] backdrop-blur md:hidden"
     >
-      <div className="mx-auto grid max-w-md grid-cols-5">
+      <div className="mx-auto grid max-w-md grid-cols-4">
         {TABS.map(({ id, short, Icon }) => {
           const on = id === tab
           return (
