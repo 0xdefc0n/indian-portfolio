@@ -2717,12 +2717,174 @@ and the D1 plaintext scan cover the new types.
 
 **Later:** the IBJA paid API as the source; statement SGBs in daily returns; SGB interest in the activity list.
 
-### 21.6 Corporate actions (D25, M21)
-- **Today:** not handled. CDSL holdings are as of the statement date, and nothing adjusts them afterwards.
-- **Automatic:** splits and bonuses with an ex-date after the statement date, from NSE's public corporate-action file
-  (⚠️ VERIFY), adjust units and cost. Dividends are shown as income.
-- **Ask for a statement:** mergers, demergers and MF scheme mergers show "X merged into Y. Upload a newer statement to
-  update it." No guessed units.
+### 21.6 Stock gains: buy prices and corporate actions (D25, M21)
+**Draft (M21's first session, 2026-11-27), waiting for the owner's OK.** Nothing below is built yet.
+
+**Today:** CDSL statements carry share holdings (units, value) but no buy prices, and nothing adjusts them after the
+statement date. So shares have no gain, no XIRR and no capital-gains tax, and a split or bonus after the statement
+leaves the old unit count at the new adjusted price (§10.4.5 "Later").
+
+**Owner's decisions so far (2026-11-27):**
+- **Both buy-price sources:** a broker tradebook import gives exact lots, and a manual average buy price per holding
+  covers everyone else.
+- **Brokers: the major ones most people use**, plus any broker we have a sample file of. See "Brokers" below.
+- **Corporate actions: hybrid** (D25). Splits and bonuses are applied automatically. Mergers, demergers and MF scheme
+  mergers show a banner asking for a newer statement.
+
+#### Corporate actions (market data, the same for everyone)
+**Source** (⚠️ VERIFY results, 2026-11-27, live):
+- ✅ **NSE's corporate-action API** answers a plain non-browser user agent (`pocketfolio-dev/0.1`, no cookie):
+  `GET https://www.nseindia.com/api/corporates-corporateActions?index=equities&from_date=DD-MM-YYYY&to_date=DD-MM-YYYY`
+  redirects (301) to the same path on `www.nseindia.in`, then returns JSON rows of
+  `{symbol, series, isin, comp, faceVal, subject, exDate, recDate, bcStartDate, bcEndDate, ndStartDate, ndEndDate}`.
+  Unlike the bhavcopy archive (§10.4.5), it doesn't turn us away.
+  - **History in one call:** 1 Oct to 27 Nov 2026 returned 254 rows (201 dividends, 9 splits, 4 bonuses, 3
+    demergers). 2017–2026 returned 22,483 rows (762 splits/bonuses, 6.9 MB, 2.8 s). 2010–2014 returned 9,231 rows. 96%
+    of rows carry an ISIN, and series `EQ` is 94% of rows.
+  - **Subjects are free text but regular:** `Bonus 3:2`, `Face Value Split (Sub-Division) - From Rs 10/- Per Share To
+    Re 1/- Per Share`, `Dividend - Rs 1.50 Per Share`, `Demerger`, `Scheme Of Arrangement …`, `Amalgamation`. A
+    subject with several actions (`Bonus 1:1/Dividend- Rs 2 Per Share`) is split on `/`. Spacing and spelling vary
+    (`RsN/-`, `Arangement`), so the parser is tolerant. Anything it can't read is stored as `other` and never applied.
+  - ⚠️ **Terms:** NSE's website terms for automated use aren't checked yet. Like Upstox (§10.4.5), this is an M17
+    owner item: NSE's written OK, or a licensed feed. The source sits in one section of `worker/src/market/corp.ts`.
+  - **NSE only.** A BSE-only share gets no automatic adjustment. It keeps M20's ±20% jump flag in daily returns and
+    shows "Corporate actions aren't tracked for this share".
+- **Job** (`pf-market` queue, on the 07:00 IST nav-ingest cron): fetch the last 30 days plus the next 60 days of
+  announced actions each night, and upsert. A one-time backfill (migration flag) fetches 2010 to today one year per
+  message. Logs carry counts only.
+- **Table** (`migrations/market/0012_corp_action.sql`): `corp_action(isin, symbol, ex_date, kind
+  split|bonus|dividend|merger|demerger|other, num, den, amount, subject)`, primary key
+  `(symbol, ex_date, kind, subject)`. For a split `num:den` = new shares per old share (10 → 2 face value is 5:1). For
+  a bonus `a:b` means a new shares for every b held. `amount` is the dividend per share.
+- **ISINs change on splits.** A face-value split usually gives the share a new ISIN, so older tradebook rows carry
+  the old one. Actions and trades are linked by **NSE symbol**, and the current ISIN comes from NSE's `EQUITY_L.csv`
+  (✅ answers 200 to the same user agent), stored as `nse_symbol(symbol, isin, seen)` and refreshed weekly.
+- **Sent to `/build`** as `market.corp_actions`: only the rows for the household's held or traded symbols, from the
+  earliest trade date on. They're part of the inputs hash, so a new action rebuilds the snapshot.
+
+**What the engine does with them:**
+- **Split after the statement date** (statement date < ex-date ≤ today): units × num/den, cost unchanged, buy dates
+  unchanged.
+- **Bonus after the statement date:** units × (a+b)/b for valuation. For tax, the bonus shares are a **new lot with
+  nil cost, acquired on the ex-date** (Income-tax Act s.55(2)(aa)(iiia), holding period from allotment; the ex-date
+  stands in for the allotment date, which is usually a day or two later). The "average buy price" shown is the total
+  cost / total units, as brokers show it.
+- **The same rules inside a tradebook replay**: an action between a buy and a sale adjusts the open lots before the
+  sale is matched FIFO.
+- **Units over time in today's terms.** Upstox's history is already adjusted for splits and bonuses (§10.4.5). So
+  each point of an exchange-priced holding's `units_timeline` is scaled by the factors of every action after it.
+  Units × adjusted close is then right on every day, and a known action is no longer flagged as a ±20% jump.
+- **Dividends:** the per-share amount × units held the day before the ex-date, listed in `activity` as
+  `dividend` (estimated, before TDS) and summed per financial year as "Dividend income". Question 2 asks whether they
+  count in XIRR.
+- **Mergers and demergers** (equity, with an ex-date after the statement date): no change to units. The holding gets
+  `notice: {kind, ex_date, text}`, shown as a banner: "Demerger on 6 Oct 2026. Upload a newer statement to update
+  it." NSE's subject doesn't name the other company reliably, so the text says "merged" without "into Y" unless the
+  subject names it.
+- **MF scheme mergers:** no reliable feed (AMFI just stops publishing the old scheme). A held fund whose NAV stops
+  for 7 business days while NAVAll is otherwise current gets the same banner: "This fund may have merged or closed.
+  Upload a newer statement to update it."
+
+#### Buy prices
+**1. Tradebook import** (exact lots):
+- **Upload** through the same route and quotas as statements. The kind is `TRADEBOOK`, from the file itself (CSV or
+  XLSX, ≤ 5 MB). There's no pdf.js pre-check: the Worker checks size and type, and the engine detects the broker
+  from the header row. The file is **never kept**: parsed in memory, or parked encrypted in `tmp/` during a burst,
+  exactly like a PDF (§0.5, D6).
+- **The user picks the member.** Tradebooks rarely carry a PAN. If one does, it must match the member's PAN, the same
+  check as a statement.
+- **Parsed trades only**, sealed with the household key in the `statement` table (kind `TRADEBOOK`, with the date
+  range covered). A tradebook covers a date range (Zerodha allows 365 days per download), so several tradebooks per
+  member merge: trades are deduplicated by broker trade ID, or by (date, symbol, side, qty, price) when there's none.
+- **Kept rows:** delivery equity and ETF trades on NSE/BSE. F&O, currency, commodity and MF rows are skipped and
+  counted ("12 F&O rows skipped"). **Intraday** (bought and sold the same day, same symbol) is business income,
+  not capital gains: it's left out of FIFO and counted.
+- **CDSL stays the truth for units.** For each share, the trades are replayed FIFO up to the member's statement date
+  and compared with the CDSL units:
+  - **Equal:** exact lots. `cost_source: "tradebook"`.
+  - **Trades show fewer units** (the rest bought earlier, through another broker, or transferred in): the lots cover
+    what they can. The rest is "cost unknown for 40 of 100 shares", with a prompt for a manual price.
+  - **Trades show more units** (some sold elsewhere or transferred out): the oldest lots are consumed first (FIFO),
+    like a sale at an unknown price, with a note.
+  - **Sold through the tradebook but never in a statement:** realised gains still count for tax.
+
+**2. Manual average buy price** (no tradebook):
+- On a share in the Assets tab: **average buy price per share** and, optionally, **the month first bought**. Nothing
+  else is asked (D28's rule).
+- Without a month, the holding period starts at the earliest CDSL statement that shows the share, labelled
+  "approximate". It's used for the long-term/short-term split and the XIRR cashflow date.
+- Stored in `stock_cost` (`migrations/app/0013_stock_cost.sql`): household, member, `isin_hmac`, sealed
+  `{isin, avg_price, since?}`, like `sip_override`. Rows go with the member and household (FK cascade), and are
+  exported and deleted with the account (M14). `PUT`/`DELETE /api/stocks/cost`, audited, followed by a rebuild.
+- If a tradebook covers a share, its lots win, and the manual price only fills the "cost unknown" remainder.
+
+#### Gains, tax and XIRR (engine, reusing `analysis.py`)
+- **FIFO and LTCG/STCG** reuse `fifo()` with `equity=True` for listed shares and equity ETFs: long-term after 12
+  months; STCG 20% and LTCG 12.5% above ₹1.25 lakh for sales from 23 Jul 2024 (15% and 10% above ₹1 lakh before).
+  The ₹1.25 lakh is **shared with equity funds**, per person, as the Act has it (s.112A), so stocks join the same
+  `realised`, `harvest` and `gains_by_fy`.
+- **Other ETFs** (gold, debt, international, listed on an exchange): long-term after 12 months from 23 Jul 2024,
+  taxed at 12.5% with no exemption. `is_long_term` gets a "listed" case for this.
+- **Grandfathering** (shares bought on or before 31 Jan 2018 and sold from 1 Apr 2018): cost is the higher of cost
+  and min(FMV, sale), where FMV is the **highest price on 31 Jan 2018** (s.55(2)(ac)). It comes from Upstox's daily
+  candle `high` for that day (one extra request per such share, stored as `stock_fmv_2018`), scaled back to the
+  unadjusted price with the actions since then.
+- **Charges:** a tradebook's price excludes brokerage and STT. Brokerage is deductible for capital gains, but STT is
+  not. Brokers don't put brokerage in the tradebook, so gains are before charges, said in a footnote. Question 3 asks
+  about the tax P&L files that do include it.
+- **Unrealised long-term/short-term split** per holding, as for funds (`unrealised[isin]`).
+- **XIRR:** a share with known cost joins **Funds & stocks XIRR** (M19). Cashflows: each buy (−) and sale (+) from
+  the tradebook, or for a manual price one outflow of `avg × units` on the "since" date. Then the value today as
+  the terminal inflow. A share with no cost stays out of XIRR and its gain shows "add buy price".
+- **Snapshot:** each share gets `cost_source` (`tradebook` | `manual` | `partial` | `none`), `invested`, `gain`,
+  `lots_since`, `notice?`, and `dividends`. `SNAPSHOT_VERSION` 6.
+
+#### Screens (existing design system, §13; no new colours or components)
+- **Assets → Stocks & bonds:** gain and XIRR columns, a "Add buy price" link on shares without one, and the banner on
+  a merged share.
+- **Upload sheet:** a third card, "Broker tradebook (CSV or Excel)", with the supported brokers and a one-line "where
+  to download it" per broker.
+- **Tax tab:** stock lots in the same realised and harvest tables, with a "Stock" tag.
+
+#### Brokers
+Researched 2026-11-27 from broker help pages and open-source parsers that document real exports
+(`Thejesh-k463/VYUHA-LOG` docs/BROKER_FORMATS.md, `javatarz/wealth-tracker`, `ananthakumaran/paisa` fixtures,
+`prabusw/beancount-importers-india`, `aashishbhanawat/ArthSaarthi`). NSE active clients, October 2026: Groww 1.38 cr,
+Angel One 70 L, Zerodha 68 L, ICICI Securities 22 L, Upstox 18 L, Kotak 14 L, HDFC Securities 14 L, Dhan 11 L, SBI
+Securities 10 L, Motilal Oswal 9 L.
+
+One parser per broker in `engine/engine/parsers/tradebook/<broker>.py`, chosen by the **header row** (searched for in
+the first 40 rows, never by filename; Groww and Angel One files don't name the broker). Preamble rows (name, client
+code, PAN) are read for the PAN check only and never stored. Rows without an ISIN are linked to an ISIN by NSE symbol,
+or by company name against `EQUITY_L.csv`; a row that matches neither is counted and its share falls back to "cost
+unknown".
+
+| Broker | File | Header (key columns) | ISIN | Notes | Confidence |
+|---|---|---|---|---|---|
+| Zerodha | Console → Reports → Tradebook, CSV or XLSX | `symbol, isin, trade_date, exchange, segment, series, trade_type, quantity, price, trade_id, order_id, order_execution_time` | yes | One row per fill (dedupe on `trade_id`). 365 days per download. XLSX header on row 9 | high |
+| Groww | Reports → Transactions → Stocks Order History, XLSX | `Stock name, Symbol, ISIN, Type, Quantity, Value, Exchange, Exchange Order Id, Execution date and time, Order status` | yes | Price = Value ÷ Quantity. Keep `Executed` only. F&O mixed in. **Password = PAN in capitals**: the engine tries the member's PAN | high |
+| Angel One | Trades and charges → Download trade history, XLSX | `Scrip/Contract, Buy/Sell, Buy Price, Sell Price, Quantity, … Segment, Exchange, Order ID, Trade ID, Date` | no | Table starts ~row 34. Quantity-0 rows are brokerage lines. Charges per row | medium-high |
+| Upstox | Reports → Trade Report, XLSX | `Date, Company, Amount, Exchange, Segment, Scrip Code, Instrument Type, …, Trade Num, Trade Time, Side, Quantity, Price` | no | Header on row 11. F&O mixed in | medium-high |
+| ICICI Direct | Equity → Trade Book, CSV/XLSX | `Date, Stock, Action, Qty, Price, … Order Ref., …` | no | `Stock` is ICICI's own code (`OILIND`), matched by name where possible; full column order unconfirmed | medium |
+| Paytm Money | Tradebook_EQ.xlsx | `Date, Script, ISIN, Exchange, Product Type, Type, Quantity, Price, …, Order Number, Trade Number, Trade Time` | yes | Header on row 5; PAN in the preamble (checked) | high |
+| Dhan | Global Transaction Report, CSV | `Date, Scrip Name, Exchange, Bill No., Buy Qty., Buy Value, Sell Qty., Sell Value, …` | no | No per-trade download: daily totals per share. Enough for FIFO by day | high (format), lower (usefulness) |
+| Kotak Neo, HDFC Securities, SBI Securities, Motilal Oswal | download paths found, columns not | — | — | Need one real export's header row (Q4) | — |
+
+#### Questions for the owner
+1. **OK on this section?** In particular: bonus shares as a nil-cost lot from the ex-date (the tax law), with the
+   displayed average price spread over all shares (as brokers show it).
+2. **Dividends in XIRR?** Recommended: yes, as inflows on the ex-date (the true return), and also shown separately as
+   "Dividend income". Brokers' own XIRR usually leaves them out.
+3. **Tax P&L files too?** Zerodha, Angel One and Upstox also export a realised P&L with charges and older years.
+   Recommended: not in M21 (tradebooks give lots; P&L files don't give open lots), "Later".
+4. **Brokers in M21:** Zerodha, Groww, Angel One, Upstox, ICICI Direct, Paytm Money and Dhan (formats known, tested on
+   synthetic files). Kotak, HDFC Securities, SBI Securities and Motilal Oswal need one real export each: drop it in
+   `engine/tests/private/tradebooks/` and Claude reads only the header row. Any real tradebook there is also checked
+   with counts only (the "Done when" item).
+5. **NSE terms** for the corporate-action API become an M17 owner item, like Upstox's.
+
+**Later:** tax P&L import, if Q3 is no; BSE corporate actions; mergers computed from the scheme ratio; rights issues
+and buybacks (shown as `other` today); dividends from the bank statement instead of estimates.
 
 ### 21.7 Disposable emails (D20, M22)
 - An open-source disposable-domain list is bundled at build time. The check runs in `POST /api/login/email` before
